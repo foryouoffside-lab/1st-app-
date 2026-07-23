@@ -35,12 +35,6 @@ export default function NotFound() {
             Go Home
           </Link>
           <Link 
-            href="/drills/fps"
-            className="px-6 py-3 bg-white text-gray-700 rounded-lg font-semibold border border-gray-300 hover:border-gray-400 hover:bg-gray-50 transition-all"
-          >
-            FPS Drills
-          </Link>
-          <Link 
             href="/drills/cognitive"
             className="px-6 py-3 bg-white text-gray-700 rounded-lg font-semibold border border-gray-300 hover:border-gray-400 hover:bg-gray-50 transition-all"
           >

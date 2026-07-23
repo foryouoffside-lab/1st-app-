@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">SkillDrills Pro</string>
+    <string name="title_activity_main">SkillDrills Pro</string>
+    <string name="package_name">com.skilldrills.pro</string>
+    <string name="custom_url_scheme">com.skilldrills.pro</string>
+</resources>

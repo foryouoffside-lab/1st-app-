@@ -6,6 +6,7 @@ const nextConfig = {
   // ============================================
   
   reactStrictMode: true,
+  outputFileTracingRoot: typeof __dirname !== 'undefined' ? __dirname : undefined,
   compress: true,
   poweredByHeader: false,
   productionBrowserSourceMaps: false,
@@ -18,75 +19,6 @@ const nextConfig = {
     removeConsole: process.env.NODE_ENV === 'production' ? {
       exclude: ['error', 'warn'],
     } : false,
-  },
-  
-  // ============================================
-  // SECURITY HEADERS
-  // ============================================
-  
-  async headers() {
-    return [
-      {
-        source: '/(.*)',
-        headers: [
-          { key: 'X-Content-Type-Options', value: 'nosniff' },
-          { key: 'X-Frame-Options', value: 'DENY' },
-          { key: 'X-XSS-Protection', value: '1; mode=block' },
-          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
-          { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), interest-cohort=()' },
-          { 
-            key: 'Content-Security-Policy', 
-            value: "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline' https://cdn.vercel-insights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://cdn.vercel-insights.com https://vitals.vercel-insights.com https://api.indexnow.org; media-src 'self';" 
-          },
-          { key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains; preload' },
-          { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
-        ],
-      },
-      {
-        source: '/icons/(.*)',
-        headers: [
-          { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
-        ],
-      },
-      {
-        source: '/_next/static/(.*)',
-        headers: [
-          { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
-        ],
-      },
-    ];
-  },
-  
-  // ============================================
-  // SEO REDIRECTS & REWRITES
-  // ============================================
-  
-  async redirects() {
-    return [
-      {
-        source: '/index',
-        destination: '/',
-        permanent: true,
-      },
-      {
-        source: '/drills/:category*/',
-        destination: '/drills/:category*',
-        permanent: true,
-      },
-      {
-        source: '/:path*',
-        has: [{ type: 'host', value: 'www.skilldrills.online' }],
-        destination: 'https://skilldrills.online/:path*',
-        permanent: true,
-      },
-    ];
-  },
-  
-  async rewrites() {
-    return [
-      { source: '/sitemap.xml', destination: '/sitemap' },
-      { source: '/robots.txt', destination: '/robots' },
-    ];
   },
   
   // ============================================
@@ -110,9 +42,7 @@ const nextConfig = {
   experimental: {
     optimizeCss: false,
     optimizePackageImports: [
-      'lucide-react', 
-      '@vercel/analytics',
-      '@vercel/speed-insights',
+      'lucide-react',
     ],
   },
   
@@ -136,8 +66,9 @@ const nextConfig = {
   // OUTPUT
   // ============================================
   
-  output: 'standalone',
-  outputFileTracingRoot: __dirname,
+  output: 'export',
+  trailingSlash: true,
+  // outputFileTracingRoot only needed for standalone mode
 };
 
 module.exports = nextConfig;

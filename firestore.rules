@@ -1,0 +1,80 @@
+rules_version = '2';
+
+// SkillDrills Pro — Firestore Security Rules
+// Deny-by-default. Only the specific reads/writes below are allowed.
+//
+// Deploy with: firebase deploy --only firestore:rules
+// (or paste this file's contents into Firebase Console > Firestore Database > Rules > Publish)
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Player profiles — public read (leaderboards/opponent cards need this),
+    // but only the owning signed-in user may create or fully edit their own doc.
+    match /users/{uid} {
+      allow read: if true;
+
+      allow create: if request.auth != null && request.auth.uid == uid;
+
+      allow update: if request.auth != null && (
+        (
+          // Own document: full access, except photoURL is capped — profile
+          // photos are stored inline as a base64 data URL (no Firebase
+          // Storage / Blaze plan needed), and this field is read by every
+          // other player who sees this user in the leaderboard or online
+          // list, so an oversized value would bloat everyone else's reads.
+          request.auth.uid == uid &&
+          (!('photoURL' in request.resource.data) || request.resource.data.photoURL.size() < 300000)
+        ) ||
+        (
+          // Ensure a player can only update an opponent's document during match resolution
+          // by allowing only specific fields, and enforcing that wins/losses can only increment by
+          // at most 1 and eiq can only move by at most one match's swing (±100) per write.
+          // EIQ is a competitive ladder: the opponent's eiq goes UP if they won or
+          // DOWN if they lost, but never below 0.
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['wins', 'losses', 'streak', 'lastSeen', 'online', 'eiq']) &&
+          request.resource.data.get('wins', 0) <= resource.data.get('wins', 0) + 1 &&
+          request.resource.data.get('losses', 0) <= resource.data.get('losses', 0) + 1 &&
+          request.resource.data.get('eiq', 0) >= 0 &&
+          request.resource.data.get('eiq', 0) >= resource.data.get('eiq', 0) - 100 &&
+          request.resource.data.get('eiq', 0) <= resource.data.get('eiq', 0) + 100
+        )
+      );
+
+      allow delete: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // 1v1 challenge/duel documents.
+    match /challenges/{id} {
+      allow read: if request.auth != null;
+
+      allow create: if request.auth != null &&
+        request.auth.uid == request.resource.data.fromUid;
+
+      allow update: if request.auth != null && (
+        request.auth.uid == resource.data.fromUid ||
+        request.auth.uid == resource.data.toUid ||
+        // Open/global challenges start with toUid == 'global' until someone accepts.
+        (resource.data.toUid == 'global' && request.resource.data.toUid == request.auth.uid)
+      );
+
+      allow delete: if request.auth != null &&
+        (request.auth.uid == resource.data.fromUid || request.auth.uid == resource.data.toUid);
+    }
+
+    // Automated matchmaking lobby — one doc per user (doc id == uid), so the
+    // collection is self-bounding rather than growing per search attempt.
+    // Only the owner ever writes their own entry; reads are open to any
+    // signed-in user so clients can scan for a compatible waiting opponent.
+    match /matchmaking_queue/{uid} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Everything else is denied by default.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

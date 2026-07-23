@@ -17,12 +17,12 @@ import CardMatchingClient from './CardMatchingClient';
 const breadcrumbSchema = {
   "@context": "https://schema.org",
   "@type": "BreadcrumbList",
-  "itemListElement": [
-    { "@type": "ListItem", "position": 1, "name": "SkillDrills", "item": "https://skilldrills.online/" },
-    { "@type": "ListItem", "position": 2, "name": "Cognitive Drills", "item": "https://skilldrills.online/drills/cognitive" },
-    { "@type": "ListItem", "position": 3, "name": "Memory", "item": "https://skilldrills.online/drills/memory" },
-    { "@type": "ListItem", "position": 4, "name": "Memory Card Matching", "item": "https://skilldrills.online/drills/cognitive/memory/card-matching" }
-  ]
+            "itemListElement": [
+              { "@type": "ListItem", "position": 1, "name": "Home", "item": "https://skilldrills.online" },
+              { "@type": "ListItem", "position": 2, "name": "Cognitive Training", "item": "https://skilldrills.online/drills/cognitive" },
+              { "@type": "ListItem", "position": 3, "name": "Memory", "item": "https://skilldrills.online/drills/cognitive/memory" },
+              { "@type": "ListItem", "position": 4, "name": "Card Matching" }
+            ]
 };
 
 const webAppSchema = {

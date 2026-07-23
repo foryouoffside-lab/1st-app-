@@ -17,12 +17,12 @@ import TowerOfHanoiClient from './TowerOfHanoiClient';
 const breadcrumbSchema = {
   "@context": "https://schema.org",
   "@type": "BreadcrumbList",
-  "itemListElement": [
-    { "@type": "ListItem", "position": 1, "name": "SkillDrills", "item": "https://skilldrills.online/" },
-    { "@type": "ListItem", "position": 2, "name": "Cognitive Drills", "item": "https://skilldrills.online/drills/cognitive" },
-    { "@type": "ListItem", "position": 3, "name": "Problem Solving", "item": "https://skilldrills.online/drills/cognitive" },
-    { "@type": "ListItem", "position": 4, "name": "Tower of Hanoi", "item": "https://skilldrills.online/drills/cognitive/problem-solving/tower-of-hanoi" }
-  ]
+            "itemListElement": [
+              { "@type": "ListItem", "position": 1, "name": "Home", "item": "https://skilldrills.online" },
+              { "@type": "ListItem", "position": 2, "name": "Cognitive Training", "item": "https://skilldrills.online/drills/cognitive" },
+              { "@type": "ListItem", "position": 3, "name": "Problem Solving", "item": "https://skilldrills.online/drills/cognitive/problem-solving" },
+              { "@type": "ListItem", "position": 4, "name": "Tower Of Hanoi" }
+            ]
 };
 
 const webAppSchema = {
@@ -118,7 +118,7 @@ const howToSchema = {
       "@type": "HowToStep",
       "position": 3,
       "name": "Clear Tower to Advance",
-      "text": "Move the entire disk stack to the third peg to receive +20 PTS and +10 seconds, then advance to the next level."
+      "text": "Move the entire disk stack to the third peg to bank bonus time, score points, and add a disk to the next tower. An invalid move costs one of your five lives instead of time."
     }
   ]
 };

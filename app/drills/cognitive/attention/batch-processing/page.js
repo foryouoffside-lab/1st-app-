@@ -18,10 +18,10 @@ const breadcrumbSchema = {
   "@context": "https://schema.org",
   "@type": "BreadcrumbList",
   "itemListElement": [
-    { "@type": "ListItem", "position": 1, "name": "SkillDrills", "item": "https://skilldrills.online/" },
-    { "@type": "ListItem", "position": 2, "name": "Cognitive Drills", "item": "https://skilldrills.online/drills/cognitive" },
-    { "@type": "ListItem", "position": 3, "name": "Attention", "item": "https://skilldrills.online/drills/cognitive" },
-    { "@type": "ListItem", "position": 4, "name": "Batch Processing", "item": "https://skilldrills.online/drills/cognitive/attention/batch-processing" }
+    { "@type": "ListItem", "position": 1, "name": "Home", "item": "https://skilldrills.online" },
+    { "@type": "ListItem", "position": 2, "name": "Cognitive Training", "item": "https://skilldrills.online/drills/cognitive" },
+    { "@type": "ListItem", "position": 3, "name": "Attention", "item": "https://skilldrills.online/drills/cognitive/attention" },
+    { "@type": "ListItem", "position": 4, "name": "Batch Processing" }
   ]
 };
 
@@ -111,20 +111,20 @@ const howToSchema = {
     {
       "@type": "HowToStep",
       "position": 2,
-      "name": "Locate Matching Spheres",
-      "text": "Locate all spheres on the screen that match the flashed target color name."
+      "name": "Locate Matching Sphere",
+      "text": "Locate the single sphere on the screen that matches the flashed target color name."
     },
     {
       "@type": "HowToStep",
       "position": 3,
-      "name": "Tap the Correct Spheres",
-      "text": "Tap or click on the matching spheres quickly before the timer at the top drains."
+      "name": "Tap the Correct Sphere",
+      "text": "Tap or click on the matching sphere quickly before the prompt timer drains."
     },
     {
       "@type": "HowToStep",
       "position": 4,
       "name": "Build Score & Level Up",
-      "text": "Correct selections add score and extend your time. As your score reaches milestones, target size decreases and speed increases."
+      "text": "Correct selections add score and keep your combo. The game ends when the 45-second timer runs out or you lose all 5 lives."
     }
   ]
 };

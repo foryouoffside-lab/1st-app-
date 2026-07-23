@@ -2,10 +2,11 @@
 
 import { useEffect } from 'react';
 import Link from 'next/link';
+import { reportError } from '../lib/crashReporting';
 
 export default function Error({ error, reset }) {
   useEffect(() => {
-    console.error('SkillDrills page error:', error);
+    reportError(error, 'App error boundary');
   }, [error]);
 
   return (

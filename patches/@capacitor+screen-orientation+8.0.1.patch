@@ -1,0 +1,62 @@
+diff --git a/node_modules/@capacitor/screen-orientation/android/src/main/java/com/capacitorjs/plugins/screenorientation/ScreenOrientation.java b/node_modules/@capacitor/screen-orientation/android/src/main/java/com/capacitorjs/plugins/screenorientation/ScreenOrientation.java
+index 220db70..5a1fc2e 100644
+--- a/node_modules/@capacitor/screen-orientation/android/src/main/java/com/capacitorjs/plugins/screenorientation/ScreenOrientation.java
++++ b/node_modules/@capacitor/screen-orientation/android/src/main/java/com/capacitorjs/plugins/screenorientation/ScreenOrientation.java
+@@ -60,6 +60,10 @@ public class ScreenOrientation {
+             case "any":
+                 return ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
+             case "landscape":
++                // Sensor-backed, not a fixed single direction: the device can
++                // rotate to either physical landscape orientation and the
++                // screen follows, it just can't fall back to portrait.
++                return ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE;
+             case "landscape-primary":
+                 return ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+             case "landscape-secondary":
+diff --git a/node_modules/@capacitor/screen-orientation/ios/Sources/ScreenOrientationPlugin/ScreenOrientation.swift b/node_modules/@capacitor/screen-orientation/ios/Sources/ScreenOrientationPlugin/ScreenOrientation.swift
+index c1e9e1e..3e5220a 100644
+--- a/node_modules/@capacitor/screen-orientation/ios/Sources/ScreenOrientationPlugin/ScreenOrientation.swift
++++ b/node_modules/@capacitor/screen-orientation/ios/Sources/ScreenOrientationPlugin/ScreenOrientation.swift
+@@ -29,7 +29,7 @@ public class ScreenOrientation: NSObject {
+     public func lock(_ orientationType: String, completion: @escaping (Error?) -> Void) {
+         DispatchQueue.main.async {
+             let orientation = self.fromOrientationTypeToInt(orientationType)
+-            self.capViewController?.supportedOrientations = [orientation]
++            self.capViewController?.supportedOrientations = self.fromOrientationTypeToInts(orientationType)
+             let mask = self.fromOrientationTypeToMask(orientationType)
+             if #available(iOS 16.0, *) {
+                 if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+@@ -84,7 +84,12 @@ public class ScreenOrientation: NSObject {
+         switch orientationType {
+         case "any":
+             return UIInterfaceOrientationMask.all
+-        case "landscape", "landscape-primary":
++        case "landscape":
++            // Combined mask: both landscapeLeft and landscapeRight, so the
++            // device can rotate either physical direction and stay locked
++            // out of portrait only — not pinned to one fixed direction.
++            return UIInterfaceOrientationMask.landscape
++        case "landscape-primary":
+             // UIInterfaceOrientationMask.landscapeRight is the same as UIDeviceOrientation.landscapeLeft
+             return UIInterfaceOrientationMask.landscapeRight
+         case "landscape-secondary":
+@@ -120,4 +125,19 @@ public class ScreenOrientation: NSObject {
+         }
+     }
+ 
++    // Same mapping as fromOrientationTypeToInt, except "landscape" resolves
++    // to both landscapeLeft and landscapeRight — this feeds
++    // capViewController.supportedOrientations, which UIKit's own
++    // supportedInterfaceOrientations() consults independently of the
++    // iOS 16+ geometry-update mask, so it needs the same both-directions
++    // behavior or a single fixed direction would still win on rotation.
++    private func fromOrientationTypeToInts(_ orientationType: String) -> [Int] {
++        switch orientationType {
++        case "landscape":
++            return [UIInterfaceOrientation.landscapeRight.rawValue, UIInterfaceOrientation.landscapeLeft.rawValue]
++        default:
++            return [fromOrientationTypeToInt(orientationType)]
++        }
++    }
++
+ }

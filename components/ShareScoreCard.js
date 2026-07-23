@@ -1,6 +1,9 @@
 'use client';
 
 import { getPlayerName } from '../lib/leaderboard';
+import { Capacitor } from '@capacitor/core';
+import { Filesystem, Directory } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
 
 /**
  * Generate a shareable score card image and share it via Web Share API
@@ -12,19 +15,24 @@ export default function generateShareCard({
   bestCombo,
   rating,
   newBest,
-  visualHits,
-  numberHits,
+  visualHits = undefined,
+  numberHits = undefined,
   drillName,
   playerName,
 }) {
   const isNewBest = newBest && score >= bestScore && bestScore > 0;
   const r = rating || { letter: 'C', label: 'Keep Going', emoji: '🎯', color: '#6B7280' };
 
-  // Create canvas
+  // Create canvas — render at a high supersampled resolution (3600x2400,
+  // more total pixels than 4K) so shared images look crisp on modern phone
+  // screens instead of blurry. Everything below is still drawn in the same
+  // 600x400 logical coordinate space; ctx.scale() upscales it losslessly.
+  const SCALE = 6;
   const canvas = document.createElement('canvas');
-  canvas.width = 600;
-  canvas.height = 400;
+  canvas.width = 600 * SCALE;
+  canvas.height = 400 * SCALE;
   const ctx = canvas.getContext('2d');
+  ctx.scale(SCALE, SCALE);
 
   // Background gradient
   const gradient = ctx.createLinearGradient(0, 0, 600, 400);
@@ -129,7 +137,32 @@ export default function generateShareCard({
  */
 export async function shareScoreCard(challengeUrl, canvas) {
   try {
-    // Convert canvas to blob
+    if (Capacitor.isNativePlatform()) {
+      // Native (Android/iOS): the Web Share API's Blob/File attachment
+      // support isn't reliable inside a Capacitor WebView, so write the
+      // image to disk first and hand the native share sheet a real
+      // file:// path via the Share plugin instead.
+      const dataUrl = canvas.toDataURL('image/png');
+      const base64Data = dataUrl.split(',')[1];
+      const fileName = `skilldrills-score-${Date.now()}.png`;
+
+      const written = await Filesystem.writeFile({
+        path: fileName,
+        data: base64Data,
+        directory: Directory.Cache,
+      });
+
+      await Share.share({
+        title: 'SkillDrills Score',
+        text: 'Can you beat my score? 🎮',
+        url: challengeUrl,
+        files: [written.uri],
+        dialogTitle: 'Share your score',
+      });
+      return;
+    }
+
+    // Web: Web Share API with a file attachment where supported
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
     if (!blob) throw new Error('Failed to create image');
 

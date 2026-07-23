@@ -1,12 +1,21 @@
-﻿import './../styles/globals.css';
-import { Inter } from 'next/font/google';
+import './../styles/globals.css';
+import { Inter, Space_Grotesk } from 'next/font/google';
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
+import AppShellClient from '../components/AppShellClient';
+import { AuthProvider } from '../contexts/AuthContext';
+import AuthGate from '../components/AuthGate';
 
 const inter = Inter({ 
   subsets: ['latin'],
-  display: 'swap',
-  preload: true,
+  variable: '--font-inter',
+  fallback: ['system-ui', 'arial'],
+  adjustFontFallback: true,
+});
+
+const spaceGrotesk = Space_Grotesk({
+  subsets: ['latin'],
+  variable: '--font-space-grotesk',
   fallback: ['system-ui', 'arial'],
   adjustFontFallback: true,
 });
@@ -102,7 +111,7 @@ export const viewport = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en" className="scroll-smooth">
+    <html lang="en" className={`${inter.variable} ${spaceGrotesk.variable} scroll-smooth`}>
       <head>
         {/* DNS Prefetch for faster connections */}
         <link rel="dns-prefetch" href="//fonts.googleapis.com" />
@@ -139,9 +148,13 @@ export default function RootLayout({ children }) {
       </head>
       <body className={`${inter.className} antialiased`}>
         <main id="main-content">
-          {children}
+          <AuthProvider>
+            <AuthGate>
+              <AppShellClient>{children}</AppShellClient>
+            </AuthGate>
+          </AuthProvider>
         </main>
-        
+
         <Analytics />
         <SpeedInsights />
         
@@ -202,14 +215,7 @@ export default function RootLayout({ children }) {
               "name": "SkillDrills Main Navigation",
               "url": "https://skilldrills.online",
               "hasPart": [
-                { "@type": "SiteNavigationElement", "position": 1, "name": "FPS Training", "url": "https://skilldrills.online/drills/fps" },
-                { "@type": "SiteNavigationElement", "position": 2, "name": "Cognitive Training", "url": "https://skilldrills.online/drills/cognitive" },
-                { "@type": "SiteNavigationElement", "position": 3, "name": "Academic Drills", "url": "https://skilldrills.online/drills/academic" },
-                { "@type": "SiteNavigationElement", "position": 4, "name": "Memory Games", "url": "https://skilldrills.online/drills/memory" },
-                { "@type": "SiteNavigationElement", "position": 5, "name": "Visual Training", "url": "https://skilldrills.online/drills/visual" },
-                { "@type": "SiteNavigationElement", "position": 6, "name": "Visual Tracking", "url": "https://skilldrills.online/drills/visual-tracking" },
-                { "@type": "SiteNavigationElement", "position": 7, "name": "Motor Skills", "url": "https://skilldrills.online/drills/motor" },
-                { "@type": "SiteNavigationElement", "position": 8, "name": "Physical Training", "url": "https://skilldrills.online/drills/physical" }
+                { "@type": "SiteNavigationElement", "position": 1, "name": "Cognitive Training", "url": "https://skilldrills.online/drills/cognitive" }
               ]
             })
           }}

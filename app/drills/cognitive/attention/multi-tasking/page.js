@@ -1,4 +1,4 @@
-import DualTargetFlowClient from './DualTargetFlowClient';
+import MultiTaskingClient from './DualTargetFlowClient';
 
 // ============================================================
 // SEO RESEARCH FINDINGS — multi-tasking
@@ -17,12 +17,12 @@ import DualTargetFlowClient from './DualTargetFlowClient';
 const breadcrumbSchema = {
   "@context": "https://schema.org",
   "@type": "BreadcrumbList",
-  "itemListElement": [
-    { "@type": "ListItem", "position": 1, "name": "SkillDrills", "item": "https://skilldrills.online/" },
-    { "@type": "ListItem", "position": 2, "name": "Cognitive Drills", "item": "https://skilldrills.online/drills/cognitive" },
-    { "@type": "ListItem", "position": 3, "name": "Attention", "item": "https://skilldrills.online/drills/cognitive" },
-    { "@type": "ListItem", "position": 4, "name": "Multitasking Game", "item": "https://skilldrills.online/drills/cognitive/attention/multi-tasking" }
-  ]
+            "itemListElement": [
+              { "@type": "ListItem", "position": 1, "name": "Home", "item": "https://skilldrills.online" },
+              { "@type": "ListItem", "position": 2, "name": "Cognitive Training", "item": "https://skilldrills.online/drills/cognitive" },
+              { "@type": "ListItem", "position": 3, "name": "Attention", "item": "https://skilldrills.online/drills/cognitive/attention" },
+              { "@type": "ListItem", "position": 4, "name": "Multi Tasking" }
+            ]
 };
 
 const webAppSchema = {
@@ -174,7 +174,7 @@ export default function MultiTaskingPage() {
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(webAppSchema) }} />
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(faqSchema) }} />
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(howToSchema) }} />
-      <DualTargetFlowClient />
+      <MultiTaskingClient />
     </>
   );
 }

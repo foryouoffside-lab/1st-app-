@@ -17,12 +17,12 @@ import SymbolMatchingClient from './SymbolMatchingClient';
 const breadcrumbSchema = {
   "@context": "https://schema.org",
   "@type": "BreadcrumbList",
-  "itemListElement": [
-    { "@type": "ListItem", "position": 1, "name": "SkillDrills", "item": "https://skilldrills.online/" },
-    { "@type": "ListItem", "position": 2, "name": "Cognitive Drills", "item": "https://skilldrills.online/drills/cognitive" },
-    { "@type": "ListItem", "position": 3, "name": "Processing Speed", "item": "https://skilldrills.online/drills/cognitive/processing-speed" },
-    { "@type": "ListItem", "position": 4, "name": "Symbol Matching", "item": "https://skilldrills.online/drills/cognitive/processing-speed/symbol-matching" }
-  ]
+            "itemListElement": [
+              { "@type": "ListItem", "position": 1, "name": "Home", "item": "https://skilldrills.online" },
+              { "@type": "ListItem", "position": 2, "name": "Cognitive Training", "item": "https://skilldrills.online/drills/cognitive" },
+              { "@type": "ListItem", "position": 3, "name": "Processing Speed", "item": "https://skilldrills.online/drills/cognitive/processing-speed" },
+              { "@type": "ListItem", "position": 4, "name": "Symbol Matching" }
+            ]
 };
 
 const webAppSchema = {

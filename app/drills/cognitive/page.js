@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import CognitiveHubClient from './CognitiveHubClient';
 
 export const metadata = {
@@ -24,7 +25,7 @@ export const metadata = {
     title: 'Free Cognitive Training Online - Attention, Memory, Focus & Logic Drills | SkillDrills',
     description: 'Free cognitive training online. 18 science-based drills for attention, working memory, focus, problem solving, and processing speed.',
     type: 'website',
-    url: 'https://skilldrills.online/drills/cognitive',
+    url: 'https://skilldrills.online/drills/cognitive//cognitive',
     siteName: 'SkillDrills',
     locale: 'en_US',
     images: [{ url: 'https://skilldrills.online/icons/icon-512x512.png', width: 512, height: 512, alt: 'Free Cognitive Training Online - Brain Training Drills' }],
@@ -36,7 +37,7 @@ export const metadata = {
     images: ['https://skilldrills.online/icons/icon-512x512.png'],
   },
   robots: { index: true, follow: true },
-  alternates: { canonical: 'https://skilldrills.online/drills/cognitive' },
+  alternates: { canonical: 'https://skilldrills.online/drills/cognitive//cognitive' },
 };
 
 export default function CognitiveDrillsPage() {
@@ -46,29 +47,31 @@ export default function CognitiveDrillsPage() {
         "@context": "https://schema.org",
         "@type": "CollectionPage",
         "name": "Free Cognitive Training Online - Attention, Memory, Focus & Logic Drills",
-        "url": "https://skilldrills.online/drills/cognitive",
+        "url": "https://skilldrills.online/drills/cognitive//cognitive",
         "description": "18 free cognitive training drills online. Attention, working memory, focus, problem solving, and processing speed exercises. No sign-up required.",
         "author": { "@type": "Organization", "name": "SkillDrills" },
         "hasPart": [
-          { "@type": "WebApplication", "name": "Divided Attention Drill", "url": "https://skilldrills.online/drills/cognitive/attention/divided-attention" },
-          { "@type": "WebApplication", "name": "Selective Attention Test", "url": "https://skilldrills.online/drills/cognitive/attention/selective-attention" },
-          { "@type": "WebApplication", "name": "Sustained Attention Training", "url": "https://skilldrills.online/drills/cognitive/attention/sustained-attention" },
-          { "@type": "WebApplication", "name": "Batch Processing", "url": "https://skilldrills.online/drills/cognitive/attention/batch-processing" },
-          { "@type": "WebApplication", "name": "Concentration Stamina", "url": "https://skilldrills.online/drills/cognitive/attention/concentration-stamina" },
-          { "@type": "WebApplication", "name": "Concentration Grid Game", "url": "https://skilldrills.online/drills/cognitive/focus/concentration-grid" },
-          { "@type": "WebApplication", "name": "Distraction Fighter Game", "url": "https://skilldrills.online/drills/cognitive/focus/distraction-fighter" },
-          { "@type": "WebApplication", "name": "Focus Timer Training", "url": "https://skilldrills.online/drills/cognitive/focus/focus-timer" },
-          { "@type": "WebApplication", "name": "Card Matching Memory Game", "url": "https://skilldrills.online/drills/cognitive/memory/card-matching" },
-          { "@type": "WebApplication", "name": "Memory Sequence Training", "url": "https://skilldrills.online/drills/cognitive/memory/memory-sequence" },
-          { "@type": "WebApplication", "name": "Number Recall Game", "url": "https://skilldrills.online/drills/cognitive/memory/number-recall" },
-          { "@type": "WebApplication", "name": "Pattern Recognition Game", "url": "https://skilldrills.online/drills/cognitive/problem-solving/pattern-recognition" },
-          { "@type": "WebApplication", "name": "Logic Puzzles Online", "url": "https://skilldrills.online/drills/cognitive/problem-solving/logic-puzzles" },
-          { "@type": "WebApplication", "name": "Free Sudoku Online", "url": "https://skilldrills.online/drills/cognitive/problem-solving/sudoku" },
-          { "@type": "WebApplication", "name": "Tower of Hanoi Game", "url": "https://skilldrills.online/drills/cognitive/problem-solving/tower-of-hanoi" },
-          { "@type": "WebApplication", "name": "Symbol Matching Game", "url": "https://skilldrills.online/drills/cognitive/problem-solving/symbol-matching" }
+          { "@type": "WebApplication", "name": "Divided Attention Drill", "url": "https://skilldrills.online/drills/cognitive//cognitive" },
+          { "@type": "WebApplication", "name": "Selective Attention Test", "url": "https://skilldrills.online/drills/cognitive//cognitive" },
+          { "@type": "WebApplication", "name": "Sustained Attention Training", "url": "https://skilldrills.online/drills/cognitive//cognitive" },
+          { "@type": "WebApplication", "name": "Batch Processing", "url": "https://skilldrills.online/drills/cognitive//cognitive" },
+          { "@type": "WebApplication", "name": "Concentration Stamina", "url": "https://skilldrills.online/drills/cognitive//cognitive" },
+          { "@type": "WebApplication", "name": "Concentration Grid Game", "url": "https://skilldrills.online/drills/cognitive//cognitive" },
+          { "@type": "WebApplication", "name": "Distraction Fighter Game", "url": "https://skilldrills.online/drills/cognitive//cognitive" },
+          { "@type": "WebApplication", "name": "Focus Timer Training", "url": "https://skilldrills.online/drills/cognitive//cognitive" },
+          { "@type": "WebApplication", "name": "Card Matching Memory Game", "url": "https://skilldrills.online/drills/cognitive//cognitive" },
+          { "@type": "WebApplication", "name": "Memory Sequence Training", "url": "https://skilldrills.online/drills/cognitive//cognitive" },
+          { "@type": "WebApplication", "name": "Number Recall Game", "url": "https://skilldrills.online/drills/cognitive//cognitive" },
+          { "@type": "WebApplication", "name": "Pattern Recognition Game", "url": "https://skilldrills.online/drills/cognitive//cognitive" },
+          { "@type": "WebApplication", "name": "Logic Puzzles Online", "url": "https://skilldrills.online/drills/cognitive//cognitive" },
+          { "@type": "WebApplication", "name": "Free Sudoku Online", "url": "https://skilldrills.online/drills/cognitive//cognitive" },
+          { "@type": "WebApplication", "name": "Tower of Hanoi Game", "url": "https://skilldrills.online/drills/cognitive//cognitive" },
+          { "@type": "WebApplication", "name": "Symbol Matching Game", "url": "https://skilldrills.online/drills/cognitive//cognitive" }
         ]
       })}} />
-      <CognitiveHubClient />
+      <Suspense fallback={null}>
+        <CognitiveHubClient />
+      </Suspense>
     </>
   );
 }
