@@ -1,12 +1,5 @@
 import Link from 'next/link';
 
-export const metadata = {
-  title: 'Privacy Policy - SkillDrills',
-  description: 'How SkillDrills collects, uses, and protects your data.',
-  robots: { index: true, follow: true },
-  alternates: { canonical: 'https://skilldrills.online/privacy' },
-};
-
 const LAST_UPDATED = 'July 17, 2026';
 
 function Section({ title, children }) {
@@ -35,7 +28,7 @@ export default function PrivacyPolicyPage() {
           <p><strong className="text-slate-300">Account information.</strong> Signing in requires a Google account. We receive your name, email address, and profile photo from Google Sign-In to create your player profile.</p>
           <p><strong className="text-slate-300">Gameplay data.</strong> Drill scores, streaks, XP/level progress, and daily challenge history are stored against your account so your progress is saved and can sync across sessions.</p>
           <p><strong className="text-slate-300">Diagnostic data.</strong> We use Firebase Crashlytics to automatically collect crash reports and basic device information (device model, OS version, app version) so we can find and fix bugs. This data is not linked to your name or used for advertising.</p>
-          <p><strong className="text-slate-300">Usage analytics.</strong> The app uses Firebase Analytics to understand which drills and features are actually used — screen views and events like completing a drill (drill, category, score). The web version of SkillDrills separately uses Vercel Web Analytics for aggregate page-visit and performance data. Neither uses cookies or tracks you across other websites, and neither is used for advertising.</p>
+          <p><strong className="text-slate-300">Usage analytics.</strong> The app uses Firebase Analytics to understand which drills and features are actually used — screen views and events like completing a drill (drill, category, score). It doesn't use cookies or track you across other websites or apps, and isn't used for advertising.</p>
           <p><strong className="text-slate-300">Device preferences.</strong> Settings like sound on/off are stored locally on your device only and are never sent to us.</p>
         </Section>
 
@@ -44,11 +37,11 @@ export default function PrivacyPolicyPage() {
         </Section>
 
         <Section title="Who we share data with">
-          <p>Your data is stored using Firebase (Google Cloud) as our backend infrastructure provider, and diagnostic/usage data is processed by Firebase Crashlytics, Firebase Analytics, and Vercel Analytics as described above. These providers process data on our behalf under their own security and data-processing terms — we do not sell or share your data with anyone else, including advertisers.</p>
+          <p>Your data is stored using Firebase (Google Cloud) as our backend infrastructure provider, and diagnostic/usage data is processed by Firebase Crashlytics and Firebase Analytics as described above. These providers process data on our behalf under their own security and data-processing terms — we do not sell or share your data with anyone else, including advertisers.</p>
         </Section>
 
         <Section title="Data retention & deletion">
-          <p>We keep your account data for as long as your account exists. You can permanently delete your account and all associated data at any time from <span className="text-slate-300">Progress → Delete Account &amp; Wipe Data</span> inside the app.</p>
+          <p>We keep your account data for as long as your account exists. You can permanently delete your account and all associated data at any time from <span className="text-slate-300">Progress → Delete Account &amp; Wipe Data</span> inside the app. If you no longer have the app installed, email <span className="text-slate-300">skilldrills.contact@gmail.com</span> from the address associated with your account and we'll delete your data within 30 days.</p>
         </Section>
 
         <Section title="Children's privacy">
@@ -64,7 +57,7 @@ export default function PrivacyPolicyPage() {
         </Section>
 
         <Section title="Contact us">
-          <p>Questions about this policy or your data? Email <span className="text-violet-400">support@skilldrills.online</span>.</p>
+          <p>Questions about this policy or your data? Email <span className="text-violet-400">skilldrills.contact@gmail.com</span>.</p>
         </Section>
 
         <p className="text-[11px] text-slate-600 mt-10">

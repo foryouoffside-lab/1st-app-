@@ -1,12 +1,5 @@
 import Link from 'next/link';
 
-export const metadata = {
-  title: 'Terms of Service - SkillDrills',
-  description: 'The terms that apply when you use SkillDrills.',
-  robots: { index: true, follow: true },
-  alternates: { canonical: 'https://skilldrills.online/terms' },
-};
-
 const LAST_UPDATED = 'July 17, 2026';
 
 function Section({ title, children }) {
@@ -64,7 +57,7 @@ export default function TermsOfServicePage() {
         </Section>
 
         <Section title="Contact us">
-          <p>Questions about these terms? Email <span className="text-violet-400">support@skilldrills.online</span>.</p>
+          <p>Questions about these terms? Email <span className="text-violet-400">skilldrills.contact@gmail.com</span>.</p>
         </Section>
       </div>
     </div>

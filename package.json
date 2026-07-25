@@ -29,8 +29,6 @@
     "@capacitor/splash-screen": "^8.0.1",
     "@capacitor/status-bar": "^8.0.2",
     "@hookform/resolvers": "^3.9.1",
-    "@vercel/analytics": "^2.0.1",
-    "@vercel/speed-insights": "^2.0.0",
     "critters": "^0.0.23",
     "date-fns": "^4.1.0",
     "firebase": "^12.16.0",

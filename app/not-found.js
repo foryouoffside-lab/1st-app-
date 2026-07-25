@@ -1,20 +1,5 @@
 import Link from 'next/link';
 
-export const metadata = {
-  title: 'Page Not Found - SkillDrills',
-  description: 'The page you are looking for does not exist. Explore 115+ free brain training, FPS aim drills, cognitive exercises, memory games, typing tests, and mental fitness tools on SkillDrills.',
-  keywords: ['404', 'page not found', 'skilldrills', 'free drills', 'brain training', 'FPS aim trainer'],
-  robots: {
-    index: false,
-    follow: true,
-  },
-  openGraph: {
-    title: 'Page Not Found - SkillDrills',
-    description: 'This page does not exist. Discover 115+ free training drills on SkillDrills.',
-    url: 'https://skilldrills.online',
-  },
-};
-
 export default function NotFound() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
@@ -28,13 +13,13 @@ export default function NotFound() {
           Explore our free training drills below.
         </p>
         <div className="flex flex-col sm:flex-row gap-3 justify-center">
-          <Link 
+          <Link
             href="/"
             className="px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg font-semibold hover:shadow-lg transition-all transform hover:scale-[1.02]"
           >
             Go Home
           </Link>
-          <Link 
+          <Link
             href="/drills/cognitive"
             className="px-6 py-3 bg-white text-gray-700 rounded-lg font-semibold border border-gray-300 hover:border-gray-400 hover:bg-gray-50 transition-all"
           >
