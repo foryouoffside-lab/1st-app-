@@ -12,18 +12,24 @@ service cloud.firestore {
     // Player profiles — public read (leaderboards/opponent cards need this),
     // but only the owning signed-in user may create or fully edit their own doc.
     match /users/{uid} {
+      // Public read — this doc IS the leaderboard/opponent-card data, so it
+      // must never contain email or any other non-public field. Enforced
+      // below on every create/full-update, not just trusted to app code.
       allow read: if true;
 
-      allow create: if request.auth != null && request.auth.uid == uid;
+      allow create: if request.auth != null && request.auth.uid == uid &&
+        !('email' in request.resource.data);
 
       allow update: if request.auth != null && (
         (
-          // Own document: full access, except photoURL is capped — profile
+          // Own document: full access, except (1) photoURL is capped — profile
           // photos are stored inline as a base64 data URL (no Firebase
           // Storage / Blaze plan needed), and this field is read by every
           // other player who sees this user in the leaderboard or online
-          // list, so an oversized value would bloat everyone else's reads.
+          // list, so an oversized value would bloat everyone else's reads —
+          // and (2) email is never allowed here at all (see note above).
           request.auth.uid == uid &&
+          !('email' in request.resource.data) &&
           (!('photoURL' in request.resource.data) || request.resource.data.photoURL.size() < 300000)
         ) ||
         (

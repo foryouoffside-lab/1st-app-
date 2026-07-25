@@ -10,6 +10,8 @@ import {
   getDoc,
   updateDoc,
   deleteDoc,
+  deleteField,
+  onSnapshot,
   collection,
   query,
   where,
@@ -59,8 +61,14 @@ async function resolveProfile(db, fbUser) {
     const data = existing.data();
     const updates = { online: true, lastSeen: serverTimestamp() };
     if (fbUser.photoURL && fbUser.photoURL !== data.photoURL) updates.photoURL = fbUser.photoURL;
+    // Self-heal: earlier versions stored email on this publicly-readable doc.
+    // Strip it going forward — it only ever needs to live in Firebase Auth
+    // (fbUser.email below), never in the world-readable Firestore document.
+    if ('email' in data) updates.email = deleteField();
     await updateDoc(userRef, updates);
-    return { status: 'ready', profile: { uid: fbUser.uid, ...data, ...updates } };
+    const publicData = { ...data };
+    delete publicData.email;
+    return { status: 'ready', profile: { uid: fbUser.uid, ...publicData, ...updates, email: fbUser.email || '' } };
   }
 
   let legacy = null;
@@ -85,8 +93,7 @@ async function resolveProfile(db, fbUser) {
     const merged = {
       uid: fbUser.uid,
       displayName: legacy.displayName,
-      email: fbUser.email || legacy.email || '',
-      photoURL: fbUser.photoURL || legacy.photoURL || fallbackAvatar(fbUser.email || fbUser.uid),
+      photoURL: fbUser.photoURL || legacy.photoURL || fallbackAvatar(fbUser.uid),
       online: true,
       wins: legacy.wins || 0,
       losses: legacy.losses || 0,
@@ -97,11 +104,13 @@ async function resolveProfile(db, fbUser) {
     };
     await setDoc(userRef, merged);
     try {
-      await updateDoc(doc(db, 'users', legacy.id), { migratedTo: fbUser.uid, online: false });
+      // Also scrub email off the old doc being retired — it's no longer
+      // read anywhere, and this is the one place old leaked data gets cleaned up.
+      await updateDoc(doc(db, 'users', legacy.id), { migratedTo: fbUser.uid, online: false, email: deleteField() });
     } catch (e) {
       console.error('Failed to tag migrated legacy account:', e);
     }
-    return { status: 'ready', profile: merged };
+    return { status: 'ready', profile: { ...merged, email: fbUser.email || legacy.email || '' } };
   }
 
   // Brand-new player — don't create the doc yet, they still need to pick a
@@ -116,7 +125,7 @@ async function resolveProfile(db, fbUser) {
     pending: {
       uid: fbUser.uid,
       email: fbUser.email || '',
-      photoURL: fbUser.photoURL || fallbackAvatar(fbUser.email || fbUser.uid),
+      photoURL: fbUser.photoURL || fallbackAvatar(fbUser.uid),
       suggested,
     },
   };
@@ -170,6 +179,30 @@ export function AuthProvider({ children }) {
 
     return () => unsubscribe();
   }, []);
+
+  // 1b. Live-sync this signed-in user's own profile doc. resolveProfile
+  // above is a one-shot read at sign-in — without this, `user.eiq`/`wins`/
+  // `losses`/`streak` (read all over the Arena UI: leaderboard "you" row,
+  // Results tab summary, matchmaking pairing) stay frozen at their
+  // sign-in-time values for the rest of the session, even though every Arena
+  // duel writes fresh values to this same doc via submitScore. Merged onto
+  // the existing `user` object (not replaced) so nothing else this file sets
+  // locally (e.g. right after completeSignup) gets clobbered by a snapshot
+  // that hasn't caught up yet.
+  useEffect(() => {
+    if (!dbInstance || !user?.uid) return;
+    const userRef = doc(dbInstance, 'users', user.uid);
+    const unsubscribe = onSnapshot(userRef, (snap) => {
+      if (!snap.exists()) return;
+      setUser((prev) => {
+        if (!prev) return prev;
+        const merged = { ...prev, ...snap.data(), uid: prev.uid };
+        try { localStorage.setItem(SESSION_KEY, JSON.stringify(merged)); } catch (e) {}
+        return merged;
+      });
+    }, (err) => console.error('Profile live-sync error:', err));
+    return () => unsubscribe();
+  }, [dbInstance, user?.uid]);
 
   // 2. Set up visibility presence tracking
   useEffect(() => {
@@ -247,10 +280,12 @@ export function AuthProvider({ children }) {
       const snap = await getDocs(q);
       if (!snap.empty) return { ok: false, error: 'That name is already taken.' };
 
-      const profile = {
+      // email deliberately left off this doc — users/{uid} is world-readable
+      // (leaderboards/opponent cards need it), so email lives only in
+      // Firebase Auth + the in-memory/local-storage profile below, never here.
+      const publicProfile = {
         uid: pendingSignup.uid,
         displayName: clean,
-        email: pendingSignup.email,
         photoURL: pendingSignup.photoURL,
         online: true,
         wins: 0,
@@ -260,8 +295,9 @@ export function AuthProvider({ children }) {
         createdAt: serverTimestamp(),
         lastSeen: serverTimestamp(),
       };
-      await setDoc(doc(dbInstance, 'users', pendingSignup.uid), profile);
+      await setDoc(doc(dbInstance, 'users', pendingSignup.uid), publicProfile);
 
+      const profile = { ...publicProfile, email: pendingSignup.email || '' };
       setUser(profile);
       setPendingSignup(null);
       try { localStorage.setItem(SESSION_KEY, JSON.stringify(profile)); } catch (e) {}
