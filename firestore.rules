@@ -22,29 +22,43 @@ service cloud.firestore {
 
       allow update: if request.auth != null && (
         (
-          // Own document: full access, except (1) photoURL is capped — profile
-          // photos are stored inline as a base64 data URL (no Firebase
-          // Storage / Blaze plan needed), and this field is read by every
-          // other player who sees this user in the leaderboard or online
-          // list, so an oversized value would bloat everyone else's reads —
-          // and (2) email is never allowed here at all (see note above).
-          request.auth.uid == uid &&
-          !('email' in request.resource.data) &&
-          (!('photoURL' in request.resource.data) || request.resource.data.photoURL.size() < 300000)
-        ) ||
-        (
-          // Ensure a player can only update an opponent's document during match resolution
-          // by allowing only specific fields, and enforcing that wins/losses can only increment by
-          // at most 1 and eiq can only move by at most one match's swing (±100) per write.
-          // EIQ is a competitive ladder: the opponent's eiq goes UP if they won or
-          // DOWN if they lost, but never below 0.
+          // Match-stat movement — allowed on a player's OWN doc and, since
+          // match completion runs as a single transaction from one client
+          // that writes both players' docs at once (see completeMatchInTx in
+          // lib/challengeEngine.js), on the OPPONENT's doc too. Bounded to
+          // roughly one match's worth of movement per write regardless of
+          // whose doc it is: wins/losses can only increment by at most 1,
+          // streak can only increment by at most 1 (or reset to 0 on a
+          // loss), and eiq can only move by at most one match's swing
+          // (±100) per write, floored at 0. This is what stops a player
+          // from just self-writing inflated leaderboard stats directly —
+          // that hole previously only existed on the "own document" branch
+          // below, which had no bound on these fields at all.
           request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['wins', 'losses', 'streak', 'lastSeen', 'online', 'eiq']) &&
           request.resource.data.get('wins', 0) <= resource.data.get('wins', 0) + 1 &&
           request.resource.data.get('losses', 0) <= resource.data.get('losses', 0) + 1 &&
+          request.resource.data.get('streak', 0) <= resource.data.get('streak', 0) + 1 &&
           request.resource.data.get('eiq', 0) >= 0 &&
           request.resource.data.get('eiq', 0) >= resource.data.get('eiq', 0) - 100 &&
           request.resource.data.get('eiq', 0) <= resource.data.get('eiq', 0) + 100
+        ) ||
+        (
+          // Own document: full self-service access for everything else
+          // (name/avatar/online-status/settings/etc.), except (1) photoURL
+          // is capped — profile photos are stored inline as a base64 data
+          // URL (no Firebase Storage / Blaze plan needed), and this field is
+          // read by every other player who sees this user in the
+          // leaderboard or online list, so an oversized value would bloat
+          // everyone else's reads; (2) email is never allowed here at all
+          // (see note above); and (3) wins/losses/streak/eiq must NEVER move
+          // through this branch, even on your own doc — those only ever move
+          // through the bounded branch above.
+          request.auth.uid == uid &&
+          !('email' in request.resource.data) &&
+          !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['wins', 'losses', 'streak', 'eiq']) &&
+          (!('photoURL' in request.resource.data) || request.resource.data.photoURL.size() < 300000)
         )
       );
 

@@ -8,7 +8,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useChallenge } from '../../contexts/ChallengeContext';
 import {
   sendChallenge, sendGlobalChallenge, acceptChallenge, declineChallenge, cleanupStaleChallenges,
-  joinMatchmakingQueue, leaveMatchmakingQueue, scanForMatch, matchmakingEiqRange, tierForEiq, DUEL_DRILLS,
+  joinMatchmakingQueue, leaveMatchmakingQueue, refreshMatchmakingQueue, scanForMatch, matchmakingEiqRange,
+  tierForEiq, DUEL_DRILLS,
 } from '../../lib/challengeEngine';
 import { collection, query, where, onSnapshot, orderBy, limit, getDocs } from 'firebase/firestore';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -19,6 +20,27 @@ import {
   LogOut, Search, Target, Sparkles, Flame, Award,
   Trash2, MessageSquare, ShieldAlert, BarChart3, Clock, X
 } from 'lucide-react';
+
+// How long to wait for a matched opponent to accept before withdrawing the
+// invite and dropping back to idle, and how recent an incoming matchmaking
+// invite has to be to count as belonging to the search running right now.
+const MATCH_ACCEPT_TIMEOUT_MS = 20 * 1000;
+const MATCHMAKING_INVITE_MAX_AGE_MS = 90 * 1000;
+
+// Firestore hands `createdAt` back as a Timestamp object, not a date string or
+// a number — so `new Date(createdAt)` produces an Invalid Date. That silently
+// broke two things here: every duel-history row rendered the literal text
+// "Invalid Date", and both list sorts compared NaN against NaN (a comparator
+// returning NaN leaves the order untouched, so newest-first never happened).
+// A serverTimestamp() also reads back as null in the writer's own first local
+// snapshot, before the server value round-trips — hence the null guard.
+const tsToMillis = (ts) => {
+  if (!ts) return 0;
+  if (typeof ts.toMillis === 'function') return ts.toMillis();
+  if (typeof ts.seconds === 'number') return ts.seconds * 1000;
+  const parsed = new Date(ts).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+};
 
 export default function ChallengeArenaClient() {
   const { user, db, signOut, deleteAccount } = useAuth();
@@ -50,12 +72,20 @@ export default function ChallengeArenaClient() {
   const matchmakingPollRef = useRef(null);
   const matchmakingTickRef = useRef(null);
   const matchmakingTimeoutRef = useRef(null);
+  // Keeps this player's queue entry fresh for the whole search — see
+  // refreshMatchmakingQueue.
+  const matchmakingHeartbeatRef = useRef(null);
   // Elapsed search seconds, readable from inside the poll callback — drives
   // the widening EIQ search window (see matchmakingEiqRange).
   const matchmakingElapsedRef = useRef(0);
 
   // URL Tab Synchronizer
   useEffect(() => {
+    // Navigating tabs closes the drill picker. It's a `fixed` overlay rendered
+    // outside the tab content, so it used to follow the player from Arena onto
+    // Ranks/Invites/Results and sit on top of a screen it has nothing to do
+    // with — a tab tap clearly means "I'm done with this sheet".
+    setDuelPickerFor(null);
     const tab = searchParams.get('tab');
     if (tab === 'leaderboard') {
       setActiveTab('leaderboard');
@@ -83,10 +113,17 @@ export default function ChallengeArenaClient() {
   useEffect(() => {
     if (!ARENA_ENABLED || !db || !user) return;
 
+    // No orderBy on the server here, deliberately. Combining an equality filter
+    // (`online == true`) with an orderBy on a DIFFERENT field (`lastSeen`)
+    // requires a composite Firestore index, which this project doesn't define
+    // anywhere — there's no firestore.indexes.json, so it would only exist if
+    // someone had hand-created it in the console. Without it the query fails
+    // outright with FAILED_PRECONDITION and the entire Online Players list
+    // silently renders empty in production. Sorting the (already limited)
+    // result set on the client needs no index and cannot break on deploy.
     const q = query(
       collection(db, 'users'),
       where('online', '==', true),
-      orderBy('lastSeen', 'desc'),
       limit(40)
     );
 
@@ -98,6 +135,7 @@ export default function ChallengeArenaClient() {
           players.push(data);
         }
       });
+      players.sort((a, b) => tsToMillis(b.lastSeen) - tsToMillis(a.lastSeen));
       setOnlinePlayers(players);
     }, (error) => {
       console.error("Online players fetch failed:", error);
@@ -119,10 +157,7 @@ export default function ChallengeArenaClient() {
       const invites = [];
       snapshot.forEach((doc) => {
         const data = doc.data();
-        if (
-          (data.toUid === user.uid || (data.toUid === 'global' && data.fromUid !== user.uid)) &&
-          !hiddenGlobalInvites.includes(doc.id)
-        ) {
+        if (data.toUid === user.uid || (data.toUid === 'global' && data.fromUid !== user.uid)) {
           invites.push({
             id: doc.id,
             ...data
@@ -130,11 +165,7 @@ export default function ChallengeArenaClient() {
         }
       });
 
-      invites.sort((a, b) => {
-        const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-        const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-        return timeB - timeA;
-      });
+      invites.sort((a, b) => tsToMillis(b.createdAt) - tsToMillis(a.createdAt));
 
       setPendingInvites(invites);
     }, (error) => {
@@ -142,7 +173,13 @@ export default function ChallengeArenaClient() {
     });
 
     return () => unsubscribe();
-  }, [db, user, hiddenGlobalInvites]);
+    // Deliberately NOT keyed on hiddenGlobalInvites — dismissing someone
+    // else's open-lobby post is a purely local "hide this from my inbox"
+    // action, but having it in the dependency list tore down this Firestore
+    // listener and opened a fresh one (re-reading every pending challenge) on
+    // every dismissal. The hidden ids are applied where they belong, at render
+    // time, via visibleInvites below.
+  }, [db, user]);
 
   // 3. Fetch leaderboard (Top 50 users by EIQ). One-shot fetch each time the
   // tab is opened — the old realtime listener kept a live subscription on 50
@@ -166,37 +203,47 @@ export default function ChallengeArenaClient() {
     return () => { cancelled = true; };
   }, [db, activeTab]);
 
-  // 5. Subscribe to user's challenge history (Results tab)
+  // 5. Fetch this user's duel history (Results tab).
+  //
+  // Two targeted queries — one for duels this user started, one for duels they
+  // were invited to. It used to read 30 documents from the challenges
+  // collection with NO `where` clause at all and filter them client-side,
+  // which meant it was showing whichever arbitrary 30 duels Firestore happened
+  // to return: once more than a handful of players exist, a user's own matches
+  // usually aren't in that set, so Duel History rendered empty or missing
+  // recent matches. It was also a live listener on 30 mostly-unrelated docs.
+  //
+  // Neither query needs a composite index (single equality filter, sorted
+  // client-side). One-shot rather than realtime, matching the leaderboard tab —
+  // history only has to be fresh when you actually open it.
   useEffect(() => {
     if (!ARENA_ENABLED || !db || !user || activeTab !== 'results') return;
+    let cancelled = false;
 
-    const q = query(
-      collection(db, 'challenges'),
-      limit(30)
-    );
+    (async () => {
+      try {
+        const [fromSnap, toSnap] = await Promise.all([
+          getDocs(query(collection(db, 'challenges'), where('fromUid', '==', user.uid), limit(40))),
+          getDocs(query(collection(db, 'challenges'), where('toUid', '==', user.uid), limit(40))),
+        ]);
+        if (cancelled) return;
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const list = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        if (data.fromUid === user.uid || data.toUid === user.uid) {
-          list.push({
-            id: doc.id,
-            ...data
-          });
-        }
-      });
-      
-      list.sort((a, b) => {
-        const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-        const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-        return timeB - timeA;
-      });
-      
-      setChallengeHistory(list);
-    });
+        const byId = new Map();
+        [fromSnap, toSnap].forEach((snap) => {
+          snap.forEach((docSnap) => byId.set(docSnap.id, { id: docSnap.id, ...docSnap.data() }));
+        });
 
-    return () => unsubscribe();
+        const list = Array.from(byId.values())
+          .sort((a, b) => tsToMillis(b.createdAt) - tsToMillis(a.createdAt))
+          .slice(0, 30);
+
+        setChallengeHistory(list);
+      } catch (error) {
+        console.error('Duel history fetch failed:', error);
+      }
+    })();
+
+    return () => { cancelled = true; };
   }, [db, user, activeTab]);
 
   // 4. Close this page's own "waiting for response" modal once the shared
@@ -223,6 +270,7 @@ export default function ChallengeArenaClient() {
     if (matchmakingPollRef.current) { clearInterval(matchmakingPollRef.current); matchmakingPollRef.current = null; }
     if (matchmakingTickRef.current) { clearInterval(matchmakingTickRef.current); matchmakingTickRef.current = null; }
     if (matchmakingTimeoutRef.current) { clearTimeout(matchmakingTimeoutRef.current); matchmakingTimeoutRef.current = null; }
+    if (matchmakingHeartbeatRef.current) { clearInterval(matchmakingHeartbeatRef.current); matchmakingHeartbeatRef.current = null; }
   };
 
   const cancelMatchmaking = async () => {
@@ -241,11 +289,20 @@ export default function ChallengeArenaClient() {
 
     stopMatchmakingTimers();
     try {
-      await sendChallenge(user, candidate, drill.slug, drill.name, { matchmaking: true });
+      const newChallengeId = await sendChallenge(user, candidate, drill.slug, drill.name, { matchmaking: true });
       await leaveMatchmakingQueue(user.uid);
       setMatchmakingState('found');
       // ChallengeStatusToast (mounted globally) auto-routes us in the moment
-      // the matched opponent accepts — no extra navigation code needed here.
+      // the matched opponent accepts. But if they never do — they cancelled
+      // their own search in the same instant, or dropped off — nothing else
+      // would ever move this modal off "Opponent Found! Connecting you both
+      // to the lobby...", and its Cancel button only renders while
+      // 'searching'. That left the player stranded with no way out. Bound the
+      // wait, then withdraw the invite we created and reset to idle.
+      matchmakingTimeoutRef.current = setTimeout(() => {
+        if (newChallengeId) declineChallenge(newChallengeId).catch(() => {});
+        cancelMatchmaking();
+      }, MATCH_ACCEPT_TIMEOUT_MS);
     } catch (e) {
       console.error('Failed to create matched challenge:', e);
       await cancelMatchmaking();
@@ -272,6 +329,11 @@ export default function ChallengeArenaClient() {
       matchmakingElapsedRef.current += 1;
       setMatchmakingSeconds((s) => s + 1);
     }, 1000);
+    // Comfortably inside the 45s freshness window other players scan against,
+    // so this search never goes invisible while it's still running.
+    matchmakingHeartbeatRef.current = setInterval(() => {
+      refreshMatchmakingQueue(user.uid);
+    }, 20000);
     matchmakingTimeoutRef.current = setTimeout(() => { cancelMatchmaking(); }, 60000);
   };
 
@@ -280,7 +342,20 @@ export default function ChallengeArenaClient() {
   // than making the user click through it, and navigate straight in.
   useEffect(() => {
     if (matchmakingState !== 'searching') return;
-    const match = incomingChallenges.find((c) => c.matchmaking === true);
+    // The invite must be for the drill we're actually searching for, and fresh
+    // enough to belong to THIS search. Matching on `matchmaking === true`
+    // alone meant a leftover matchmaking invite from an earlier session
+    // (they're only swept up after 20 minutes — see STALE_CHALLENGE_MS) got
+    // auto-accepted the instant the player pressed Find Duel, dragging them
+    // straight into a dead match against an opponent who was long gone.
+    const cutoff = Date.now() - MATCHMAKING_INVITE_MAX_AGE_MS;
+    const match = incomingChallenges.find((c) => {
+      if (c.matchmaking !== true) return false;
+      if (matchmakingDrill && c.drillSlug !== matchmakingDrill.slug) return false;
+      const createdMs = tsToMillis(c.createdAt);
+      // 0 means the server timestamp hasn't resolved yet, i.e. brand new.
+      return createdMs === 0 || createdMs >= cutoff;
+    });
     if (!match) return;
 
     stopMatchmakingTimers();
@@ -295,15 +370,25 @@ export default function ChallengeArenaClient() {
       setMatchmakingState('idle');
       setMatchmakingDrill(null);
     })();
-  }, [incomingChallenges, matchmakingState]);
+  }, [incomingChallenges, matchmakingState, matchmakingDrill]);
 
   // Leave the queue and stop polling if the player navigates away mid-search.
+  //
+  // Keyed on the uid, NOT the whole `user` object: AuthContext live-syncs the
+  // signed-in user's profile doc and merges each snapshot into a brand-new
+  // object, so `user`'s identity changes on any write to that doc — including
+  // the presence/lastSeen updates and the eiq/wins writes a duel produces.
+  // Depending on `user` meant this cleanup fired on those unrelated updates,
+  // silently clearing the poll timers and pulling the player out of the
+  // matchmaking queue while their search modal still said "Finding an
+  // Opponent" — a search that could then never match anyone.
+  const userUid = user?.uid;
   useEffect(() => {
     return () => {
       stopMatchmakingTimers();
-      if (user) leaveMatchmakingQueue(user.uid).catch(() => {});
+      if (userUid) leaveMatchmakingQueue(userUid).catch(() => {});
     };
-  }, [user]);
+  }, [userUid]);
 
   // "Duel" on a player, "Post Open Challenge", and "Find Duel" all open the
   // drill picker first; the actual invite/queue-join only happens once a
@@ -398,6 +483,11 @@ export default function ChallengeArenaClient() {
   const filteredPlayers = onlinePlayers.filter(p =>
     (p.displayName || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  // Open-lobby posts the user has dismissed from their own inbox are filtered
+  // out here, at render, rather than inside the invites listener — see the
+  // note on that effect.
+  const visibleInvites = pendingInvites.filter(i => !hiddenGlobalInvites.includes(i.id));
 
   const renderAvatar = (userObj, sizeClass = "w-10 h-10", borderClass = "border border-neutral-800") => {
     if (userObj.photoURL) {
@@ -612,7 +702,7 @@ export default function ChallengeArenaClient() {
                 >
                   <Mail className="w-3.5 h-3.5" />
                   Invites
-                  {pendingInvites.length > 0 && (
+                  {visibleInvites.length > 0 && (
                     <span className="absolute top-1.5 right-1 w-1.5 h-1.5 bg-purple-500 rounded-full" />
                   )}
                 </button>
@@ -746,7 +836,7 @@ export default function ChallengeArenaClient() {
               {/* ARENA TAB 2: INCOMING INVITES */}
               {activeTab === 'invites' && (
                 <div className="space-y-3">
-                  {pendingInvites.length === 0 ? (
+                  {visibleInvites.length === 0 ? (
                     <div className="text-center py-16 bg-[#12131c] border border-neutral-800/60 rounded-3xl">
                       <div className="w-12 h-12 bg-neutral-900 rounded-full flex items-center justify-center border border-neutral-800 mx-auto mb-3">
                         <Mail className="w-5 h-5 text-neutral-500" />
@@ -758,7 +848,7 @@ export default function ChallengeArenaClient() {
                     </div>
                   ) : (
                     <div className="grid gap-3">
-                      {pendingInvites.map((invite) => (
+                      {visibleInvites.map((invite) => (
                         <div 
                           key={invite.id}
                           className="bg-[#12131c] border-2 border-purple-500/30 rounded-3xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
@@ -783,14 +873,18 @@ export default function ChallengeArenaClient() {
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-2 self-end sm:self-auto">
+                          {/* Decline pushed to the far left, Accept to the right,
+                              rather than both bunched together on one side — the
+                              gap makes the destructive choice harder to hit by
+                              accident and reads as a clear either/or. */}
+                          <div className="flex w-full items-center justify-between gap-3 sm:w-auto sm:justify-end">
                             <button
                               onClick={() => handleDeclineInvite(invite)}
                               className="px-3.5 py-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white rounded-xl text-xs font-bold transition cursor-pointer"
                             >
                               Decline
                             </button>
-                            
+
                             <button
                               onClick={() => handleAcceptInvite(invite)}
                               className="flex items-center gap-1 px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold rounded-xl shadow-lg transition cursor-pointer"
@@ -878,8 +972,9 @@ export default function ChallengeArenaClient() {
                             : outcome.label === 'Draw' ? 'bg-slate-500'
                             : 'bg-neutral-700';
                           const scoreTotal = Math.max(userScore + oppScore, 1);
-                          const formattedDate = item.createdAt
-                            ? new Date(item.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+                          const createdMs = tsToMillis(item.createdAt);
+                          const formattedDate = createdMs
+                            ? new Date(createdMs).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
                             : 'Unknown Date';
 
                           return (

@@ -32,6 +32,12 @@ export default function ChallengeNotificationBanner() {
         gain.connect(audioCtx.destination);
         osc.start();
         osc.stop(audioCtx.currentTime + 0.4);
+        // Release the context once the chime finishes. A fresh AudioContext was
+        // being created per invite and never closed, and browsers cap how many
+        // can exist at once (Chrome allows ~6) — so after a handful of invites
+        // in one session the constructor started throwing and the notification
+        // sound silently stopped working for the rest of the session.
+        osc.onended = () => { audioCtx.close().catch(() => {}); };
       }
     } catch (e) {
       console.warn("Could not play challenge sound:", e);

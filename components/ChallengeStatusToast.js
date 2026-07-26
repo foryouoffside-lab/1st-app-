@@ -11,18 +11,43 @@ import { useRouter } from 'next/navigation';
 import { X, Swords } from 'lucide-react';
 import { useChallenge } from '../contexts/ChallengeContext';
 
+// An invite older than this is never auto-joined, however its status reads — a
+// second safety net behind the transition check below.
+const MAX_AUTO_JOIN_AGE_MS = 3 * 60 * 1000;
+
 export default function ChallengeStatusToast() {
   const { outgoingChallenge } = useChallenge();
   const router = useRouter();
   const [declinedNotice, setDeclinedNotice] = useState(null);
-  const handledRef = useRef(new Set());
+  // Last status we actually OBSERVED per challenge id, so we can tell a live
+  // answer apart from one that happened before we were watching.
+  const seenStatusRef = useRef(new Map());
 
   useEffect(() => {
     if (!outgoingChallenge) return;
-    const { id, status, drillSlug, toName } = outgoingChallenge;
-    const key = `${id}:${status}`;
-    if (handledRef.current.has(key)) return;
-    handledRef.current.add(key);
+    const { id, status, drillSlug, toName, createdAt } = outgoingChallenge;
+
+    const previousStatus = seenStatusRef.current.get(id);
+    if (previousStatus === status) return;
+    seenStatusRef.current.set(id, status);
+
+    // Only act on a transition we watched happen (pending -> accepted/declined).
+    //
+    // This used to fire whenever it merely SAW status 'accepted', which turned
+    // any challenge left sitting at 'accepted' — a match that never reached
+    // 'playing', so nothing ever resolved it — into a trap. This component is
+    // unmounted on drill routes and remounted on every return, and a fresh
+    // mount had no memory, so each time the player came back to a normal screen
+    // it pushed them straight back into that same stale match. Exit, get pulled
+    // in again, exit again. That's the "auto rematch" loop: an invite nobody
+    // had just answered, re-joining itself.
+    //
+    // Seeing 'accepted' as the FIRST status for an id means the answer landed
+    // while we weren't looking, so it's history — not an invitation to navigate.
+    if (previousStatus !== 'pending') return;
+
+    const createdMs = createdAt?.toMillis ? createdAt.toMillis() : 0;
+    if (createdMs && Date.now() - createdMs > MAX_AUTO_JOIN_AGE_MS) return;
 
     if (status === 'accepted') {
       router.push(`/drills/${drillSlug}?challengeId=${id}`);

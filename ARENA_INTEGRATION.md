@@ -50,6 +50,21 @@ Multi‑Tasking are the reference implementations).
    const totalTime = isChallenge ? 30 : TOTAL_TIME;   // duels are ALWAYS 30s
    ```
 
+   **The duel clock is fixed and untouchable — never add time to it.** Lots of
+   solo drills refill or extend the timer as a reward (a full reset on
+   round-clear, `+1.5s` per chain, a time penalty on a mistake). Every one of
+   those must be gated behind `!isChallenge`. The two duelists run *independent*
+   local clocks that agree only because both start at the same `matchStartAt`
+   and both count down exactly 30s — so any drill-side change to the clock
+   desyncs them: the player earning time plays a longer match, while their
+   opponent's 30s expires and strands them on "Waiting for opponent to
+   finish...". This bit `Concentration Grid`, `Tower of Hanoi`, and
+   `Sequence Aim Trainer` simultaneously (fixed 2026-07-25); it is the single
+   easiest way to break Arena, because each drill looks correct on its own.
+   ```js
+   if (!isChallenge) { timeLeftRef.current = totalTime; }   // solo-only refill
+   ```
+
 2. **Synced auto‑start.** Both clients begin at the exact same wall‑clock instant using
    `useDuelMatchStart` (a direct Firestore subscription — do NOT use React context here):
    ```js
@@ -164,6 +179,11 @@ Adding a new drill does NOT require a rules change.
 
 - [ ] Add the `{ slug, name, hardness }` line to `DUEL_DRILLS`.
 - [ ] Wire rules 1–10 into the drill's client (copy from a reference drill).
+- [ ] **Nothing adds to or subtracts from the clock in duel mode** (rule 1) —
+      grep the drill for every assignment to its time ref and confirm each one
+      is either the initial `= totalTime` or gated behind `!isChallenge`.
+- [ ] **Duel starts at the lowest difficulty for both players** — no
+      personal-best seeding (`const startLevel = isChallenge ? 1 : ...`).
 - [ ] Difficulty ratchets up by score; verify a −5 penalty can't lower it.
 - [ ] Timing is device‑independent (fixed‑timestep or wall‑clock).
 - [ ] Uses the canonical miss/timeout chime; suppresses non‑penalty toasts in duels.

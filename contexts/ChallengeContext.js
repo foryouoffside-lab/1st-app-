@@ -16,7 +16,7 @@
 // This context owns exactly one Firestore listener in each direction, so
 // notifications are consistent regardless of which screen the user is on.
 
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { useAuth } from './AuthContext';
 import { listenForIncomingChallenges, acceptChallenge, declineChallenge } from '../lib/challengeEngine';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
@@ -44,8 +44,24 @@ export function ChallengeProvider({ children }) {
       setIncomingChallenges([]);
       return;
     }
-    const unsubscribe = listenForIncomingChallenges(user.uid, (challenges) => {
-      setIncomingChallenges(challenges.filter(c => c.toUid === user.uid));
+    const unsubscribe = listenForIncomingChallenges(user.uid, (mine) => {
+      // Only push a new array when the set of invites actually changed.
+      //
+      // The listener is now scoped server-side to this user's own invites, so
+      // unrelated players' activity no longer reaches here at all — this guard
+      // is the second layer: it keeps the array reference stable if the same
+      // set is ever re-delivered (a reconnect, a metadata-only snapshot), which
+      // otherwise re-renders every consumer of this Context, DrillWrapper
+      // included, in the middle of a duel.
+      //
+      // Comparing ids is sufficient: the query is pinned to status == 'pending'
+      // and a pending doc's other fields never change — accepting or declining
+      // flips the status, which drops it out of the result set. Docs only ever
+      // enter or leave.
+      setIncomingChallenges((prev) => {
+        if (prev.length === mine.length && prev.every((c, i) => c.id === mine[i].id)) return prev;
+        return mine;
+      });
     });
     return () => unsubscribe();
   }, [user, db]);
@@ -84,7 +100,16 @@ export function ChallengeProvider({ children }) {
     return () => unsubscribe();
   }, [user, db]);
 
-  const value = { incomingChallenges, outgoingChallenge, acceptChallenge, declineChallenge };
+  // Memoized so the two guards above actually pay off. A fresh object literal
+  // here would re-render every consumer on ANY provider render regardless of
+  // whether the values inside changed, which defeats the whole point of keeping
+  // `incomingChallenges` and `outgoingChallenge` referentially stable.
+  // acceptChallenge/declineChallenge are module-level imports, so they're
+  // already stable.
+  const value = useMemo(
+    () => ({ incomingChallenges, outgoingChallenge, acceptChallenge, declineChallenge }),
+    [incomingChallenges, outgoingChallenge]
+  );
   return <ChallengeContext.Provider value={value}>{children}</ChallengeContext.Provider>;
 }
 
