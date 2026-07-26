@@ -636,7 +636,15 @@ export default function FingerSequencingClient() {
 
         if (activeIndexRef.current >= chain.length) {
           chainsCompletedRef.current++;
-          timeLeftRef.current = Math.min(totalTime, timeLeftRef.current + 1.5);
+          // Solo only: finishing a chain buys back 1.5s, so a good run keeps
+          // going. A duel must NOT do this — both duelists share one fixed
+          // 30s (ARENA_INTEGRATION.md rule 1). Chaining faster than the clock
+          // drains held the timer pinned at 30s, so a strong player's match
+          // ran on well past the opponent's, who was left stuck on "Waiting
+          // for opponent to finish..." the whole time.
+          if (!isChallenge) {
+            timeLeftRef.current = Math.min(totalTime, timeLeftRef.current + 1.5);
+          }
 
           if (chainMistakeCountRef.current === 0) {
             if (cueTierRef.current === 2 || cueTierRef.current === 3) {
@@ -840,8 +848,16 @@ export default function FingerSequencingClient() {
 
     const timer = setInterval(() => {
       timeLeftRef.current = Math.max(0, timeLeftRef.current - 0.2);
-      setTimeLeft(timeLeftRef.current);
       elapsedRef.current += 200;
+
+      // Push to React state only when the DISPLAYED whole second changes. The
+      // clock is read to the second and the timer bar animates itself in CSS, so
+      // the other four ticks each second were re-rendering the whole component
+      // to paint an identical picture — five times the renders for no visible
+      // difference. The ref keeps full precision for scoring maths.
+      setTimeLeft((prev) => (
+        Math.ceil(prev) === Math.ceil(timeLeftRef.current) ? prev : timeLeftRef.current
+      ));
 
       if (timeLeftRef.current <= 0) {
         clearInterval(timer);
@@ -972,14 +988,50 @@ export default function FingerSequencingClient() {
     }
   }, [score, level, endSummary, bestScore]);
 
-  // RAF rendering loop
+  // RAF rendering loop.
+  //
+  // Only runs while there is actually something animating. It used to run for
+  // the component's entire lifetime: the background fill + grid strokes below
+  // are unconditional, so a full-screen canvas was being repainted 60x/sec
+  // behind the start screen, the rotate hint, and the result screen — burning
+  // CPU and battery indefinitely on screens where nothing moves. The
+  // countdown is included because the board is already visible underneath it.
   useEffect(() => {
+    if (phase !== 'playing' && phase !== 'countdown') return;
     const cvs = canvasRef.current;
     if (!cvs) return;
     const ctx = cvs.getContext('2d', { alpha: false });
 
     let animationFrameId;
     let lastDrawTs = 0;
+
+    // Static backdrop (flat fill + 40px grid) rendered ONCE into an offscreen
+    // canvas and blitted, instead of re-stroking ~40 line segments on every one
+    // of 60 frames a second for an image that never changes. Same technique as
+    // Target Lock's dot grid. Rebuilt only when the canvas is actually resized.
+    const bgCanvas = document.createElement('canvas');
+    const bgCtx = bgCanvas.getContext('2d', { alpha: false });
+    let bgW = 0;
+    let bgH = 0;
+
+    const ensureBackground = (w, h, dpr) => {
+      if (!bgCtx || w <= 0 || h <= 0) return false;
+      if (bgW === w && bgH === h && bgCanvas.width > 0) return true;
+      bgW = w;
+      bgH = h;
+      bgCanvas.width = Math.round(w * dpr);
+      bgCanvas.height = Math.round(h * dpr);
+      bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      bgCtx.fillStyle = '#050508';
+      bgCtx.fillRect(0, 0, w, h);
+      bgCtx.strokeStyle = 'rgba(255, 255, 255, 0.015)';
+      bgCtx.lineWidth = 1;
+      bgCtx.beginPath();
+      for (let x = 0; x < w; x += 40) { bgCtx.moveTo(x, 0); bgCtx.lineTo(x, h); }
+      for (let y = 0; y < h; y += 40) { bgCtx.moveTo(0, y); bgCtx.lineTo(w, y); }
+      bgCtx.stroke();
+      return true;
+    };
 
     const render = (ts = performance.now()) => {
       // ~60fps cap — an uncapped loop makes 90-120Hz phones redraw more
@@ -998,22 +1050,13 @@ export default function FingerSequencingClient() {
       ctx.save();
       ctx.scale(dpr, dpr);
 
-      // 1. Clear screen
-      ctx.fillStyle = '#050508';
-      ctx.fillRect(0, 0, w, h);
-
-      // 2. Draw grid lines
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.015)';
-      ctx.lineWidth = 1;
-      const gridSize = 40;
-      ctx.beginPath();
-      for (let x = 0; x < w; x += gridSize) {
-        ctx.moveTo(x, 0); ctx.lineTo(x, h);
+      // 1 + 2. Backdrop and grid — one blit of the pre-rendered image.
+      if (ensureBackground(w, h, dpr)) {
+        ctx.drawImage(bgCanvas, 0, 0, w, h);
+      } else {
+        ctx.fillStyle = '#050508';
+        ctx.fillRect(0, 0, w, h);
       }
-      for (let y = 0; y < h; y += gridSize) {
-        ctx.moveTo(0, y); ctx.lineTo(w, y);
-      }
-      ctx.stroke();
 
       const activeIdx = activeIndexRef.current;
       const chain = chainRef.current;
@@ -1170,6 +1213,41 @@ export default function FingerSequencingClient() {
     };
   }, [phase, triggerTimeout]);
 
+  // Idle screens (start / rotate-hint / ended) get ONE static paint of the
+  // same backdrop the loop above would draw, instead of the loop running
+  // forever to redraw an unchanging image. The canvas is opaque
+  // (`{ alpha: false }`) and covers the whole play area, so without this it
+  // would sit as flat default-black rather than the drill's #050508 + grid.
+  useEffect(() => {
+    if (phase === 'playing' || phase === 'countdown') return;
+    const cvs = canvasRef.current;
+    const ctx = cvs?.getContext('2d', { alpha: false });
+    if (!ctx) return;
+
+    const paintIdle = () => {
+      const dpr = canvasDpr();
+      const w = canvasSizeRef.current.width;
+      const h = canvasSizeRef.current.height;
+      if (!w || !h) return;
+      ctx.save();
+      ctx.scale(dpr, dpr);
+      ctx.fillStyle = '#050508';
+      ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.015)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let x = 0; x < w; x += 40) { ctx.moveTo(x, 0); ctx.lineTo(x, h); }
+      for (let y = 0; y < h; y += 40) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
+      ctx.stroke();
+      ctx.restore();
+    };
+
+    // One frame late so it runs after the resize observer has sized the
+    // backing store on first mount (otherwise width/height are still 0).
+    const raf = requestAnimationFrame(paintIdle);
+    return () => cancelAnimationFrame(raf);
+  }, [phase]);
+
   // Canvas auto-resizer
   useEffect(() => {
     const cvs = canvasRef.current;
@@ -1269,11 +1347,8 @@ export default function FingerSequencingClient() {
             {/* Live Stats Overlay (Top-Left) */}
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none font-mono select-none">
               <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
-              {isChallenge ? (
-                <div className="flex items-center gap-2 mt-1.5">
-                  <span className="text-[10px] font-black text-violet-300 bg-violet-500/15 border border-violet-500/25 px-1.5 py-0.5 rounded">Lv.{level}</span>
-                </div>
-              ) : (
+              {/* No level badge in duels — see the note in ConcentrationGrid. */}
+              {!isChallenge && (
                 <span className="flex items-center gap-0.5 mt-1.5">
                   {Array.from({ length: MAX_LIVES }).map((_, i) => (
                     <Heart key={i} className={`w-3 h-3 ${i < lives ? 'fill-red-500 text-red-500' : 'text-white/15'}`} />

@@ -8,6 +8,7 @@ import {
   RotateCcw, Share2, ArrowLeft, Eye, Zap as ZapIcon, Ban, Heart
 } from 'lucide-react';
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade } from '../../../../../lib/scoringEngine';
+import { canvasDpr, createBackdropCache } from '../../../../../lib/canvasFx';
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { lockLandscape, unlockOrientation } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
@@ -546,7 +547,7 @@ export default function ReflexTrainingDrillClient() {
       const ct = containerRef.current;
       if (!ct) return;
       const rect = ct.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = canvasDpr();
       const W = rect.width;
       const H = rect.height;
 
@@ -584,10 +585,29 @@ export default function ReflexTrainingDrillClient() {
     trackingState.current.lastTime = 0;
     lastTargetSpawnTimeRef.current = Date.now();
 
+    // Static play-field backdrop, rendered once per size instead of per frame.
+    const backdrop = createBackdropCache((c: CanvasRenderingContext2D, w: number, h: number) => {
+      c.fillStyle = '#050508';
+      c.fillRect(0, 0, w, h);
+      c.fillStyle = 'rgba(139, 92, 246, 0.04)';
+      for (let gx = 40; gx < w; gx += 40) {
+        for (let gy = 40; gy < h; gy += 40) {
+          c.fillRect(gx - 0.5, gy - 0.5, 1, 1);
+        }
+      }
+    });
+
     let animId = 0;
+    // ~60fps cap. This loop was uncapped, so on a 90Hz or 120Hz phone it ran
+    // 1.5-2x more frames than the game needs for an identical result — pure
+    // heat. Frame-skipping happens BEFORE lastTime is touched, so the physics
+    // delta below still measures real elapsed time between drawn frames.
+    let lastDrawTs = 0;
 
     const drawLoop = (ts: number) => {
       if (phaseRef.current !== 'playing') return;
+      if (ts - lastDrawTs < 15) { animId = requestAnimationFrame(drawLoop); return; }
+      lastDrawTs = ts;
       if (!trackingState.current.lastTime) {
         trackingState.current.lastTime = ts;
       }
@@ -595,23 +615,20 @@ export default function ReflexTrainingDrillClient() {
       if (dt > 0.15) dt = 0.016; 
       trackingState.current.lastTime = ts;
 
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = canvasDpr();
       const W = cvs.width / dpr;
       const H = cvs.height / dpr;
       const currentLevel = levelRef.current;
       const p = (currentLevel - 1) / 14;
 
       // Draw background
-      ctx.fillStyle = '#050508';
-      ctx.fillRect(0, 0, W, H);
-
-      // Dot-matrix tactical grid
-      ctx.fillStyle = 'rgba(139, 92, 246, 0.04)';
-      const dotSpacing = 40;
-      for (let gx = dotSpacing; gx < W; gx += dotSpacing) {
-        for (let gy = dotSpacing; gy < H; gy += dotSpacing) {
-          ctx.fillRect(gx - 0.5, gy - 0.5, 1, 1);
-        }
+      // Backdrop blitted from cache — this was 150+ fillRect calls per frame
+      // (~9,000/sec) redrawing a static image.
+      if (backdrop.ensure(W, H, dpr)) {
+        ctx.drawImage(backdrop.canvas, 0, 0, W, H);
+      } else {
+        ctx.fillStyle = '#050508';
+        ctx.fillRect(0, 0, W, H);
       }
 
       const radius = getTargetRadius(W, H);
@@ -791,7 +808,7 @@ export default function ReflexTrainingDrillClient() {
     const cy = trackingState.current.currentY;
     const dist = Math.hypot(x - cx, y - cy);
     
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = canvasDpr();
     const W = cvs.width / dpr;
     const H = cvs.height / dpr;
     const radius = getTargetRadius(W, H);

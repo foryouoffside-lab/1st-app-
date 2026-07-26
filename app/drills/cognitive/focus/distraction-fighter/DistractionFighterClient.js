@@ -529,6 +529,12 @@ export default function DistractionFighterClient() {
 
     const loop = (time) => {
       if (!gameActiveRef.current) return;
+      // ~60fps cap — matches the rest of the catalog; dt still measures real
+      // elapsed time between drawn frames since lastTime updates below.
+      if (time - lastTime < 15) {
+        animationRef.current = requestAnimationFrame(loop);
+        return;
+      }
       const dt = Math.min((time - lastTime) / 1000, 0.033);
       lastTime = time;
 
@@ -571,7 +577,12 @@ export default function DistractionFighterClient() {
     const dangerFromLives = (MAX_LIVES - livesRef.current) / MAX_LIVES;
     const dangerFromTime = timeLeftRef.current <= 10 ? (10 - timeLeftRef.current) / 10 : 0;
     const danger = Math.max(dangerFromLives * 0.7, dangerFromTime);
-    const tempo = Math.round(1100 - danger * 650);
+    // Clamped: an unclamped tempo goes NEGATIVE once danger exceeds ~1.69 (which
+    // negative lives can produce), and a setTimeout with a negative delay fires
+    // immediately — turning this self-rescheduling callback into a tight loop
+    // spawning audio nodes at full CPU. That was the "phone heats up and makes
+    // noise" bug already fixed in the other drills; this brings the rest in line.
+    const tempo = Math.max(350, Math.round(1100 - danger * 650));
     heartbeatTempoRef.current = tempo;
     if (danger > 0.08) {
       audioSynth?.playHeartbeat(danger);

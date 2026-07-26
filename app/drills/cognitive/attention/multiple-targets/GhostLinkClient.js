@@ -18,7 +18,7 @@ import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
 import generateShareCard, { shareScoreCard } from '../../../../../components/ShareScoreCard';
 import DrillWrapper from '../../../../../components/DrillWrapper';
-import { canvasDpr } from '../../../../../lib/canvasFx';
+import { canvasDpr, createBackdropCache } from '../../../../../lib/canvasFx';
 
 // ==========================================
 // ERROR BOUNDARY
@@ -547,6 +547,18 @@ export default function GhostLinkClient() {
     const ctx = cvs.getContext('2d');
     let lastTime = performance.now();
 
+    // Static play-field backdrop, rendered once per size instead of per frame.
+    const backdrop = createBackdropCache((c, w, h) => {
+      c.fillStyle = "#050508";
+      c.fillRect(0, 0, w, h);
+      c.strokeStyle = "rgba(168, 85, 247, 0.02)";
+      c.lineWidth = 1;
+      c.beginPath();
+      for (let gx = 0; gx < w; gx += 50) { c.moveTo(gx, 0); c.lineTo(gx, h); }
+      for (let gy = 0; gy < h; gy += 50) { c.moveTo(0, gy); c.lineTo(w, gy); }
+      c.stroke();
+    });
+
     // Layered-circle style matching ConflictReflexClient.js's
     // drawLayeredCircle — flat fills only, no gradient/shadowBlur (that
     // combination is a known Android WebView rendering bug, see
@@ -719,15 +731,16 @@ export default function GhostLinkClient() {
       ctx.save();
       ctx.scale(dpr, dpr);
 
-      ctx.fillStyle = "#050508";
-      ctx.fillRect(0, 0, W, H);
-
-      ctx.strokeStyle = "rgba(168, 85, 247, 0.02)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      for (let gx = 0; gx < W; gx += 50) { ctx.moveTo(gx, 0); ctx.lineTo(gx, H); }
-      for (let gy = 0; gy < H; gy += 50) { ctx.moveTo(0, gy); ctx.lineTo(W, gy); }
-      ctx.stroke();
+      // Backdrop (flat fill + grid) blitted from a cache rather than rebuilt
+      // every frame. This drill also runs ball-to-ball collision physics each
+      // frame, so the rendering budget is better spent there than on redrawing
+      // an unchanging grid.
+      if (backdrop.ensure(W, H, dpr)) {
+        ctx.drawImage(backdrop.canvas, 0, 0, W, H);
+      } else {
+        ctx.fillStyle = "#050508";
+        ctx.fillRect(0, 0, W, H);
+      }
 
       ballsRef.current.forEach((b, i) => {
         const isSelected = selectedBallsRef.current.includes(i);
@@ -778,6 +791,7 @@ export default function GhostLinkClient() {
             ctx.beginPath();
             ctx.roundRect(bx, by, 160, 50, 12);
             ctx.fill();
+            ctx.shadowBlur = 0;
             ctx.restore();
 
             ctx.fillStyle = "#ffffff";

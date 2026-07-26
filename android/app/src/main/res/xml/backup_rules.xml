@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Legacy backup config (Android 6.0-11, API 23-30). Excludes the WebView's
+  own storage (localStorage/IndexedDB/cookies), which is where the cached
+  user session (including email) lives — see contexts/AuthContext.js's
+  SESSION_KEY. Solo drill progress lives in @capacitor/preferences
+  (SharedPreferences, a separate location) and is intentionally NOT excluded
+  here, so it still survives Android's backup/restore across a phone
+  upgrade or reinstall.
+-->
+<full-backup-content>
+    <exclude domain="root" path="app_webview/" />
+</full-backup-content>

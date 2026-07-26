@@ -445,12 +445,20 @@ export default function TowerOfHanoiClient() {
     audioSynth?.playHit();
     triggerFlash(perfect ? 'gold' : 'cyan');
 
-    timeRemainingRef.current = totalTime;
-    setTimeRemaining(totalTime);
+    // Solo only: solving a tower refills the clock, so a good run keeps
+    // going. A duel must NOT do this — both duelists share one fixed 30s
+    // (ARENA_INTEGRATION.md rule 1), and refilling desynced the two clocks
+    // completely: whoever kept solving extended their own match indefinitely
+    // while the opponent's 30s expired and left them stuck on "Waiting for
+    // opponent to finish..." for the rest of it.
+    if (!isChallenge) {
+      timeRemainingRef.current = totalTime;
+      setTimeRemaining(totalTime);
+    }
 
     if (advanceTimerRef.current) clearTimeout(advanceTimerRef.current);
     advanceTimerRef.current = setTimeout(() => { if (gameActiveRef.current) advanceLevel(); }, 1100);
-  }, [advanceLevel, triggerFlash, totalTime]);
+  }, [advanceLevel, triggerFlash, totalTime, isChallenge]);
 
   // Valid move: NO score awarded for individual moves to prevent back-and-forth farming
   const resolveValidMove = useCallback((clearedTowers) => {
@@ -535,7 +543,12 @@ export default function TowerOfHanoiClient() {
     if (!gameActiveRef.current) return;
     const dangerFromTime = timeRemainingRef.current <= 10 ? (10 - timeRemainingRef.current) / 10 : 0;
     const danger = dangerFromTime;
-    const tempo = Math.round(1100 - danger * 650);
+    // Clamped: an unclamped tempo goes NEGATIVE once danger exceeds ~1.69 (which
+    // negative lives can produce), and a setTimeout with a negative delay fires
+    // immediately — turning this self-rescheduling callback into a tight loop
+    // spawning audio nodes at full CPU. That was the "phone heats up and makes
+    // noise" bug already fixed in the other drills; this brings the rest in line.
+    const tempo = Math.max(350, Math.round(1100 - danger * 650));
     heartbeatTempoRef.current = tempo;
     if (danger > 0.08) audioSynth?.playHeartbeat(danger);
     if (mountedRef.current) setDangerLevel(danger);
@@ -790,7 +803,12 @@ export default function TowerOfHanoiClient() {
         {showBoard && (
           <>
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
-              <div className={`h-full transition-all duration-100 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-violet-500'}`} style={{ width: `${timePct}%` }} />
+              {/* scaleX, not width — a width animation forces layout + paint on
+                  every clock tick for the whole match; a transform is composited. */}
+              <div
+                className={`h-full w-full origin-left transition-transform duration-100 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-violet-500'}`}
+                style={{ transform: `scaleX(${timePct / 100})` }}
+              />
             </div>
 
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">

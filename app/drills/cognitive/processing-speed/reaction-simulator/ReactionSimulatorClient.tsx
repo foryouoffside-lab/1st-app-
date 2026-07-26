@@ -8,6 +8,7 @@ import {
   RotateCcw, Share2, Eye, Zap as ZapIcon, Heart
 } from 'lucide-react';
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade } from '../../../../../lib/scoringEngine';
+import { canvasDpr, createBackdropCache } from '../../../../../lib/canvasFx';
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { lockLandscape, unlockOrientation } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
@@ -733,7 +734,7 @@ export default function ReactionSimulatorClient() {
       const ct = containerRef.current;
       if (!ct) return;
       const rect = ct.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = canvasDpr();
       cvs.width = rect.width * dpr;
       cvs.height = rect.height * dpr;
       cvs.style.width = rect.width + 'px';
@@ -748,14 +749,37 @@ export default function ReactionSimulatorClient() {
 
     trackingState.current.lastTime = 0;
 
+    let lastDrawTsRef = 0;
+
+    // Static play-field backdrop, rendered once per size instead of per frame.
+    const backdrop = createBackdropCache((c: CanvasRenderingContext2D, w: number, h: number) => {
+      c.fillStyle = '#05060b';
+      c.fillRect(0, 0, w, h);
+      c.fillStyle = 'rgba(239, 68, 68, 0.04)';
+      for (let gx = 40; gx < w; gx += 40) {
+        for (let gy = 40; gy < h; gy += 40) {
+          c.fillRect(gx - 0.5, gy - 0.5, 1, 1);
+        }
+      }
+    });
+
     const mainLoop = (timestamp: number) => {
       if (phaseRef.current !== 'playing') return;
+      // ~60fps cap. This loop was uncapped, so on a 90Hz or 120Hz phone it ran
+      // 1.5-2x more frames than the game needs for an identical result — pure
+      // heat. Frame-skipping happens BEFORE lastTime is touched, so the physics
+      // delta below still measures real elapsed time between drawn frames.
+      if (timestamp - lastDrawTsRef < 15) {
+        rafRef.current = requestAnimationFrame(mainLoop);
+        return;
+      }
+      lastDrawTsRef = timestamp;
       if (!trackingState.current.lastTime) trackingState.current.lastTime = timestamp;
       let dt = (timestamp - trackingState.current.lastTime) / 1000;
       if (dt > 0.15) dt = 0.016;
       trackingState.current.lastTime = timestamp;
 
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = canvasDpr();
       const W = cvs.width / dpr;
       const H = cvs.height / dpr;
 
@@ -765,15 +789,14 @@ export default function ReactionSimulatorClient() {
       const baseRadius = window.innerWidth >= 640 ? 28 : 22;
       const microRadius = Math.round(baseRadius * 0.6);
 
-      ctx.fillStyle = '#05060b';
-      ctx.fillRect(0, 0, W, H);
-
-      ctx.fillStyle = 'rgba(239, 68, 68, 0.04)';
-      const gridGap = 40;
-      for (let gx = gridGap; gx < W; gx += gridGap) {
-        for (let gy = gridGap; gy < H; gy += gridGap) {
-          ctx.fillRect(gx - 0.5, gy - 0.5, 1, 1);
-        }
+      // Backdrop blitted from cache — this was a nested loop laying down one
+      // fillRect per dot every frame (150+ draw calls a frame, ~9,000 a second)
+      // to reproduce an image that never changes.
+      if (backdrop.ensure(W, H, dpr)) {
+        ctx.drawImage(backdrop.canvas, 0, 0, W, H);
+      } else {
+        ctx.fillStyle = '#05060b';
+        ctx.fillRect(0, 0, W, H);
       }
 
       const targets = trackingState.current.targets;

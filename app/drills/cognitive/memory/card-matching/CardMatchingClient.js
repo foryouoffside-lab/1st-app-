@@ -212,7 +212,6 @@ export default function CardMatchingClient() {
   const [score, setScore] = useState(0);
   const [combo, setCombo] = useState(0);
   const [timeRemaining, setTimeRemaining] = useState(TOTAL_TIME);
-  const [level, setLevel] = useState(1);
   const [dangerLevel, setDangerLevel] = useState(0);
 
   // Juice & Feedback
@@ -453,7 +452,6 @@ export default function CardMatchingClient() {
           pairCountRef.current += LEVEL_STEP;
           levelRef.current = (pairCountRef.current - BASE_PAIRS) / LEVEL_STEP + 1;
           bestLevelRunRef.current = Math.max(bestLevelRunRef.current, levelRef.current);
-          setLevel(levelRef.current);
         }
 
         timeRemainingRef.current = TOTAL_TIME;
@@ -520,7 +518,12 @@ export default function CardMatchingClient() {
     if (!gameActiveRef.current) return;
     const dangerFromTime = timeRemainingRef.current <= 10 ? (10 - timeRemainingRef.current) / 10 : 0;
     const danger = dangerFromTime;
-    const tempo = Math.round(1100 - danger * 650);
+    // Clamped: an unclamped tempo goes NEGATIVE once danger exceeds ~1.69 (which
+    // negative lives can produce), and a setTimeout with a negative delay fires
+    // immediately — turning this self-rescheduling callback into a tight loop
+    // spawning audio nodes at full CPU. That was the "phone heats up and makes
+    // noise" bug already fixed in the other drills; this brings the rest in line.
+    const tempo = Math.max(350, Math.round(1100 - danger * 650));
     heartbeatTempoRef.current = tempo;
     if (danger > 0.08) audioSynth?.playHeartbeat(danger);
     if (mountedRef.current) setDangerLevel(danger);
@@ -585,7 +588,6 @@ export default function CardMatchingClient() {
     setScore(0);
     setCombo(0);
     setTimeRemaining(TOTAL_TIME);
-    setLevel(startLevel);
     setDangerLevel(0);
     setFlashes([]);
     setBursts([]);
@@ -739,9 +741,10 @@ export default function CardMatchingClient() {
             animation-timing-function: ease-out;
             animation-fill-mode: forwards;
           }
-          .fx-flash-cyan { animation-name: flash-cyan; }
+          /* success flashes are intentionally inert — see globals.css */
+          .fx-flash-cyan { animation-name: none; background: none; }
           .fx-flash-red { animation-name: flash-red; }
-          .fx-flash-gold { animation-name: flash-gold; }
+          .fx-flash-gold { animation-name: none; background: none; }
 
           @keyframes particle-fade {
             0% { transform: scale(0.6); opacity: 0.8; }
@@ -819,11 +822,6 @@ export default function CardMatchingClient() {
 
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
               <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
-              <div className="flex items-center gap-2 mt-1.5">
-                <span className="text-[10px] font-black text-pink-300 bg-pink-500/15 border border-pink-500/25 px-1.5 py-0.5 rounded">
-                  Lv.{level} ({cards.length / 2} Pairs)
-                </span>
-              </div>
             </div>
 
             {/* Timer overlay at top-right */}

@@ -211,7 +211,6 @@ export default function EliteNeuroSwitchClient() {
   const [bestLevel, setBestLevel] = useState(1);
 
   const [score, setScore] = useState(0);
-  const [level, setLevel] = useState(1);
   const [lives, setLives] = useState(MAX_LIVES);
   const [timeRemaining, setTimeRemaining] = useState(totalTime);
   const [dangerLevel, setDangerLevel] = useState(0);
@@ -257,7 +256,11 @@ export default function EliteNeuroSwitchClient() {
   const trackingState = useRef({
     lastTime: 0,
     particles: [],
-    rings: []
+    rings: [],
+    // Set whenever something moves that the draw loop can't infer on its own
+    // (target relocation, a resize). The loop skips drawing entirely when this
+    // is false and no rings/particles are alive — see drawLoop.
+    sceneDirty: true
   });
 
   const [deviceScale, setDeviceScale] = useState(1.0);
@@ -339,7 +342,6 @@ export default function EliteNeuroSwitchClient() {
     if (newLevel > levelRef.current) {
       levelRef.current = newLevel;
       bestLevelRunRef.current = Math.max(bestLevelRunRef.current, newLevel);
-      setLevel(newLevel);
     }
   }, []);
 
@@ -429,7 +431,9 @@ export default function EliteNeuroSwitchClient() {
 
     redPosRef.current = { x: rx, y: ry };
     bluePosRef.current = { x: bx, y: by };
-    
+    // The targets just moved — the draw loop needs one frame to show it.
+    trackingState.current.sceneDirty = true;
+
     setRedPos({ x: rx, y: ry });
     setBluePos({ x: bx, y: by });
 
@@ -615,6 +619,31 @@ export default function EliteNeuroSwitchClient() {
     const ctx = cvs.getContext('2d', { alpha: false });
     if (!ctx) return;
 
+    // The backdrop (flat fill + dot grid) never changes during a match, but
+    // it was being rebuilt from scratch every single frame — one ctx.fillRect
+    // per dot, which on a landscape phone is ~130+ draw calls per frame,
+    // ~8,000/sec, for a completely static image. Render it once into an
+    // offscreen canvas here and blit it with a single drawImage in the loop
+    // (same technique already used for Conflict Reflex's background).
+    const bgCanvas = document.createElement('canvas');
+    const bgCtx = bgCanvas.getContext('2d', { alpha: false });
+
+    const renderBackground = (W, H, dpr) => {
+      if (!bgCtx || W <= 0 || H <= 0) return;
+      bgCanvas.width = Math.round(W * dpr);
+      bgCanvas.height = Math.round(H * dpr);
+      bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      bgCtx.fillStyle = '#050508';
+      bgCtx.fillRect(0, 0, W, H);
+      bgCtx.fillStyle = 'rgba(167, 139, 250, 0.04)';
+      const dotSpacing = 45;
+      for (let gx = dotSpacing; gx < W; gx += dotSpacing) {
+        for (let gy = dotSpacing; gy < H; gy += dotSpacing) {
+          bgCtx.fillRect(gx - 0.5, gy - 0.5, 1, 1);
+        }
+      }
+    };
+
     const updateDimensions = () => {
       const ct = containerRef.current;
       if (!ct) return;
@@ -631,6 +660,9 @@ export default function EliteNeuroSwitchClient() {
         cvs.style.width = W + 'px';
         cvs.style.height = H + 'px';
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        renderBackground(W, H, dpr);
+        // A resize wipes the canvas — force a redraw even if nothing moved.
+        trackingState.current.sceneDirty = true;
       }
 
       if (redPosRef.current.x === 0 && redPosRef.current.y === 0) {
@@ -652,12 +684,31 @@ export default function EliteNeuroSwitchClient() {
     let lastDrawTs = 0;
     const drawLoop = (ts) => {
       if (phaseRef.current !== 'playing') return;
-      // ~60fps cap — both targets are effectively static between rounds, so
-      // redrawing faster than this on 90-120Hz phones burns CPU for nothing.
+      // ~60fps cap — no point redrawing faster than this on 90-120Hz phones.
       if (ts - lastDrawTs < 15) {
         animId = requestAnimationFrame(drawLoop);
         return;
       }
+
+      // Skip the frame entirely when there is genuinely nothing to redraw.
+      // Unlike a scrolling or physics game, this drill's scene is STATIC
+      // between rounds: the two targets only move when spawnPair() relocates
+      // them, so the loop was re-rendering a pixel-identical frame ~60x/sec
+      // while the player sat looking for the red one — which is most of the
+      // match. Rings and particles are the only continuously-animating parts,
+      // so a frame is only needed when one of those is alive or something
+      // explicitly marked the scene dirty.
+      //
+      // The 500ms floor is a deliberate safety net: if any future code path
+      // moves something without setting the dirty flag, the worst case is a
+      // half-second of staleness rather than a permanently frozen screen.
+      const st = trackingState.current;
+      const hasAnimating = (st.rings && st.rings.length > 0) || (st.particles && st.particles.length > 0);
+      if (!st.sceneDirty && !hasAnimating && ts - lastDrawTs < 500) {
+        animId = requestAnimationFrame(drawLoop);
+        return;
+      }
+      st.sceneDirty = false;
       lastDrawTs = ts;
       if (!trackingState.current.lastTime) {
         trackingState.current.lastTime = ts;
@@ -670,15 +721,13 @@ export default function EliteNeuroSwitchClient() {
       const W = cvs.width / dpr;
       const H = cvs.height / dpr;
 
-      ctx.fillStyle = '#050508';
-      ctx.fillRect(0, 0, W, H);
-
-      ctx.fillStyle = 'rgba(167, 139, 250, 0.04)';
-      const dotSpacing = 45;
-      for (let gx = dotSpacing; gx < W; gx += dotSpacing) {
-        for (let gy = dotSpacing; gy < H; gy += dotSpacing) {
-          ctx.fillRect(gx - 0.5, gy - 0.5, 1, 1);
-        }
+      // One blit of the pre-rendered backdrop instead of re-fill + ~130
+      // per-dot fillRects every frame (see renderBackground above).
+      if (bgCanvas.width > 0) {
+        ctx.drawImage(bgCanvas, 0, 0, W, H);
+      } else {
+        ctx.fillStyle = '#050508';
+        ctx.fillRect(0, 0, W, H);
       }
 
       const radius = getTargetRadius(W, H);
@@ -933,7 +982,12 @@ export default function EliteNeuroSwitchClient() {
     [heartbeatTimerRef, overdriveTimeoutRef, countdownTimerRef, mainLoopTimerRef].forEach((r) => { if (r.current) { clearTimeout(r.current); r.current = null; } });
     if (gameTimerRef.current) { clearInterval(gameTimerRef.current); gameTimerRef.current = null; }
 
-    const startLevel = Math.max(1, Math.min(MAX_LEVEL, Math.round((bestLevel || 1) * 0.65)));
+    // Duels always start BOTH players at the same, lowest difficulty — no
+    // personal-best seeding — so the two scores are comparable and the match
+    // is pure skill (ARENA_INTEGRATION.md rule 5 / matchmaking fairness).
+    const startLevel = isChallenge
+      ? 1
+      : Math.max(1, Math.min(MAX_LEVEL, Math.round((bestLevel || 1) * 0.65)));
 
     scoreRef.current = 0;
     comboRef.current = 0;
@@ -953,7 +1007,6 @@ export default function EliteNeuroSwitchClient() {
     survivalStartTimeRef.current = performance.now();
 
     setScore(0);
-    setLevel(startLevel);
     setLives(MAX_LIVES);
     setTimeRemaining(totalTime);
     setDangerLevel(0);
@@ -1161,15 +1214,19 @@ export default function EliteNeuroSwitchClient() {
         {(phase === 'playing' || phase === 'countdown') && (
           <>
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
-              <div className={`h-full transition-all duration-100 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-rose-500'}`} style={{ width: `${timePct}%` }} />
+              {/* scaleX, not width — a width animation forces layout + paint on
+                  every clock tick for the whole match; a transform is composited. */}
+              <div
+                className={`h-full w-full origin-left transition-transform duration-100 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-rose-500'}`}
+                style={{ transform: `scaleX(${timePct / 100})` }}
+              />
             </div>
 
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none">
               <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
               <div className="flex items-center gap-2 mt-1.5">
-                {isChallenge ? (
-                  <span className="text-[10px] font-black text-rose-300 bg-rose-500/15 border border-rose-500/25 px-1.5 py-0.5 rounded font-mono">Lv.{level}</span>
-                ) : (
+                {/* No level badge in duels — see the note in ConcentrationGrid. */}
+                {!isChallenge && (
                   <span className="flex items-center gap-0.5">
                     {Array.from({ length: MAX_LIVES }).map((_, i) => (
                       <Heart key={i} className={`w-3 h-3 ${i < lives ? 'fill-red-500 text-red-500' : 'text-white/15'}`} />

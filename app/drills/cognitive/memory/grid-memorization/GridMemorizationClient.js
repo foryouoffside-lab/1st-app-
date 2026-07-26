@@ -224,7 +224,6 @@ export default function GridMemorizationClient() {
   const [bestScore, setBestScore] = useState(0);
   const [bestCombo, setBestCombo] = useState(0);
   const [bestLevel, setBestLevel] = useState(1);
-  const [level, setLevel] = useState(1);
 
   const [localTimeRemaining, setLocalTimeRemaining] = useState(totalTime);
   const [accuracy, setAccuracy] = useState(100);
@@ -238,7 +237,6 @@ export default function GridMemorizationClient() {
   const [litCells, setLitCells] = useState(MIN_LIT_CELLS);
   const [cellStates, setCellStates] = useState([]);
   const [phase, setPhase] = useState("ready"); // "ready", "memorize", "recall", "result"
-  const [memorizeTime, setMemorizeTime] = useState(2.0);
   const [userSelections, setUserSelections] = useState(new Set());
   const [isProcessing, setIsProcessing] = useState(false);
   const [flashes, setFlashes] = useState([]);
@@ -264,7 +262,7 @@ export default function GridMemorizationClient() {
   const userSelectionsRef = useRef(new Set());
 
   const globalTimerIntervalRef = useRef(null);
-  const memorizeTimerIntervalRef = useRef(null);
+  const memorizeTimerRef = useRef(null);
   const countdownTimerRef = useRef(null);
   const overdriveTimeoutRef = useRef(null);
   const heartbeatTimerRef = useRef(null);
@@ -280,7 +278,7 @@ export default function GridMemorizationClient() {
 
   const clearTimers = useCallback(() => {
     if (globalTimerIntervalRef.current) clearInterval(globalTimerIntervalRef.current);
-    if (memorizeTimerIntervalRef.current) clearInterval(memorizeTimerIntervalRef.current);
+    if (memorizeTimerRef.current) clearTimeout(memorizeTimerRef.current);
     if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
     if (overdriveTimeoutRef.current) clearTimeout(overdriveTimeoutRef.current);
     if (heartbeatTimerRef.current) clearTimeout(heartbeatTimerRef.current);
@@ -377,7 +375,7 @@ export default function GridMemorizationClient() {
   }, []);
 
   const startRecall = useCallback(() => {
-    if (memorizeTimerIntervalRef.current) clearInterval(memorizeTimerIntervalRef.current);
+    if (memorizeTimerRef.current) clearTimeout(memorizeTimerRef.current);
     setPhase("recall");
     phaseRef.current = "recall";
     setUserSelections(new Set());
@@ -399,7 +397,6 @@ export default function GridMemorizationClient() {
     litCellsRef.current = litCount;
 
     const memDuration = Math.max(0.6, 2.0 - (litCount - MIN_LIT_CELLS) * 0.1);
-    setMemorizeTime(memDuration);
     setPhase("memorize");
     phaseRef.current = "memorize";
     setIsProcessing(false);
@@ -407,19 +404,18 @@ export default function GridMemorizationClient() {
     userSelectionsRef.current = new Set();
     setWrongCellIndex(null);
 
-    const memStart = Date.now();
-
-    if (memorizeTimerIntervalRef.current) clearInterval(memorizeTimerIntervalRef.current);
-    memorizeTimerIntervalRef.current = setInterval(() => {
-      const elapsed = (Date.now() - memStart) / 1000;
-      const remaining = Math.max(0, memDuration - elapsed);
-      setMemorizeTime(remaining);
-
-      if (remaining <= 0) {
-        clearInterval(memorizeTimerIntervalRef.current);
-        startRecall();
-      }
-    }, 100);
+    // One timeout, not a 100ms interval.
+    //
+    // The interval existed to tick a `memorizeTime` countdown into React state
+    // — but nothing ever rendered that value, so every memorize phase was
+    // firing 6-20 full re-renders of the whole drill (including all 25-36 grid
+    // cell buttons) purely to update state no one reads. The only thing
+    // actually needed here is handing over to the recall phase once the
+    // memorize window is up.
+    if (memorizeTimerRef.current) clearTimeout(memorizeTimerRef.current);
+    memorizeTimerRef.current = setTimeout(() => {
+      startRecall();
+    }, memDuration * 1000);
 
   }, [generatePattern, startRecall]);
 
@@ -427,7 +423,6 @@ export default function GridMemorizationClient() {
     const nextLitCells = Math.min(MAX_LIT_CELLS, litCellsRef.current + 1);
     levelRef.current = Math.min(MAX_LEVEL, nextLitCells - MIN_LIT_CELLS + 1);
     bestLevelRunRef.current = Math.max(bestLevelRunRef.current, levelRef.current);
-    setLevel(levelRef.current);
     generateRound(sizeForLitCells(nextLitCells), nextLitCells);
   }, [generateRound]);
 
@@ -487,7 +482,13 @@ export default function GridMemorizationClient() {
     userSelectionsRef.current = newSelections;
     setUserSelections(newSelections);
     audioSynth?.playHit();
-    
+    // No full-screen flash on a correct cell. Unlike other drills, where a
+    // flash marks one discrete scoring event, recall here is 5-20 taps in quick
+    // succession — so this strobed the whole screen several times a second
+    // while the player was still trying to read the grid. The cell lighting up
+    // cyan under the finger is already clear confirmation. The red flash on a
+    // wrong tap stays: that one is a single event that needs to be unmissable.
+
     const reactionMs = Date.now() - lastTapTimeRef.current;
     lastTapTimeRef.current = Date.now();
     const scoreResult = scoreAction({
@@ -543,7 +544,12 @@ export default function GridMemorizationClient() {
     const dangerFromLives = (MAX_LIVES - livesRef.current) / MAX_LIVES;
     const dangerFromTime = timeRef.current <= 10 ? (10 - timeRef.current) / 10 : 0;
     const danger = Math.max(dangerFromLives * 0.7, dangerFromTime);
-    const tempo = Math.round(1100 - danger * 650);
+    // Clamped: an unclamped tempo goes NEGATIVE once danger exceeds ~1.69 (which
+    // negative lives can produce), and a setTimeout with a negative delay fires
+    // immediately — turning this self-rescheduling callback into a tight loop
+    // spawning audio nodes at full CPU. That was the "phone heats up and makes
+    // noise" bug already fixed in the other drills; this brings the rest in line.
+    const tempo = Math.max(350, Math.round(1100 - danger * 650));
     heartbeatTempoRef.current = tempo;
     if (danger > 0.08) audioSynth?.playHeartbeat(danger);
     if (mountedRef.current) setDangerLevel(danger);
@@ -595,7 +601,6 @@ export default function GridMemorizationClient() {
     setLives(MAX_LIVES);
     levelRef.current = startLevel;
     bestLevelRunRef.current = startLevel;
-    setLevel(startLevel);
     setDangerLevel(0);
     setWrongCellIndex(null);
     setFlashes([]);
@@ -762,6 +767,10 @@ export default function GridMemorizationClient() {
             0% { background-color: rgba(239, 68, 68, 0.25); }
             100% { background-color: transparent; }
           }
+          @keyframes flash-cyan {
+            0% { background-color: rgba(34, 211, 238, 0.25); }
+            100% { background-color: transparent; }
+          }
           .fx-flash {
             position: absolute;
             inset: 0;
@@ -772,6 +781,8 @@ export default function GridMemorizationClient() {
             animation-fill-mode: forwards;
           }
           .fx-flash-red { animation-name: flash-red; }
+          /* success flashes are intentionally inert — see globals.css */
+          .fx-flash-cyan { animation-name: none; background: none; }
         `}</style>
 
         {gameState === 'playing' && dangerLevel > 0.06 && (
@@ -781,7 +792,7 @@ export default function GridMemorizationClient() {
         <div className="absolute inset-0 pointer-events-none" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
 
         {flashes.map((f) => (
-          <div key={f.id} className={`fx-flash ${f.variant === 'red' ? 'fx-flash-red' : ''}`} />
+          <div key={f.id} className={`fx-flash fx-flash-${f.variant}`} />
         ))}
 
         {(gameState === 'countdown' || gameState === 'playing') && (
@@ -844,20 +855,19 @@ export default function GridMemorizationClient() {
         {gameState === 'playing' && (
           <>
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
-              <div 
-                className={`h-full transition-all duration-100 ease-linear ${localTimeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-indigo-500'}`} 
-                style={{ width: `${timePct}%` }}
+              {/* scaleX, not width — a width animation forces layout + paint on
+                  every clock tick for the whole match; a transform is composited. */}
+              <div
+                className={`h-full w-full origin-left transition-transform duration-100 ease-linear ${localTimeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-indigo-500'}`}
+                style={{ transform: `scaleX(${timePct / 100})` }}
               />
             </div>
 
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
               <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
               <div className="flex items-center gap-2 mt-1.5">
-                {isChallenge ? (
-                  <span className="text-[10px] font-black text-indigo-300 bg-indigo-500/15 border border-indigo-500/25 px-1.5 py-0.5 rounded">
-                    Lv.{level} ({litCells} Targets)
-                  </span>
-                ) : (
+                {/* No level badge in duels — see the note in ConcentrationGrid. */}
+                {!isChallenge && (
                   <span className="flex items-center gap-0.5">
                     {Array.from({ length: MAX_LIVES }).map((_, i) => (
                       <Heart key={i} className={`w-3 h-3 ${i < lives ? 'fill-red-500 text-red-500' : 'text-white/15'}`} />

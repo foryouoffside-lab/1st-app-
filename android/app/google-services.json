@@ -1,33 +1,33 @@
 {
   "project_info": {
-    "project_number": "484889550946",
-    "project_id": "skilldrills-8450d",
-    "storage_bucket": "skilldrills-8450d.firebasestorage.app"
+    "project_number": "220381726989",
+    "project_id": "skilldrills-42ddc",
+    "storage_bucket": "skilldrills-42ddc.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:484889550946:android:c65ac6a5764f7d8f4e713b",
+        "mobilesdk_app_id": "1:220381726989:android:9f47be54cf129259608844",
         "android_client_info": {
           "package_name": "com.skilldrills.pro"
         }
       },
       "oauth_client": [
         {
-          "client_id": "484889550946-4tkhfo1us94ld2tmoo0tnv8h1j6ao2vd.apps.googleusercontent.com",
+          "client_id": "220381726989-247776slhaptmb17b5eqtpre89p19l8t.apps.googleusercontent.com",
           "client_type": 3
         }
       ],
       "api_key": [
         {
-          "current_key": "AIzaSyACLO3yQrg4GXHGaHadtd_Arn9mM8WabL0"
+          "current_key": "AIzaSyClv3Lo9yvKkN75cX-IQ6fdcac26WIBeVo"
         }
       ],
       "services": {
         "appinvite_service": {
           "other_platform_oauth_client": [
             {
-              "client_id": "484889550946-4tkhfo1us94ld2tmoo0tnv8h1j6ao2vd.apps.googleusercontent.com",
+              "client_id": "220381726989-247776slhaptmb17b5eqtpre89p19l8t.apps.googleusercontent.com",
               "client_type": 3
             }
           ]

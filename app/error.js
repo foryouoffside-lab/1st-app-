@@ -10,7 +10,7 @@ export default function Error({ error, reset }) {
   }, [error]);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4" role="alert" aria-label="Error occurred">
+    <div className="min-h-screen flex items-center justify-center bg-[#050508] px-4" role="alert" aria-label="Error occurred">
       <div className="text-center max-w-md">
         <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
           <svg className="w-8 h-8 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">

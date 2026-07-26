@@ -713,7 +713,8 @@ export default function SudokuClient() {
 
     // CORRECT INPUT
     audioSynth?.playHit();
-    
+    triggerFlash('cyan');
+
     const newGrid = [...grid];
     newGrid[selectedCell] = num;
     setGrid(newGrid);
@@ -948,6 +949,14 @@ export default function SudokuClient() {
             0% { background-color: rgba(239, 68, 68, 0.25); }
             100% { background-color: transparent; }
           }
+          @keyframes flash-cyan {
+            0% { background-color: rgba(34, 211, 238, 0.25); }
+            100% { background-color: transparent; }
+          }
+          @keyframes flash-gold {
+            0% { background-color: rgba(250, 204, 21, 0.25); }
+            100% { background-color: transparent; }
+          }
           .fx-flash {
             position: absolute;
             inset: 0;
@@ -958,12 +967,15 @@ export default function SudokuClient() {
             animation-fill-mode: forwards;
           }
           .fx-flash-red { animation-name: flash-red; }
+          /* success flashes are intentionally inert — see globals.css */
+          .fx-flash-cyan { animation-name: none; background: none; }
+          .fx-flash-gold { animation-name: none; background: none; }
         `}</style>
 
         <div className="absolute inset-0 pointer-events-none" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
 
         {flashes.map((f) => (
-          <div key={f.id} className={`fx-flash ${f.variant === 'red' ? 'fx-flash-red' : ''}`} />
+          <div key={f.id} className={`fx-flash fx-flash-${f.variant}`} />
         ))}
 
         {/* ── START SCREEN ── */}

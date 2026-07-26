@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { 
@@ -221,8 +221,9 @@ export default function ConcentrationGridClient() {
   // === Dynamic Gameplay / Grid States ===
   const [gridSize, setGridSize] = useState(3);
   const [gridData, setGridData] = useState([]);
+  // No separate "found cells" state: the board derives it from currentNumber,
+  // since this drill is strictly sequential (see GridBoard).
   const [currentNumber, setCurrentNumber] = useState(1);
-  const [foundNumbers, setFoundNumbers] = useState([]);
   
   // HUD variables
   const [score, setScore] = useState(0);
@@ -230,7 +231,6 @@ export default function ConcentrationGridClient() {
   const [timeRemaining, setTimeRemaining] = useState(totalTime);
   const [lives, setLives] = useState(MAX_LIVES);
   const [dangerLevel, setDangerLevel] = useState(0);
-  const [level, setLevel] = useState(1);
 
   // === Best stats ===
   const [bestScore, setBestScore] = useState(0);
@@ -243,11 +243,10 @@ export default function ConcentrationGridClient() {
 
   // === Engine Refs ===
   const containerRef = useRef(null);
-  const animationRef = useRef(null);
+  const clockTimerRef = useRef(null);
   const gameActiveRef = useRef(false);
   const mountedRef = useRef(false);
 
-  const lastTimeRef = useRef(0);
   const countdownTimerRef = useRef(null);
   const heartbeatTimerRef = useRef(null);
   const heartbeatTempoRef = useRef(1100);
@@ -267,7 +266,6 @@ export default function ConcentrationGridClient() {
   const penaltyCountRef = useRef(0);
   
   const lastTapTimeRef = useRef(0);
-  const totalFramesRef = useRef(0);
   const flashIdRef = useRef(0);
   
   const phaseRef = useRef('start');
@@ -286,7 +284,7 @@ export default function ConcentrationGridClient() {
       gameActiveRef.current = false;
       if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
       if (heartbeatTimerRef.current) clearTimeout(heartbeatTimerRef.current);
-      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+      if (clockTimerRef.current) clearInterval(clockTimerRef.current);
       unlockOrientation();
     };
   }, []);
@@ -304,7 +302,6 @@ export default function ConcentrationGridClient() {
 
   const syncGridDataToState = useCallback(() => {
     setCurrentNumber(currentNumberRef.current);
-    setFoundNumbers(Array.from(foundNumbersSetRef.current));
   }, []);
 
   const getMaxGridCeiling = () => {
@@ -336,7 +333,6 @@ export default function ConcentrationGridClient() {
     setGridData(cells);
     setGridSize(size);
     gridSizeRef.current = size;
-    setLevel(size - 2);
     currentNumberRef.current = 1;
     foundNumbersSetRef.current.clear();
     correctClicksRef.current = 0;
@@ -353,9 +349,15 @@ export default function ConcentrationGridClient() {
     setPhase('ended');
     gameActiveRef.current = false;
 
-    if (animationRef.current) cancelAnimationFrame(animationRef.current);
+    if (clockTimerRef.current) { clearInterval(clockTimerRef.current); clockTimerRef.current = null; }
     if (heartbeatTimerRef.current) clearTimeout(heartbeatTimerRef.current);
-    
+
+    // Flush the authoritative score to state before the wrapper reads it —
+    // during a duel DrillWrapper submits the `score` prop the moment the
+    // clock hits 0, so anything scored since the last 200ms tick would
+    // otherwise be dropped from the submitted result.
+    setScore(scoreRef.current);
+
     audioSynth?.playResultsReveal();
 
     const totalClicks = correctClicksRef.current + penaltyCountRef.current;
@@ -478,9 +480,16 @@ export default function ConcentrationGridClient() {
         const clearBonus = Math.round(20 * scaleFactor);
         scoreRef.current += clearBonus;
 
-        // RESET TIMER TO 45 SECONDS
-        timeLeftRef.current = totalTime;
-        setTimeRemaining(totalTime);
+        // Solo only: clearing a board refills the clock, so a good run keeps
+        // going. A duel must NOT do this — both duelists share one fixed 30s
+        // (ARENA_INTEGRATION.md rule 1), and refilling desynced the two
+        // clocks completely: whoever cleared boards kept extending their own
+        // match while the opponent's 30s expired and left them stuck on
+        // "Waiting for opponent to finish..." for the rest of it.
+        if (!isChallenge) {
+          timeLeftRef.current = totalTime;
+          setTimeRemaining(totalTime);
+        }
 
         const maxCeiling = getMaxGridCeiling();
         if (gridSizeRef.current < maxCeiling) {
@@ -491,6 +500,10 @@ export default function ConcentrationGridClient() {
       } else {
         syncGridDataToState();
       }
+      // A tap already re-renders this component (the grid's found/current
+      // state changes), so folding the score in here is free and keeps the
+      // readout instant rather than waiting up to 200ms for the clock tick.
+      setScore(scoreRef.current);
     } else {
       // WRONG CELL CLICKED
       audioSynth?.playPenalty();
@@ -518,37 +531,43 @@ export default function ConcentrationGridClient() {
     }
   };
 
+  // handleCellClick is rebuilt on every render (it closes over plenty of
+  // state), so handing it to GridBoard directly would break the memo on every
+  // clock tick — the exact thing the memo exists to prevent. Pass a stable ref
+  // instead and let the board read the current function at tap time.
+  const handleCellClickRef = useRef(null);
+  handleCellClickRef.current = handleCellClick;
+
+  // Match clock — a 200ms setInterval, not a requestAnimationFrame loop.
+  // Nothing in this drill is drawn per frame (the board is plain DOM
+  // buttons), so this loop's only job is decrementing the clock and pushing
+  // it to React state. Running that at the display refresh rate meant a
+  // float `timeRemaining` landed in state ~10x/sec, re-rendering the entire
+  // board — up to 64 grid buttons — plus the DrillWrapper subtree, for a
+  // readout that only ever shows whole seconds. That made this the single
+  // hottest drill in Arena. 200ms is the same cadence every other duel drill
+  // already uses, and it wakes the CPU 5x/sec instead of 60.
   useEffect(() => {
     if (phase !== 'playing') return;
-    let lastTime = performance.now();
 
-    const loop = (time) => {
+    const tick = () => {
       if (!gameActiveRef.current) return;
-      const dt = Math.min((time - lastTime) / 1000, 0.25);
-      lastTime = time;
-
-      totalFramesRef.current++;
-
-      timeLeftRef.current -= dt;
+      timeLeftRef.current = Math.max(0, timeLeftRef.current - 0.2);
+      // Flush the authoritative score alongside the clock so DrillWrapper's
+      // duel score-sync and final submit always see the latest value.
+      setScore(scoreRef.current);
       if (timeLeftRef.current <= 0) {
-        timeLeftRef.current = 0;
+        setTimeRemaining(0);
         endGame();
         return;
       }
-
-      if (totalFramesRef.current % 6 === 0) {
-        setTimeRemaining(timeLeftRef.current);
-        setScore(scoreRef.current);
-      }
-
-      animationRef.current = requestAnimationFrame(loop);
+      setTimeRemaining(timeLeftRef.current);
     };
 
-    lastTimeRef.current = performance.now();
-    animationRef.current = requestAnimationFrame(loop);
+    clockTimerRef.current = setInterval(tick, 200);
 
     return () => {
-      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+      if (clockTimerRef.current) { clearInterval(clockTimerRef.current); clockTimerRef.current = null; }
     };
   }, [phase, endGame]);
 
@@ -556,7 +575,12 @@ export default function ConcentrationGridClient() {
     if (isChallenge) return;
     if (!gameActiveRef.current) return;
     const danger = timeLeftRef.current <= 10 ? (10 - timeLeftRef.current) / 10 : 0;
-    const tempo = Math.round(1100 - danger * 650);
+    // Clamped: an unclamped tempo goes NEGATIVE once danger exceeds ~1.69 (which
+    // negative lives can produce), and a setTimeout with a negative delay fires
+    // immediately — turning this self-rescheduling callback into a tight loop
+    // spawning audio nodes at full CPU. That was the "phone heats up and makes
+    // noise" bug already fixed in the other drills; this brings the rest in line.
+    const tempo = Math.max(350, Math.round(1100 - danger * 650));
     heartbeatTempoRef.current = tempo;
     if (danger > 0.08) {
       audioSynth?.playHeartbeat(danger);
@@ -585,7 +609,6 @@ export default function ConcentrationGridClient() {
       correctClicksRef.current = 0;
       totalClicksRef.current = 0;
       penaltyCountRef.current = 0;
-      totalFramesRef.current = 0;
 
       setScore(0);
       setTimeRemaining(totalTime);
@@ -609,7 +632,7 @@ export default function ConcentrationGridClient() {
     gameActiveRef.current = false;
     if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
     if (heartbeatTimerRef.current) clearTimeout(heartbeatTimerRef.current);
-    if (animationRef.current) cancelAnimationFrame(animationRef.current);
+    if (clockTimerRef.current) { clearInterval(clockTimerRef.current); clockTimerRef.current = null; }
 
     if (isChallenge) {
       startGridRef.current = 3;
@@ -775,17 +798,22 @@ export default function ConcentrationGridClient() {
         {(phase === 'playing' || phase === 'countdown') && (
           <>
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
-              <div className={`h-full transition-all duration-100 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-cyan-500'}`} style={{ width: `${timePct}%` }} />
+              {/* Driven by transform, not width. Animating `width` makes the
+                  browser re-run layout + paint for this bar on every clock
+                  tick, all match long; a scaleX transform is handled on the
+                  compositor with no layout at all, for an identical result. */}
+              <div
+                className={`h-full w-full origin-left transition-transform duration-100 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-cyan-500'}`}
+                style={{ transform: `scaleX(${timePct / 100})` }}
+              />
             </div>
 
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
               <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
               <div className="flex items-center gap-2 mt-1.5">
-                {isChallenge ? (
-                  <span className="text-[10px] font-black text-cyan-300 bg-cyan-500/15 border border-cyan-500/25 px-1.5 py-0.5 rounded">
-                    Lv.{level} ({gridSize}x{gridSize})
-                  </span>
-                ) : (
+                {/* Duels show no level badge — the play area stays clean, and a
+                    rising number tells an opponent nothing useful mid-match. */}
+                {!isChallenge && (
                   <span className="flex items-center gap-0.5">
                     {Array.from({ length: MAX_LIVES }).map((_, i) => (
                       <Heart key={i} className={`w-3 h-3 ${i < lives ? 'fill-red-500 text-red-500' : 'text-white/15'}`} />
@@ -813,42 +841,16 @@ export default function ConcentrationGridClient() {
               <span className="text-lg font-black text-cyan-400 font-mono leading-none">{currentNumber}</span>
             </div>
 
-            {/* Grid cells area */}
+            {/* Grid cells area — see GridBoard's own note on why the board is
+                a separate memoized component rather than inlined here. */}
             <div className="relative w-full h-[100dvh] flex flex-col items-center justify-center p-4">
-              <div 
-                className="grid mx-auto max-h-full max-w-full relative transition-all duration-300"
-                style={{ 
-                  gridTemplateColumns: `repeat(${gridSize}, minmax(0, 1fr))`,
-                  width: 'min(70vw, 42vh)',
-                  height: 'min(70vw, 42vh)',
-                  aspectRatio: '1/1',
-                  gap: gridSize >= 6 ? '3px' : '6px',
-                }}
-              >
-                {gridData.map((cell) => {
-                  const isFound = foundNumbers.includes(cell.num);
-                  return (
-                    <button
-                      key={cell.num}
-                      onPointerDown={(e) => handleCellClick(cell.num, e)}
-                      disabled={isFound || phase === 'countdown'}
-                      className={`
-                        w-full h-full rounded-xl font-black transition-all duration-100 flex items-center justify-center touch-none select-none
-                        ${isFound 
-                          ? 'bg-green-500/20 text-green-500 border border-green-500/30 scale-95 opacity-55 cursor-default shadow-none' 
-                          : 'bg-slate-900 border border-white/15 text-white hover:bg-slate-800 hover:scale-105 active:scale-95 shadow-[0_4px_10px_rgba(0,0,0,0.3)] cursor-pointer'}
-                      `}
-                      style={{
-                        fontSize: `${Math.max(10, Math.min(22, 92 / gridSize))}px`,
-                        transform: !isFound ? `rotate(${cell.rotation}deg)` : 'none'
-                      }}
-                    >
-                      {cell.num}
-                    </button>
-                  );
-                })}
-              </div>
-
+              <GridBoard
+                gridData={gridData}
+                gridSize={gridSize}
+                currentNumber={currentNumber}
+                disabled={phase === 'countdown'}
+                onCellClick={handleCellClickRef}
+              />
             </div>
           </>
         )}
@@ -879,6 +881,60 @@ export default function ConcentrationGridClient() {
 // ==========================================
 // SUBCOMPONENTS
 // ==========================================
+
+// The number board, deliberately split out and memoized.
+//
+// The match clock pushes a new time into state 5x/sec for the whole match, and
+// every one of those renders used to rebuild all of these buttons — up to 64 of
+// them at the largest grid size, each with its own transition, shadow and
+// rotate transform. That made a drill whose board only changes when you tap
+// something one of the most expensive things in Arena. Memoizing on the four
+// values that actually affect the board means a clock tick re-renders the HUD
+// text and nothing else.
+//
+// `isFound` is derived from `currentNumber` rather than a list of found cells:
+// this drill is strictly sequential (you can only ever tap the next number), so
+// the found set is always exactly {1 … currentNumber-1}. That removes a state
+// array whose identity changed on every sync, and replaces an `Array.includes`
+// scan per cell — O(cells²) per render — with one integer compare.
+const GridBoard = React.memo(function GridBoard({ gridData, gridSize, currentNumber, disabled, onCellClick }) {
+  const fontSize = `${Math.max(10, Math.min(22, 92 / gridSize))}px`;
+  return (
+    <div
+      className="grid mx-auto max-h-full max-w-full relative transition-all duration-300"
+      style={{
+        gridTemplateColumns: `repeat(${gridSize}, minmax(0, 1fr))`,
+        width: 'min(70vw, 42vh)',
+        height: 'min(70vw, 42vh)',
+        aspectRatio: '1/1',
+        gap: gridSize >= 6 ? '3px' : '6px',
+      }}
+    >
+      {gridData.map((cell) => {
+        const isFound = cell.num < currentNumber;
+        return (
+          <button
+            key={cell.num}
+            onPointerDown={(e) => onCellClick.current?.(cell.num, e)}
+            disabled={isFound || disabled}
+            className={`
+              w-full h-full rounded-xl font-black transition-all duration-100 flex items-center justify-center touch-none select-none
+              ${isFound
+                ? 'bg-green-500/20 text-green-500 border border-green-500/30 scale-95 opacity-55 cursor-default shadow-none'
+                : 'bg-slate-900 border border-white/15 text-white hover:bg-slate-800 hover:scale-105 active:scale-95 shadow-[0_4px_10px_rgba(0,0,0,0.3)] cursor-pointer'}
+            `}
+            style={{
+              fontSize,
+              transform: !isFound ? `rotate(${cell.rotation}deg)` : 'none'
+            }}
+          >
+            {cell.num}
+          </button>
+        );
+      })}
+    </div>
+  );
+});
 
 function HowToRow({ icon, node }) {
   return (

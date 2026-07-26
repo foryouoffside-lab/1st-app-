@@ -7,6 +7,8 @@ import React, { useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '../contexts/AuthContext';
 import { ShieldCheck, Layers, Loader2, User, Trophy, CalendarDays, TrendingUp } from 'lucide-react';
+import { DRILL_INDEX } from '../lib/drillIndex';
+import { DRILL_GROUPS } from '../lib/drillGroups';
 
 // Legal pages must stay readable without signing in — app store reviewers
 // and prospective users who haven't created an account yet both need to
@@ -218,7 +220,7 @@ export default function AuthGate({ children }) {
         </div>
 
         <p className="text-center text-[10px] text-slate-600 font-medium mt-5 tracking-wide">
-          135+ free drills · 10 categories
+          {DRILL_INDEX.length} free drills · {DRILL_GROUPS.length} categories
         </p>
       </Frame>
     );

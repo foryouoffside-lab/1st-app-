@@ -18,7 +18,7 @@ import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
 import DrillWrapper from '../../../../../components/DrillWrapper';
 import { useDuelMatchStart } from '../../../../../lib/challengeEngine';
-import { canvasDpr } from '../../../../../lib/canvasFx';
+import { canvasDpr, createBackdropCache } from '../../../../../lib/canvasFx';
 
 // ============================================================
 // TUNING CONSTANTS
@@ -272,7 +272,10 @@ export default function KineticInterceptClient() {
       [heartbeatTimerRef, countdownTimerRef].forEach((r) => { if (r.current) clearTimeout(r.current); });
       if (gameTimerRef.current) clearInterval(gameTimerRef.current);
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
-      if (Capacitor.isNativePlatform()) StatusBar.show().catch(() => {});
+      if (Capacitor.isNativePlatform()) {
+        StatusBar.setOverlaysWebView({ overlay: false }).catch(() => {});
+        StatusBar.show().catch(() => {});
+      }
       unlockOrientation();
     };
   }, []);
@@ -481,7 +484,6 @@ export default function KineticInterceptClient() {
       xpEarned: xpResult.xp
     });
 
-    if (Capacitor.isNativePlatform()) StatusBar.show().catch(() => {});
     setPhase('ended');
   }, []);
 
@@ -530,6 +532,18 @@ export default function KineticInterceptClient() {
 
     let lastTime = performance.now();
 
+    // Static play-field backdrop, rendered once per size instead of per frame.
+    const backdrop = createBackdropCache((c, w, h) => {
+      c.fillStyle = '#050508';
+      c.fillRect(0, 0, w, h);
+      c.strokeStyle = 'rgba(255,255,255,0.015)';
+      c.lineWidth = 1;
+      c.beginPath();
+      for (let gx = 0; gx < w; gx += 40) { c.moveTo(gx, 0); c.lineTo(gx, h); }
+      for (let gy = 0; gy < h; gy += 40) { c.moveTo(0, gy); c.lineTo(w, gy); }
+      c.stroke();
+    });
+
     const renderLoop = (time) => {
       if (!gameActiveRef.current) return;
       // ~60fps cap — an uncapped loop makes 90-120Hz phones redraw more
@@ -551,18 +565,16 @@ export default function KineticInterceptClient() {
       ctx.save();
       ctx.scale(dpr, dpr);
 
-      ctx.fillStyle = '#050508';
-      ctx.fillRect(0, 0, W, H);
-
-      // Single batched path + one stroke() call instead of one stroke() per
-      // line — dozens of separate draw calls per frame is real CPU cost on
-      // low-power devices, this collapses it to one regardless of grid size.
-      ctx.strokeStyle = 'rgba(255,255,255,0.015)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      for (let gx = 0; gx < W; gx += 40) { ctx.moveTo(gx, 0); ctx.lineTo(gx, H); }
-      for (let gy = 0; gy < H; gy += 40) { ctx.moveTo(0, gy); ctx.lineTo(W, gy); }
-      ctx.stroke();
+      // Backdrop (flat fill + grid) blitted from a cache instead of being
+      // rebuilt every frame. It was already batched into one stroke() call, but
+      // it's still a static image being redrawn 60x/sec — one drawImage is
+      // cheaper again, and this is the drill reported as laggy on mobile.
+      if (backdrop.ensure(W, H, dpr)) {
+        ctx.drawImage(backdrop.canvas, 0, 0, W, H);
+      } else {
+        ctx.fillStyle = '#050508';
+        ctx.fillRect(0, 0, W, H);
+      }
 
       const tr = targetRef.current;
       if (tr.active) {
@@ -579,29 +591,43 @@ export default function KineticInterceptClient() {
           tr.active = false;
           resolveWrong('escape');
         } else {
-          // Flat 2D white ball — a plain disc with a thin outline and a
-          // faint glow ring, intentionally distinct from the orange
-          // layered-circle target shared by the other cognitive drills.
+          // Layered-circle red target, matching the shared style used by
+          // the other cognitive drills (e.g. reaction-time): ghost ring +
+          // tactical ring + filled body + white sheen + white core dot.
           const r = tr.r;
           ctx.save();
 
-          ctx.globalAlpha = 0.18;
-          ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 1.5;
+          ctx.globalAlpha = 0.2;
+          ctx.strokeStyle = '#ef4444';
+          ctx.lineWidth = 1.0;
           ctx.beginPath();
-          ctx.arc(tr.x, tr.y, r + 6, 0, Math.PI * 2);
+          ctx.arc(tr.x, tr.y, r + 5, 0, Math.PI * 2);
           ctx.stroke();
+
+          ctx.globalAlpha = 0.55;
+          ctx.strokeStyle = '#ef4444';
+          ctx.lineWidth = 1.8;
+          ctx.beginPath();
+          ctx.arc(tr.x, tr.y, r, 0, Math.PI * 2);
+          ctx.stroke();
+
+          ctx.globalAlpha = 0.88;
+          ctx.fillStyle = '#ef4444';
+          ctx.beginPath();
+          ctx.arc(tr.x, tr.y, r * 0.82, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.globalAlpha = 0.3;
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(tr.x - r * 0.2, tr.y - r * 0.2, r * 0.28, 0, Math.PI * 2);
+          ctx.fill();
 
           ctx.globalAlpha = 1.0;
           ctx.fillStyle = '#ffffff';
           ctx.beginPath();
-          ctx.arc(tr.x, tr.y, r, 0, Math.PI * 2);
+          ctx.arc(tr.x, tr.y, r * 0.18, 0, Math.PI * 2);
           ctx.fill();
-
-          ctx.globalAlpha = 0.9;
-          ctx.strokeStyle = '#94a3b8';
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
 
           ctx.restore();
         }
@@ -625,7 +651,12 @@ export default function KineticInterceptClient() {
     const dangerFromLives = (MAX_LIVES - livesRef.current) / MAX_LIVES;
     const dangerFromTime = timeRemainingRef.current <= 10 ? (10 - timeRemainingRef.current) / 10 : 0;
     const danger = Math.max(dangerFromLives * 0.7, dangerFromTime);
-    const tempo = Math.round(1100 - danger * 650);
+    // Clamped: an unclamped tempo goes NEGATIVE once danger exceeds ~1.69 (which
+    // negative lives can produce), and a setTimeout with a negative delay fires
+    // immediately — turning this self-rescheduling callback into a tight loop
+    // spawning audio nodes at full CPU. That was the "phone heats up and makes
+    // noise" bug already fixed in the other drills; this brings the rest in line.
+    const tempo = Math.max(350, Math.round(1100 - danger * 650));
     heartbeatTempoRef.current = tempo;
     if (danger > 0.08) audioSynth?.playHeartbeat(danger);
     if (mountedRef.current) setDangerLevel(danger);
@@ -686,6 +717,7 @@ export default function KineticInterceptClient() {
       try { await containerRef.current.requestFullscreen(); } catch (e) {}
     }
     if (Capacitor.isNativePlatform()) {
+      StatusBar.setOverlaysWebView({ overlay: true }).catch(() => {});
       StatusBar.hide().catch(() => {});
     }
 

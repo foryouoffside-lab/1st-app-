@@ -127,7 +127,7 @@ export default function DailyClient() {
           {challenges.map(({ drill, completed }, index) => {
             const details = DRILL_INDEX.find(d => d.id === drill.id) || drill;
             const difficulty = details.difficulty || 'intermediate';
-            const duration = details.duration || '2 min';
+            const duration = details.duration || '45s';
             const reasonMeta = REASON_META[drill.reason] || null;
 
             return (

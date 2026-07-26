@@ -209,7 +209,6 @@ export default function MultiTaskingClient() {
   const [score, setScore] = useState(0);
   const [lives, setLives] = useState(MAX_LIVES);
   const [combo, setCombo] = useState(0);
-  const [level, setLevel] = useState(1);
   const [timeRemaining, setTimeRemaining] = useState(totalTime);
   const [dangerLevel, setDangerLevel] = useState(0);
 
@@ -349,7 +348,6 @@ export default function MultiTaskingClient() {
     if (newLevel > levelRef.current) {
       levelRef.current = newLevel;
       bestLevelRunRef.current = Math.max(bestLevelRunRef.current, newLevel);
-      setLevel(newLevel);
     }
     // All difficulty is driven off levelRef.current (the ratcheted level),
     // never the raw current score — so an Arena −5 penalty that momentarily
@@ -641,7 +639,13 @@ export default function MultiTaskingClient() {
         setTimeRemaining(0);
         endGameRef.current?.('time');
       } else {
-        setTimeRemaining(timeRemainingRef.current);
+        // Only when the DISPLAYED whole second changes — the clock reads to the
+        // second and the timer bar animates itself in CSS, so the other four
+        // ticks each second were re-rendering the entire play field to paint an
+        // identical picture. The ref keeps full precision for scoring maths.
+        setTimeRemaining((prev) => (
+          Math.ceil(prev) === Math.ceil(timeRemainingRef.current) ? prev : timeRemainingRef.current
+        ));
       }
     }, 200);
 
@@ -666,14 +670,18 @@ export default function MultiTaskingClient() {
     setPhase('countdown');
     if (n <= 0) {
       setCountdownValue('GO');
-      audioSynth?.playGo();
+      // Duels skip the visible 3-2-1 AND its audio — DrillWrapper renders the
+      // shared countdown, so a local "GO" here fired after that one had
+      // already finished (ARENA_INTEGRATION.md rule 2). Every other duel
+      // drill guards these two calls; this one didn't.
+      if (!isChallenge) audioSynth?.playGo();
       countdownTimerRef.current = setTimeout(() => beginPlaying(), 350);
       return;
     }
     setCountdownValue(n);
-    audioSynth?.playCountdownTick();
+    if (!isChallenge) audioSynth?.playCountdownTick();
     countdownTimerRef.current = setTimeout(() => runCountdown(n - 1), COUNTDOWN_TICK_MS);
-  }, [beginPlaying]);
+  }, [beginPlaying, isChallenge]);
 
   const runCountdownRef = useRef(null);
   useEffect(() => { runCountdownRef.current = runCountdown; }, [runCountdown]);
@@ -692,7 +700,16 @@ export default function MultiTaskingClient() {
     // Returning players start closer to their proven skill level instead of
     // always grinding through level 1 again — ~55% of their best level reached.
     // First-time players (no saved bestLevel) still start at level 1.
-    const startLevel = Math.max(1, Math.min(MAX_LEVEL, Math.round((bestLevel || 1) * 0.55)));
+    //
+    // Duels always start BOTH players at the same, lowest difficulty — no
+    // personal-best seeding — so the two scores are comparable and the match
+    // is pure skill (ARENA_INTEGRATION.md rule 5 / matchmaking fairness).
+    // Without this a veteran opened the duel at level 8 with shapes flying at
+    // near-max speed while their opponent got level 1, which is a different
+    // game, not a fair race.
+    const startLevel = isChallenge
+      ? 1
+      : Math.max(1, Math.min(MAX_LEVEL, Math.round((bestLevel || 1) * 0.55)));
 
     scoreRef.current = 0; livesRef.current = MAX_LIVES; comboRef.current = 0; bestComboRef.current = 0;
     levelRef.current = startLevel; bestLevelRunRef.current = startLevel; mistakesRef.current = 0; correctActionsRef.current = 0; totalActionsRef.current = 0;
@@ -709,7 +726,7 @@ export default function MultiTaskingClient() {
     speedRef.current = 3.0 + startP * 4.0;
     spawnRateRef.current = 1000 - startP * 600;
 
-    setScore(0); setLives(MAX_LIVES); setCombo(0); setLevel(startLevel); setTimeRemaining(totalTime);
+    setScore(0); setLives(MAX_LIVES); setCombo(0); setTimeRemaining(totalTime);
     setDangerLevel(0);
     setEndSummary(null); setFlashes([]); setBursts([]);
 
@@ -1082,16 +1099,23 @@ export default function MultiTaskingClient() {
                 solo-only — duels have no lives. */}
             {/* top time bar */}
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
-              <div className={`h-full transition-all duration-100 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-violet-500'}`} style={{ width: `${timePct}%` }} />
+              {/* scaleX, not width — a width animation forces layout + paint on
+                  every clock tick for the whole match; a transform is composited.
+                  The 1s linear glide lets the compositor interpolate between the
+                  once-a-second state updates, so the bar still looks continuous
+                  while React renders five times less often. */}
+              <div
+                className={`h-full w-full origin-left transition-transform duration-1000 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-violet-500'}`}
+                style={{ transform: `scaleX(${timePct / 100})` }}
+              />
             </div>
 
             {/* consolidated HUD cluster */}
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
               <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
               <div className="flex items-center gap-2 mt-1.5">
-                {isChallenge ? (
-                  <span className="text-[10px] font-black text-violet-300 bg-violet-500/10 border border-violet-500/20 px-1.5 py-0.5 rounded font-mono">Lv.{level}</span>
-                ) : (
+                {/* No level badge in duels — see the note in ConcentrationGrid. */}
+                {!isChallenge && (
                   <span className="flex items-center gap-0.5">
                     {Array.from({ length: MAX_LIVES }).map((_, i) => (
                       <Heart key={i} className={`w-[11px] h-[11px] ${i < lives ? 'fill-red-500 text-red-500' : 'fill-transparent text-white/20'}`} />

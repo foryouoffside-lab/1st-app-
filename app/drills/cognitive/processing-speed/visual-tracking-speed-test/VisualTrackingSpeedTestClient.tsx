@@ -8,6 +8,7 @@ import {
   RotateCcw, Share2, ArrowLeft, Eye, Zap as ZapIcon, Ban, Heart
 } from 'lucide-react';
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade } from '../../../../../lib/scoringEngine';
+import { canvasDpr } from '../../../../../lib/canvasFx';
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { lockLandscape, unlockOrientation } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
@@ -552,7 +553,7 @@ export default function VisualTrackingSpeedTestClient() {
       const ct = containerRef.current;
       if (!ct) return;
       const rect = ct.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = canvasDpr();
       cvs.width = rect.width * dpr;
       cvs.height = rect.height * dpr;
       cvs.style.width = rect.width + 'px';
@@ -583,10 +584,44 @@ export default function VisualTrackingSpeedTestClient() {
     trackingState.current.lastTime = 0;
     lastTargetSpawnTimeRef.current = Date.now();
 
+    // Static backdrop (flat fill + dot-matrix grid), rendered once and blitted
+    // each frame rather than rebuilt dot by dot. Rebuilt only on resize.
+    const backdropCanvas = document.createElement('canvas');
+    const backdropCtx = backdropCanvas.getContext('2d', { alpha: false });
+    let backdropW = 0;
+    let backdropH = 0;
+
+    const ensureBackdrop = (w: number, h: number, dpr: number) => {
+      if (!backdropCtx || w <= 0 || h <= 0) return false;
+      if (backdropW === w && backdropH === h && backdropCanvas.width > 0) return true;
+      backdropW = w;
+      backdropH = h;
+      backdropCanvas.width = Math.round(w * dpr);
+      backdropCanvas.height = Math.round(h * dpr);
+      backdropCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      backdropCtx.fillStyle = '#050508';
+      backdropCtx.fillRect(0, 0, w, h);
+      backdropCtx.fillStyle = 'rgba(139, 92, 246, 0.04)';
+      const dotSpacing = 40;
+      for (let gx = dotSpacing; gx < w; gx += dotSpacing) {
+        for (let gy = dotSpacing; gy < h; gy += dotSpacing) {
+          backdropCtx.fillRect(gx - 0.5, gy - 0.5, 1, 1);
+        }
+      }
+      return true;
+    };
+
     let animId = 0;
+    // ~60fps cap. This loop was uncapped, so on a 90Hz or 120Hz phone it ran
+    // 1.5-2x more frames than the game needs for an identical result — pure
+    // heat. Frame-skipping happens BEFORE lastTime is touched, so the physics
+    // delta below still measures real elapsed time between drawn frames.
+    let lastDrawTs = 0;
 
     const drawLoop = (ts: number) => {
       if (phaseRef.current !== 'playing') return;
+      if (ts - lastDrawTs < 15) { animId = requestAnimationFrame(drawLoop); return; }
+      lastDrawTs = ts;
       if (!trackingState.current.lastTime) {
         trackingState.current.lastTime = ts;
       }
@@ -594,23 +629,23 @@ export default function VisualTrackingSpeedTestClient() {
       if (dt > 0.15) dt = 0.016; 
       trackingState.current.lastTime = ts;
 
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = canvasDpr();
       const W = cvs.width / dpr;
       const H = cvs.height / dpr;
       const currentLevel = levelRef.current;
       const p = (currentLevel - 1) / 14;
 
-      // Draw background
-      ctx.fillStyle = '#050508';
-      ctx.fillRect(0, 0, W, H);
-
-      // Dot-matrix tactical grid
-      ctx.fillStyle = 'rgba(139, 92, 246, 0.04)';
-      const dotSpacing = 40;
-      for (let gx = dotSpacing; gx < W; gx += dotSpacing) {
-        for (let gy = dotSpacing; gy < H; gy += dotSpacing) {
-          ctx.fillRect(gx - 0.5, gy - 0.5, 1, 1);
-        }
+      // Background + dot-matrix grid — one blit of a pre-rendered image.
+      //
+      // This used to rebuild the grid from scratch every frame: a nested loop of
+      // one fillRect per dot, which on a landscape phone is 150+ draw calls per
+      // frame, ~9,000 a second, for a picture that never changes. Rendered once
+      // into an offscreen canvas instead (see ensureBackdrop).
+      if (ensureBackdrop(W, H, dpr)) {
+        ctx.drawImage(backdropCanvas, 0, 0, W, H);
+      } else {
+        ctx.fillStyle = '#050508';
+        ctx.fillRect(0, 0, W, H);
       }
 
       const cruiseSpeed = 120 + p * 330;
@@ -820,7 +855,7 @@ export default function VisualTrackingSpeedTestClient() {
     const cy = trackingState.current.py;
     const dist = Math.hypot(x - cx, y - cy);
     
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = canvasDpr();
     const W = cvs.width / dpr;
     const H = cvs.height / dpr;
     const radius = getTargetRadius(W, H);

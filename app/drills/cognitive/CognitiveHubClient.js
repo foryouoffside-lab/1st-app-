@@ -13,6 +13,7 @@ import {
 import { getAllDrillProgress } from '../../../lib/progressStore';
 import { DRILL_INDEX } from '../../../lib/drillIndex';
 import { SUB_GROUPS, getGroupMeta, getDrillGroup, getGroupIcon } from '../../../lib/drillGroups';
+import { canvasDpr } from '../../../lib/canvasFx';
 
 export default function CognitiveHubClient() {
   const searchParams = useSearchParams();
@@ -48,10 +49,16 @@ export default function CognitiveHubClient() {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     let animationFrameId;
+    let width = 0;
+    let height = 0;
 
     const resize = () => {
-      canvas.width = canvas.offsetWidth;
-      canvas.height = canvas.offsetHeight;
+      const dpr = canvasDpr();
+      width = canvas.offsetWidth;
+      height = canvas.offsetHeight;
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
     resize();
     window.addEventListener('resize', resize);
@@ -60,16 +67,23 @@ export default function CognitiveHubClient() {
     const count = 25;
     for (let i = 0; i < count; i++) {
       particles.push({
-        x: Math.random() * canvas.width,
-        y: Math.random() * canvas.height,
+        x: Math.random() * width,
+        y: Math.random() * height,
         vx: (Math.random() - 0.5) * 0.25,
         vy: (Math.random() - 0.5) * 0.25,
         radius: Math.random() * 2 + 1
       });
     }
 
-    const draw = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    let lastFrameTime = 0;
+    const draw = (time) => {
+      animationFrameId = requestAnimationFrame(draw);
+      // Cap this purely-decorative background to ~30fps — it's slow-drifting
+      // and visible on every screen, so a high-refresh phone shouldn't pay 2-4x.
+      if (time - lastFrameTime < 33) return;
+      lastFrameTime = time;
+
+      ctx.clearRect(0, 0, width, height);
       ctx.fillStyle = 'rgba(142, 97, 246, 0.22)';
       ctx.strokeStyle = 'rgba(142, 97, 246, 0.05)';
 
@@ -77,8 +91,8 @@ export default function CognitiveHubClient() {
         p.x += p.vx;
         p.y += p.vy;
 
-        if (p.x < 0 || p.x > canvas.width) p.vx *= -1;
-        if (p.y < 0 || p.y > canvas.height) p.vy *= -1;
+        if (p.x < 0 || p.x > width) p.vx *= -1;
+        if (p.y < 0 || p.y > height) p.vy *= -1;
 
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
@@ -95,10 +109,8 @@ export default function CognitiveHubClient() {
           }
         }
       });
-
-      animationFrameId = requestAnimationFrame(draw);
     };
-    draw();
+    animationFrameId = requestAnimationFrame(draw);
 
     return () => {
       cancelAnimationFrame(animationFrameId);

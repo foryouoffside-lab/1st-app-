@@ -544,7 +544,12 @@ export default function StrobeLatencyClient() {
     const dangerFromLives = (MAX_LIVES - livesRef.current) / MAX_LIVES;
     const dangerFromTime = timeRef.current <= 10 ? (10 - timeRef.current) / 10 : 0;
     const danger = Math.max(dangerFromLives * 0.7, dangerFromTime);
-    const tempo = Math.round(1100 - danger * 650);
+    // Clamped: an unclamped tempo goes NEGATIVE once danger exceeds ~1.69 (which
+    // negative lives can produce), and a setTimeout with a negative delay fires
+    // immediately — turning this self-rescheduling callback into a tight loop
+    // spawning audio nodes at full CPU. That was the "phone heats up and makes
+    // noise" bug already fixed in the other drills; this brings the rest in line.
+    const tempo = Math.max(350, Math.round(1100 - danger * 650));
     heartbeatTempoRef.current = tempo;
     if (danger > 0.08) audioSynth?.playHeartbeat(danger);
     if (mountedRef.current) setDangerLevel(danger);
@@ -773,7 +778,8 @@ export default function StrobeLatencyClient() {
             animation-timing-function: ease-out;
             animation-fill-mode: forwards;
           }
-          .fx-flash-cyan { animation-name: flash-cyan; }
+          /* success flashes are intentionally inert — see globals.css */
+          .fx-flash-cyan { animation-name: none; background: none; }
           .fx-flash-red { animation-name: flash-red; }
         `}</style>
 

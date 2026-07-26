@@ -11,7 +11,9 @@
     "mobile:build": "next build && npx cap sync android",
     "mobile:open": "npx cap open android",
     "mobile:run": "npx cap run android",
-    "mobile:release": "cd android && gradlew bundleRelease"
+    "mobile:live": "node scripts/mobile-live.js",
+    "mobile:restore": "node scripts/mobile-live.js --restore",
+    "mobile:release": "next build && npx cap sync android && cd android && gradlew bundleRelease"
   },
   "dependencies": {
     "@capacitor-firebase/analytics": "^8.3.0",

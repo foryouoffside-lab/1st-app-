@@ -476,6 +476,7 @@ export default function MemorySequenceClient() {
     
     // VALID CELL SELECTION
     audioSynth?.playHit();
+    triggerFlash('cyan');
     playerInputIndexRef.current += 1;
 
     const reactionMs = Date.now() - lastTapTimeRef.current;
@@ -544,7 +545,12 @@ export default function MemorySequenceClient() {
     const dangerFromLives = (MAX_LIVES - livesRef.current) / MAX_LIVES;
     const dangerFromTime = timeRef.current <= 10 ? (10 - timeRef.current) / 10 : 0;
     const danger = Math.max(dangerFromLives * 0.7, dangerFromTime);
-    const tempo = Math.round(1100 - danger * 650);
+    // Clamped: an unclamped tempo goes NEGATIVE once danger exceeds ~1.69 (which
+    // negative lives can produce), and a setTimeout with a negative delay fires
+    // immediately — turning this self-rescheduling callback into a tight loop
+    // spawning audio nodes at full CPU. That was the "phone heats up and makes
+    // noise" bug already fixed in the other drills; this brings the rest in line.
+    const tempo = Math.max(350, Math.round(1100 - danger * 650));
     heartbeatTempoRef.current = tempo;
     if (danger > 0.08) audioSynth?.playHeartbeat(danger);
     if (mountedRef.current) setDangerLevel(danger);
@@ -728,6 +734,10 @@ export default function MemorySequenceClient() {
             0% { background-color: rgba(239, 68, 68, 0.25); }
             100% { background-color: transparent; }
           }
+          @keyframes flash-cyan {
+            0% { background-color: rgba(34, 211, 238, 0.25); }
+            100% { background-color: transparent; }
+          }
           .fx-flash {
             position: absolute;
             inset: 0;
@@ -738,6 +748,8 @@ export default function MemorySequenceClient() {
             animation-fill-mode: forwards;
           }
           .fx-flash-red { animation-name: flash-red; }
+          /* success flashes are intentionally inert — see globals.css */
+          .fx-flash-cyan { animation-name: none; background: none; }
         `}</style>
 
         {gameState === 'playing' && dangerLevel > 0.06 && (
@@ -747,7 +759,7 @@ export default function MemorySequenceClient() {
         <div className="absolute inset-0 pointer-events-none" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
 
         {flashes.map((f) => (
-          <div key={f.id} className={`fx-flash ${f.variant === 'red' ? 'fx-flash-red' : ''}`} />
+          <div key={f.id} className={`fx-flash fx-flash-${f.variant}`} />
         ))}
 
         {(gameState === 'countdown' || gameState === 'playing') && (
