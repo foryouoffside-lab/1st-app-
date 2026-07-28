@@ -2,6 +2,7 @@ package com.skilldrills.pro;
 
 import android.os.Bundle;
 import android.webkit.WebView;
+import androidx.core.splashscreen.SplashScreen;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import com.getcapacitor.BridgeActivity;
@@ -9,6 +10,10 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // Must run before super.onCreate(). Required for the AndroidX
+        // SplashScreen attributes in styles.xml (windowSplashScreenBackground
+        // etc.) to apply consistently pre-Android-12 too, not just on 31+.
+        SplashScreen.installSplashScreen(this);
         super.onCreate(savedInstanceState);
         WebView webView = this.bridge.getWebView();
         // Ignore the device's system font-size/display-size setting and

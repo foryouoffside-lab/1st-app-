@@ -550,7 +550,7 @@ export default function KineticInterceptClient() {
       // than needed for the same visual result. Movement below is scaled by
       // frameScale (derived from real elapsed time), so capping here changes
       // rendering cost only — not target speed — on any device.
-      if (time - lastTime < 15) {
+      if (time - lastTime < 32) {
         animationRef.current = requestAnimationFrame(renderLoop);
         return;
       }

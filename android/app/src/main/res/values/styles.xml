@@ -16,7 +16,22 @@
     </style>
 
 
+    <!--
+        Android 12+ (API 31+) shows its OWN system splash screen before this
+        Activity is even created, driven purely by these theme attributes —
+        NOT by "android:background" (that attribute is ignored by the
+        platform SplashScreen and was the cause of the logo sometimes
+        rendering off-centre: without an explicit windowSplashScreenAnimatedIcon
+        the OS fell back to auto-deriving one from the adaptive launcher icon,
+        which isn't safe-zone padded for that purpose). splash_icon_vector.xml
+        is a purpose-built, generously-padded vector asset for this exact slot. Once this Activity actually starts,
+        postSplashScreenTheme hands off to the normal app theme; Capacitor's
+        own SplashScreen plugin (@drawable/splash, full-bleed and already
+        centred) takes over from there until the web content is ready.
+    -->
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
-        <item name="android:background">@drawable/splash</item>
+        <item name="windowSplashScreenBackground">@color/splashBackground</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_icon_vector</item>
+        <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
     </style>
 </resources>

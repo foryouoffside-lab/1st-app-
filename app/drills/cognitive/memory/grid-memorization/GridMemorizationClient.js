@@ -276,20 +276,20 @@ export default function GridMemorizationClient() {
     if (audioSynth) audioSynth.setEnabled(soundEnabled);
   }, [soundEnabled]);
 
-  const clearTimers = useCallback(() => {
-    if (globalTimerIntervalRef.current) clearInterval(globalTimerIntervalRef.current);
-    if (memorizeTimerRef.current) clearTimeout(memorizeTimerRef.current);
-    if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
-    if (overdriveTimeoutRef.current) clearTimeout(overdriveTimeoutRef.current);
-    if (heartbeatTimerRef.current) clearTimeout(heartbeatTimerRef.current);
-  }, []);
-
   const triggerFlash = useCallback((variant) => {
     const id = Date.now() + Math.random();
     setFlashes(prev => [...prev, { id, variant }]);
     setTimeout(() => {
       if (mountedRef.current) setFlashes(prev => prev.filter(f => f.id !== id));
     }, 150);
+  }, []);
+
+  const clearTimers = useCallback(() => {
+    if (globalTimerIntervalRef.current) clearInterval(globalTimerIntervalRef.current);
+    if (memorizeTimerRef.current) clearTimeout(memorizeTimerRef.current);
+    if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
+    if (overdriveTimeoutRef.current) clearTimeout(overdriveTimeoutRef.current);
+    if (heartbeatTimerRef.current) clearTimeout(heartbeatTimerRef.current);
   }, []);
 
   const endGame = useCallback(async () => {
@@ -457,7 +457,6 @@ export default function GridMemorizationClient() {
       setCombo(0);
 
       setWrongCellIndex(index);
-
       triggerFlash('red');
 
       setPhase("result");
@@ -625,7 +624,13 @@ export default function GridMemorizationClient() {
 
         const nextTime = Math.max(0, timeRef.current - (deltaMs / 1000));
         timeRef.current = nextTime;
-        setLocalTimeRemaining(nextTime);
+        // Only when the DISPLAYED whole second changes — same fix as
+        // DualTargetFlowClient/FingerSequencingClient. This ran 5x/sec
+        // unconditionally, re-rendering the whole component (including the
+        // up-to-36-cell grid, with no memo boundary) to paint an identical
+        // picture 4 times out of 5. The ref above still has full precision
+        // for the 0-check and scoring.
+        setLocalTimeRemaining((prev) => (Math.ceil(prev) === Math.ceil(nextTime) ? prev : nextTime));
 
         if (nextTime <= 0) {
           endGame();
@@ -759,28 +764,29 @@ export default function GridMemorizationClient() {
         className="absolute inset-0 select-none overflow-hidden bg-[#050508] text-white"
         style={{ 
           touchAction: gameState === 'playing' ? 'none' : 'auto', 
-          WebkitTapHighlightColor: 'transparent' 
+          WebkitTapHighlightColor: 'transparent'
         }}
       >
         <style>{`
-          @keyframes flash-red {
-            0% { background-color: rgba(239, 68, 68, 0.25); }
-            100% { background-color: transparent; }
-          }
-          @keyframes flash-cyan {
-            0% { background-color: rgba(34, 211, 238, 0.25); }
-            100% { background-color: transparent; }
+          @keyframes flash-fade {
+            0% { opacity: 1; }
+            100% { opacity: 0; }
           }
           .fx-flash {
             position: absolute;
             inset: 0;
             pointer-events: none;
             z-index: 55;
-            animation-duration: 0.15s;
+            animation-name: flash-fade;
+            animation-duration: 0.2s;
             animation-timing-function: ease-out;
             animation-fill-mode: forwards;
           }
-          .fx-flash-red { animation-name: flash-red; }
+          /* Radial + sized at 30% (not a flat full-screen tint) so it fades
+             to fully transparent before reaching the edges — the flat
+             version tinted the whole board (incl. grid text) evenly, worst
+             in portrait where the grid fills most of the screen. */
+          .fx-flash-red { background: radial-gradient(ellipse 30% 30% at 50% 50%, rgba(239,68,68,.35) 0%, rgba(239,68,68,.35) 30%, rgba(239,68,68,.15) 60%, transparent 92%); }
           /* success flashes are intentionally inert — see globals.css */
           .fx-flash-cyan { animation-name: none; background: none; }
         `}</style>
@@ -856,9 +862,14 @@ export default function GridMemorizationClient() {
           <>
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
               {/* scaleX, not width — a width animation forces layout + paint on
-                  every clock tick for the whole match; a transform is composited. */}
+                  every clock tick for the whole match; a transform is composited.
+                  duration-1000, not 100 — the state driving this only updates
+                  once a second (see the throttle above), so a 100ms transition
+                  meant the bar snapped quickly then sat frozen for ~900ms
+                  instead of gliding the full second, matching DualTargetFlowClient's
+                  already-correct 1000ms pairing. */}
               <div
-                className={`h-full w-full origin-left transition-transform duration-100 ease-linear ${localTimeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-indigo-500'}`}
+                className={`h-full w-full origin-left transition-transform duration-1000 ease-linear ${localTimeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-indigo-500'}`}
                 style={{ transform: `scaleX(${timePct / 100})` }}
               />
             </div>

@@ -207,7 +207,19 @@ export default function DrillWrapper({
       const host = data.fromUid === user.uid;
       setIsHost(host);
       setOpponentName(host ? data.toName : data.fromName);
-      setOpponentPhoto(host ? data.toPhoto : data.fromPhoto);
+      const nextOpponentPhoto = host ? data.toPhoto : data.fromPhoto;
+      setOpponentPhoto(nextOpponentPhoto);
+      // Warm the browser's image cache the instant the opponent's photo is
+      // known — well before the lobby/result screens that actually render
+      // it — so it's much more likely to already be loaded by the time
+      // either of those show up. no-referrer since Capacitor's unusual
+      // origin (https://localhost) can get a Google photo URL rejected by
+      // its CDN if the Referer header is sent.
+      if (nextOpponentPhoto && typeof window !== 'undefined') {
+        const img = new window.Image();
+        img.referrerPolicy = 'no-referrer';
+        img.src = nextOpponentPhoto;
+      }
 
       // Handle match readiness
       if (data.status === 'accepted') {
@@ -486,6 +498,30 @@ export default function DrillWrapper({
     };
   }, []);
 
+  // 6d. Backgrounding a SOLO drill exits it outright. Putting the app away
+  // (recent-apps tray, not force-closed) doesn't unmount this component —
+  // the game loop kept ticking and the audio synth kept firing its short
+  // tone cues with the screen off, which read as the drill "running behind"
+  // and making noise nobody asked for. Routing back out stops it cold: the
+  // whole drill subtree unmounts, taking every interval/rAF loop with it.
+  //
+  // A duel is deliberately exempt — leaving one mid-match already forfeits
+  // it via effect 6c the instant this component unmounts, and the
+  // abandoned-match rescue (effect 6b) exists specifically to give a
+  // backgrounded opponent a real 20s grace window rather than an instant
+  // loss. Exiting here on top of that would turn every backgrounded duel
+  // into an immediate forfeit instead.
+  useEffect(() => {
+    if (isChallengeMode) return;
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        router.replace(backHref);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [isChallengeMode, backHref, router]);
+
   // 7. Hide the global floating exit-X (AppShellClient's "hide-drill-controls"
   // body class) once a duel is actually in progress, so a mistimed tap can't
   // bail a player out of a live match.
@@ -512,7 +548,7 @@ export default function DrillWrapper({
       }
     } catch (err) {
       console.error(err);
-      setMatchmakingMessage("Failed to send invite.");
+      setMatchmakingMessage(err?.code === 'arena/locked-out' ? err.message : "Failed to send invite.");
     }
   };
 
@@ -526,7 +562,7 @@ export default function DrillWrapper({
       }
     } catch (err) {
       console.error(err);
-      setMatchmakingMessage("Failed to post global challenge.");
+      setMatchmakingMessage(err?.code === 'arena/locked-out' ? err.message : "Failed to post global challenge.");
     }
   };
 
@@ -546,6 +582,7 @@ export default function DrillWrapper({
       router.push(`/drills/${invite.drillSlug}?challengeId=${invite.id}`);
     } catch (err) {
       console.error("Failed to accept rematch invite:", err);
+      if (err?.code === 'arena/locked-out') alert(err.message);
     }
   };
 
@@ -579,6 +616,7 @@ export default function DrillWrapper({
       }
     } catch (err) {
       console.error("Failed to send rematch challenge:", err);
+      if (err?.code === 'arena/locked-out') alert(err.message);
       setPendingRematch(null);
     }
   };
@@ -742,7 +780,7 @@ export default function DrillWrapper({
 
             <div className="flex gap-8 items-center bg-neutral-900/40 border border-neutral-800 p-6 rounded-2xl">
               <div className="flex flex-col items-center gap-2">
-                <img src={user?.photoURL} className="w-12 h-12 rounded-full border border-purple-500" />
+                <img src={user?.photoURL} referrerPolicy="no-referrer" className="w-12 h-12 rounded-full border border-purple-500" />
                 <span className="text-xs text-neutral-300">{user?.displayName?.split(' ')[0]}</span>
                 <span className="text-[9px] bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-full border border-emerald-500/20 font-bold flex items-center gap-1">
                   <CheckCircle2 className="w-3 h-3" /> Ready
@@ -751,7 +789,7 @@ export default function DrillWrapper({
               <div className="text-xs text-neutral-500 font-black font-mono">VS</div>
               <div className="flex flex-col items-center gap-2">
                 {opponentPhoto ? (
-                  <img src={opponentPhoto} className="w-12 h-12 rounded-full border border-neutral-700" />
+                  <img src={opponentPhoto} referrerPolicy="no-referrer" className="w-12 h-12 rounded-full border border-neutral-700" />
                 ) : (
                   <div className="w-12 h-12 rounded-full bg-neutral-800 border border-neutral-700 flex items-center justify-center">
                     <Swords className="w-5 h-5 text-neutral-500" />
@@ -888,7 +926,7 @@ export default function DrillWrapper({
                       won ? 'bg-purple-950/25 border-purple-500/40 shadow-lg shadow-purple-500/10' : 'bg-neutral-900/50 border-neutral-800'
                     }`}>
                       {user?.photoURL ? (
-                        <img src={user.photoURL} className="w-11 h-11 rounded-full border border-purple-500/50 mx-auto mb-2 object-cover" />
+                        <img src={user.photoURL} referrerPolicy="no-referrer" className="w-11 h-11 rounded-full border border-purple-500/50 mx-auto mb-2 object-cover" />
                       ) : (
                         <div className="w-11 h-11 rounded-full bg-neutral-800 border border-neutral-700 flex items-center justify-center mx-auto mb-2">
                           <Swords className="w-5 h-5 text-purple-400" />
@@ -902,7 +940,7 @@ export default function DrillWrapper({
                       !won && !draw ? 'bg-rose-950/20 border-rose-500/30' : 'bg-neutral-900/50 border-neutral-800'
                     }`}>
                       {opponentPhoto ? (
-                        <img src={opponentPhoto} className="w-11 h-11 rounded-full border border-neutral-700 mx-auto mb-2 object-cover" />
+                        <img src={opponentPhoto} referrerPolicy="no-referrer" className="w-11 h-11 rounded-full border border-neutral-700 mx-auto mb-2 object-cover" />
                       ) : (
                         <div className="w-11 h-11 rounded-full bg-neutral-800 border border-neutral-700 flex items-center justify-center mx-auto mb-2">
                           <Swords className="w-5 h-5 text-neutral-400" />
@@ -1087,7 +1125,7 @@ export default function DrillWrapper({
                         className="bg-neutral-900/60 border border-neutral-800/80 rounded-xl p-3 flex items-center justify-between gap-3"
                       >
                         <div className="flex items-center gap-2">
-                          <img src={player.photoURL} className="w-8 h-8 rounded-full border border-purple-500/20" />
+                          <img src={player.photoURL} referrerPolicy="no-referrer" className="w-8 h-8 rounded-full border border-purple-500/20" />
                           <span className="text-xs font-bold text-neutral-200">{player.displayName}</span>
                         </div>
                         

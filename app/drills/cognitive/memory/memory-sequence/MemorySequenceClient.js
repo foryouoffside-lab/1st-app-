@@ -730,24 +730,23 @@ export default function MemorySequenceClient() {
         }}
       >
         <style>{`
-          @keyframes flash-red {
-            0% { background-color: rgba(239, 68, 68, 0.25); }
-            100% { background-color: transparent; }
-          }
-          @keyframes flash-cyan {
-            0% { background-color: rgba(34, 211, 238, 0.25); }
-            100% { background-color: transparent; }
+          @keyframes flash-fade {
+            0% { opacity: 1; }
+            100% { opacity: 0; }
           }
           .fx-flash {
             position: absolute;
             inset: 0;
             pointer-events: none;
             z-index: 55;
-            animation-duration: 0.15s;
+            animation-name: flash-fade;
+            animation-duration: 0.2s;
             animation-timing-function: ease-out;
             animation-fill-mode: forwards;
           }
-          .fx-flash-red { animation-name: flash-red; }
+          /* Radial + sized at 30% (not a flat full-screen tint) so it fades
+             to fully transparent before reaching the edges. */
+          .fx-flash-red { background: radial-gradient(ellipse 30% 30% at 50% 50%, rgba(239,68,68,.35) 0%, rgba(239,68,68,.35) 30%, rgba(239,68,68,.15) 60%, transparent 92%); }
           /* success flashes are intentionally inert — see globals.css */
           .fx-flash-cyan { animation-name: none; background: none; }
         `}</style>

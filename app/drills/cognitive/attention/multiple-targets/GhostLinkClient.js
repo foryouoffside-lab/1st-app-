@@ -358,10 +358,15 @@ export default function GhostLinkClient() {
 
   useEffect(() => { if (audioSynth) audioSynth.setEnabled(soundEnabled); }, [soundEnabled]);
 
-  // Adaptive difficulty preview variables
-  const adaptiveBonus = Math.floor(bestScore / 30);
-  const dynamicBallsCount = Math.min(13, totalBalls + adaptiveBonus);
-  const dynamicSpeed = Math.min(13, ballSpeed + adaptiveBonus);
+  // Difficulty is entirely player-chosen via the start-card sliders — no
+  // score-based auto-scaling. Harder settings (faster balls, more of them)
+  // instead earn a scoring multiplier, so choosing a harder setup and still
+  // nailing the identification is rewarded rather than the game silently
+  // ramping difficulty up behind the player's back based on past scores.
+  const speedFactor = (ballSpeed - 2) / 10; // slider range 2-12 -> 0-1
+  const ballsFactor = (totalBalls - 4) / 6; // slider range 4-10 -> 0-1
+  const difficultyMultiplier = 1 + speedFactor * 0.75 + ballsFactor * 0.75; // 1.0x-2.5x
+  const pointsPerHit = Math.round(HIT_POINTS * difficultyMultiplier);
 
   // === Initialize Round variables ===
   const initDrillVariables = useCallback((w, h) => {
@@ -378,16 +383,16 @@ export default function GhostLinkClient() {
     // 22-50px ceiling since up to 13 balls share the screen here at once
     // (vs. Conflict Reflex's 2), and collision physics below already keeps
     // them from permanently overlapping at this size.
-    const radius = w < 768 ? 18 : 28;
+    const radius = w < 768 ? 16 : 25; // ~10% smaller for extra room to move
 
     const indices = [];
     while (indices.length < TARGET_COUNT) {
-      const idx = Math.floor(Math.random() * dynamicBallsCount);
+      const idx = Math.floor(Math.random() * totalBalls);
       if (!indices.includes(idx)) indices.push(idx);
     }
     targetIndicesRef.current = indices;
 
-    for (let i = 0; i < dynamicBallsCount; i++) {
+    for (let i = 0; i < totalBalls; i++) {
       const angle = Math.random() * Math.PI * 2;
       ballsRef.current.push({
         x: radius + Math.random() * (w - radius * 2),
@@ -407,7 +412,7 @@ export default function GhostLinkClient() {
     setDangerLevel(0);
     heartbeatCooldownRef.current = 0;
     audioSynth?.playMemorize();
-  }, [dynamicBallsCount, handleSetSelectedBalls, handleSetShowResults, handleSetCorrectCount]);
+  }, [totalBalls, handleSetSelectedBalls, handleSetShowResults, handleSetCorrectCount]);
 
   // === Calculate score and submit telemetry ===
   const calculateResults = useCallback(() => {
@@ -419,7 +424,7 @@ export default function GhostLinkClient() {
       else errors++;
     });
 
-    const netScore = Math.max(0, (cCount * HIT_POINTS) - (errors * MISS_PENALTY));
+    const netScore = Math.max(0, (cCount * pointsPerHit) - (errors * MISS_PENALTY));
 
     handleSetCorrectCount(cCount);
     setScore(netScore);
@@ -497,7 +502,7 @@ export default function GhostLinkClient() {
       setPhase('ended');
       gameActiveRef.current = false;
     }, 2500);
-  }, [handleSetCorrectCount, handleSetShowResults]);
+  }, [pointsPerHit, handleSetCorrectCount, handleSetShowResults]);
 
   // === Click / Pointer Selection logic ===
   const handleInputStrikes = useCallback((e) => {
@@ -525,18 +530,29 @@ export default function GhostLinkClient() {
       }
     }
 
-    // Check Balls Selection
+    // Check Balls Selection — pick only the CLOSEST ball under the tap, not
+    // every ball whose (generously padded) hit-circle happens to reach the
+    // click point. Two balls can sit close enough for their hit-circles to
+    // overlap (collision physics keeps them adjacent rather than separated),
+    // and the old forEach-with-no-early-exit toggled both from a single tap.
+    let closestIdx = -1;
+    let closestDist = Infinity;
     ballsRef.current.forEach((b, i) => {
-      if (Math.hypot(clickX - b.x, clickY - b.y) <= b.r + 20) {
-        if (currentSelected.includes(i)) {
-          handleSetSelectedBalls(prev => prev.filter(item => item !== i));
-          audioSynth?.playDeselect();
-        } else if (currentSelected.length < TARGET_COUNT) {
-          handleSetSelectedBalls(prev => [...prev, i]);
-          audioSynth?.playSelect();
-        }
+      const dist = Math.hypot(clickX - b.x, clickY - b.y);
+      if (dist <= b.r + 20 && dist < closestDist) {
+        closestDist = dist;
+        closestIdx = i;
       }
     });
+    if (closestIdx !== -1) {
+      if (currentSelected.includes(closestIdx)) {
+        handleSetSelectedBalls(prev => prev.filter(item => item !== closestIdx));
+        audioSynth?.playDeselect();
+      } else if (currentSelected.length < TARGET_COUNT) {
+        handleSetSelectedBalls(prev => [...prev, closestIdx]);
+        audioSynth?.playSelect();
+      }
+    }
   }, [calculateResults, handleSetSelectedBalls]);
 
   // === Frame and Animation physics loop ===
@@ -546,6 +562,12 @@ export default function GhostLinkClient() {
     if (!cvs) return;
     const ctx = cvs.getContext('2d');
     let lastTime = performance.now();
+    // Separate from `lastTime` above (which tracks the last PROCESSED
+    // frame for the fps cap and advances in irregular ~32ms+ steps) — this
+    // tracks real elapsed time since the HUD last synced, so the time
+    // readout/bar update on an actual wall-clock cadence instead of a
+    // frame-count modulo (see the fix below).
+    let lastHudSync = 0;
 
     // Static play-field backdrop, rendered once per size instead of per frame.
     const backdrop = createBackdropCache((c, w, h) => {
@@ -558,6 +580,27 @@ export default function GhostLinkClient() {
       for (let gy = 0; gy < h; gy += 50) { c.moveTo(0, gy); c.lineTo(w, gy); }
       c.stroke();
     });
+
+    // Pre-rendered CONFIRM button (with its glow), baked once instead of
+    // recomputed with a live shadowBlur every single frame the button is
+    // showing — the exact "flat fills only, no gradient/shadowBlur" rule
+    // drawBall (below) already follows for the same reason (a known-slow
+    // Android WebView combination), just missed on this one UI element.
+    // The button's own size never changes, only its screen position (which
+    // tracks W/H), so this only needs to be built once, not on every resize.
+    const CONFIRM_PAD = 24; // room for the shadowBlur glow around the 160x50 rect
+    const confirmSprite = document.createElement('canvas');
+    confirmSprite.width = 160 + CONFIRM_PAD * 2;
+    confirmSprite.height = 50 + CONFIRM_PAD * 2;
+    {
+      const sctx = confirmSprite.getContext('2d');
+      sctx.fillStyle = "#a855f7";
+      sctx.shadowBlur = 20;
+      sctx.shadowColor = "#a855f7";
+      sctx.beginPath();
+      sctx.roundRect(CONFIRM_PAD, CONFIRM_PAD, 160, 50, 12);
+      sctx.fill();
+    }
 
     // Layered-circle style matching ConflictReflexClient.js's
     // drawLayeredCircle — flat fills only, no gradient/shadowBlur (that
@@ -631,7 +674,7 @@ export default function GhostLinkClient() {
       if (!gameActiveRef.current) return;
       // ~60fps cap — an uncapped loop makes 90-120Hz phones redraw (and
       // run collision checks on up to 13 balls) 1.5-2x more than needed.
-      if (time - lastTime < 15) {
+      if (time - lastTime < 32) {
         animationRef.current = requestAnimationFrame(frameLoop);
         return;
       }
@@ -656,12 +699,26 @@ export default function GhostLinkClient() {
           setDangerLevel(0);
           audioSynth?.playSelect();
         }
-        if (Math.round(trackingTimerRef.current * 60) % 12 === 0) {
-          setTimeRemaining(Math.ceil(trackingTimerRef.current));
-        }
-
         const danger = trackingTimerRef.current <= 10 ? (10 - trackingTimerRef.current) / 10 : 0;
-        setDangerLevel(danger);
+        // Real elapsed-time check, not a frame-count modulo. The old
+        // `Math.round(trackingTimerRef.current * 60) % 12 === 0` assumed each
+        // processed frame advances the clock by exactly one 1/60s "tick", but
+        // the fps cap above only guarantees frames land AT LEAST 32ms apart —
+        // never exactly — so the running value almost never lands on a clean
+        // multiple of 12 and the check would go multiple real seconds between
+        // hits, which is what made the timer (and the bar, which reads this
+        // same state) visibly skip — 45, 42, 39 — instead of counting every
+        // second.
+        if (time - lastHudSync >= 200) {
+          lastHudSync = time;
+          // Fractional, not Math.ceil()'d — the timer BAR reads this same
+          // state for its width (see the render below); rounding to a whole
+          // second before storing it made the bar sit frozen and then snap,
+          // instead of gliding. The numeric "Xs" readout still rounds up at
+          // the point it's displayed, so the HUD text is unaffected.
+          setTimeRemaining(trackingTimerRef.current);
+          setDangerLevel(danger);
+        }
         if (danger > 0.08) {
           heartbeatCooldownRef.current -= dt;
           if (heartbeatCooldownRef.current <= 0) {
@@ -676,7 +733,7 @@ export default function GhostLinkClient() {
         const balls = ballsRef.current;
         const w = canvasSizeRef.current.width;
         const h = canvasSizeRef.current.height;
-        const speedMultiplier = dynamicSpeed * 60 * dt;
+        const speedMultiplier = ballSpeed * 60 * dt;
 
         for (let i = 0; i < balls.length; i++) {
           const b = balls[i];
@@ -784,15 +841,7 @@ export default function GhostLinkClient() {
             const bx = W / 2 - 80;
             const by = H - 85;
 
-            ctx.save();
-            ctx.fillStyle = "#a855f7";
-            ctx.shadowBlur = 20;
-            ctx.shadowColor = "#a855f7";
-            ctx.beginPath();
-            ctx.roundRect(bx, by, 160, 50, 12);
-            ctx.fill();
-            ctx.shadowBlur = 0;
-            ctx.restore();
+            ctx.drawImage(confirmSprite, bx - CONFIRM_PAD, by - CONFIRM_PAD);
 
             ctx.fillStyle = "#ffffff";
             ctx.font = "bold 13px system-ui, sans-serif";
@@ -820,7 +869,7 @@ export default function GhostLinkClient() {
       cancelAnimationFrame(animationRef.current);
       window.removeEventListener('resize', setupDimensions);
     };
-  }, [phase, dynamicSpeed, initDrillVariables]);
+  }, [phase, ballSpeed, initDrillVariables]);
 
   const beginPlaying = useCallback(() => {
     if (!mountedRef.current) return;
@@ -982,31 +1031,32 @@ export default function GhostLinkClient() {
                 <div className="flex flex-col gap-1">
                   <div className="flex justify-between items-center text-[9px] uppercase font-bold text-slate-500 tracking-wider">
                     <span className="flex items-center gap-1"><Zap className="w-3 h-3 text-pink-400" /> Velocity</span>
-                    <span className="text-pink-400 font-mono font-bold">
-                      Lvl {ballSpeed} {adaptiveBonus > 0 && `(+${adaptiveBonus})`} = {dynamicSpeed}
-                    </span>
+                    <span className="text-pink-400 font-mono font-bold">Lvl {ballSpeed}</span>
                   </div>
-                  <input 
-                    type="range" min="2" max="12" step="1" 
-                    value={ballSpeed} 
-                    onChange={(e) => setBallSpeed(parseInt(e.target.value))} 
-                    className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-pink-500" 
+                  <input
+                    type="range" min="2" max="12" step="1"
+                    value={ballSpeed}
+                    onChange={(e) => setBallSpeed(parseInt(e.target.value))}
+                    className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-pink-500"
                   />
                 </div>
 
                 <div className="flex flex-col gap-1">
                   <div className="flex justify-between items-center text-[9px] uppercase font-bold text-slate-500 tracking-wider">
                     <span className="flex items-center gap-1"><Layers className="w-3 h-3 text-cyan-400" /> Total Balls</span>
-                    <span className="text-cyan-400 font-mono font-bold">
-                      {totalBalls} {adaptiveBonus > 0 && `(+${adaptiveBonus})`} = {dynamicBallsCount}
-                    </span>
+                    <span className="text-cyan-400 font-mono font-bold">{totalBalls}</span>
                   </div>
-                  <input 
-                    type="range" min="4" max="10" step="1" 
-                    value={totalBalls} 
-                    onChange={(e) => setTotalBalls(parseInt(e.target.value))} 
-                    className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-cyan-500" 
+                  <input
+                    type="range" min="4" max="10" step="1"
+                    value={totalBalls}
+                    onChange={(e) => setTotalBalls(parseInt(e.target.value))}
+                    className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-cyan-500"
                   />
+                </div>
+
+                <div className="flex justify-between items-center text-[9.5px] bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
+                  <span className="text-slate-400">Higher settings score more per hit</span>
+                  <span className="text-white font-mono font-bold">{pointsPerHit} pts <span className="text-slate-500">(&times;{difficultyMultiplier.toFixed(1)})</span></span>
                 </div>
               </div>
 

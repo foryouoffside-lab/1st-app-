@@ -462,7 +462,7 @@ export default function BatchProcessingClient() {
     // ceiling since up to 18 items can share the screen here at once (vs.
     // Conflict Reflex's 2); see the baseDistractors comment below for the
     // matching distractor-count cap that keeps this from overcrowding.
-    itemRadiusRef.current = 24;
+    itemRadiusRef.current = 22; // ~10% smaller for extra room to move
     itemSpeedRef.current = 1.3 + progress * 4.5; // items move faster from 1.3 to 5.8
 
     if (progress >= 0.45) {
@@ -874,7 +874,7 @@ export default function BatchProcessingClient() {
         return;
       }
 
-      if (timestamp - lastDrawTs < 15) {
+      if (timestamp - lastDrawTs < 32) {
         animationRef.current = requestAnimationFrame(draw);
         return;
       }

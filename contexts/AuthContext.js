@@ -30,6 +30,8 @@ import {
   reauthenticateWithCredential,
 } from 'firebase/auth';
 import { clearAllProgress } from '../lib/progressStore';
+import { getServerClockOffset } from '../lib/challengeEngine';
+import { ARENA_ENABLED } from '../lib/featureFlags';
 
 const AuthContext = createContext({
   user: null,
@@ -43,9 +45,26 @@ const AuthContext = createContext({
 });
 
 const SESSION_KEY = 'sd_user_session';
+// Holds a Google photoURL that changed from what's stored, until it's seen
+// again on a second sign-in — see the note in resolveProfile below.
+const PHOTO_CANDIDATE_KEY = 'sd_photo_candidate';
 
 const fallbackAvatar = (seed) =>
   `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(seed)}`;
+
+// Warms the browser's own image cache for this user's profile photo as
+// early as possible — the header (components/MobileHeader.js) shows it on
+// every single screen, so the sooner this fetch starts, the less often
+// that header is still on its placeholder by the time it renders.
+// referrerPolicy matches Avatar.js: Capacitor serves the app from an
+// unusual origin (https://localhost), and Google's photo CDN can reject a
+// request that carries that origin's Referer header.
+const preloadImage = (src) => {
+  if (typeof window === 'undefined' || !src) return;
+  const img = new window.Image();
+  img.referrerPolicy = 'no-referrer';
+  img.src = src;
+};
 
 // Resolve the Firestore profile for a real Firebase Auth user.
 // - Returning users (doc already exists at users/{uid}) sign straight in.
@@ -60,7 +79,41 @@ async function resolveProfile(db, fbUser) {
   if (existing.exists()) {
     const data = existing.data();
     const updates = { online: true, lastSeen: serverTimestamp() };
-    if (fbUser.photoURL && fbUser.photoURL !== data.photoURL) updates.photoURL = fbUser.photoURL;
+
+    // Sync the profile photo from Google, but don't trust a changed value on
+    // a single sign-in — native Google Sign-In has occasionally handed back
+    // a generic placeholder photo instead of the account's real one on one
+    // sign-in out of several, and that used to get written straight over a
+    // perfectly good stored photo, permanently. Require the SAME new URL to
+    // show up on two sign-ins in a row before committing it: a real photo
+    // change stays consistent across logins and passes on the second one; a
+    // one-off glitch shows something different (or the original URL) next
+    // time and never gets committed.
+    //
+    // BUG FIX: this guard only protected against a bad Google URL replacing a
+    // good Google URL — it never accounted for a custom-uploaded photo (see
+    // ProgressClient's handleSavePhoto, stored as a `data:image/...;base64,`
+    // URL). Since a user's real Google photoURL is itself stable across
+    // sign-ins, once a custom photo was set this same "confirmed twice" logic
+    // would always eventually confirm the Google URL as a legitimate change
+    // and silently overwrite the custom upload within two app restarts, every
+    // time. A custom photo is a deliberate, permanent user choice — never let
+    // this Google-sync path touch it at all.
+    const hasCustomPhoto = typeof data.photoURL === 'string' && data.photoURL.startsWith('data:');
+    if (hasCustomPhoto) {
+      try { localStorage.removeItem(PHOTO_CANDIDATE_KEY); } catch (e) {}
+    } else if (fbUser.photoURL && fbUser.photoURL !== data.photoURL) {
+      let candidate = null;
+      try { candidate = JSON.parse(localStorage.getItem(PHOTO_CANDIDATE_KEY) || 'null'); } catch (e) {}
+      if (candidate && candidate.uid === fbUser.uid && candidate.url === fbUser.photoURL) {
+        updates.photoURL = fbUser.photoURL;
+        try { localStorage.removeItem(PHOTO_CANDIDATE_KEY); } catch (e) {}
+      } else {
+        try { localStorage.setItem(PHOTO_CANDIDATE_KEY, JSON.stringify({ uid: fbUser.uid, url: fbUser.photoURL })); } catch (e) {}
+      }
+    } else if (fbUser.photoURL) {
+      try { localStorage.removeItem(PHOTO_CANDIDATE_KEY); } catch (e) {}
+    }
     // Self-heal: earlier versions stored email on this publicly-readable doc.
     // Strip it going forward — it only ever needs to live in Firebase Auth
     // (fbUser.email below), never in the world-readable Firestore document.
@@ -110,6 +163,15 @@ async function resolveProfile(db, fbUser) {
     } catch (e) {
       console.error('Failed to tag migrated legacy account:', e);
     }
+    try {
+      // Back-fill this legacy name into the same reservation collection new
+      // signups check in completeSignup, so a brand-new user can no longer
+      // claim a name a migrated account is already using. Best-effort and
+      // never blocks sign-in: if it's already reserved (e.g. this account
+      // was migrated once before) or the write fails, this account still
+      // owns the name via its users/{uid} doc either way.
+      await setDoc(doc(db, 'usernames', merged.displayName.toLowerCase()), { uid: fbUser.uid }, { merge: false });
+    } catch (e) {}
     return { status: 'ready', profile: { ...merged, email: fbUser.email || legacy.email || '' } };
   }
 
@@ -150,7 +212,20 @@ export function AuthProvider({ children }) {
 
     try {
       const cached = localStorage.getItem(SESSION_KEY);
-      if (cached) setUser(JSON.parse(cached));
+      if (cached) {
+        const cachedUser = JSON.parse(cached);
+        setUser(cachedUser);
+        preloadImage(cachedUser?.photoURL);
+        // Paint the cached profile (photo included) immediately instead of
+        // blocking the whole app behind AuthGate's spinner for a fresh
+        // Firebase Auth + Firestore round-trip on every single open/re-login
+        // — that round-trip was the "profile image takes forever to load"
+        // complaint, since the cached data was already sitting right here.
+        // onAuthStateChanged below still runs and reconciles this in the
+        // background (including signing out if the session actually
+        // expired) — this only changes what's shown while that happens.
+        setLoading(false);
+      }
     } catch (e) {}
 
     const unsubscribe = onAuthStateChanged(initialized.auth, async (fbUser) => {
@@ -165,6 +240,7 @@ export function AuthProvider({ children }) {
         const result = await resolveProfile(initialized.db, fbUser);
         if (result.status === 'ready') {
           setUser(result.profile);
+          preloadImage(result.profile?.photoURL);
           setPendingSignup(null);
           try { localStorage.setItem(SESSION_KEY, JSON.stringify(result.profile)); } catch (e) {}
         } else {
@@ -203,6 +279,24 @@ export function AuthProvider({ children }) {
     }, (err) => console.error('Profile live-sync error:', err));
     return () => unsubscribe();
   }, [dbInstance, user?.uid]);
+
+  // 1c. Prewarm the Arena clock-sync measurement as soon as we know who's
+  // signed in, long before any duel actually needs it. getServerClockOffset()
+  // (lib/challengeEngine.js) runs 5 sequential Firestore round trips to
+  // measure this device's clock drift from the server — on a real mobile
+  // network that's routinely 1-3 seconds. It used to only ever get called
+  // for the first time once a duel's lobby reached "both ready", which put
+  // that whole measurement directly on the critical path of writing/reading
+  // `matchStartAt` — the exact 1-3s of "sometimes the duel takes a couple
+  // extra seconds to actually start" a player would see on their very first
+  // match of a session. Firing it here means it's almost always already
+  // resolved and cached by the time anyone reaches a duel. Fire-and-forget:
+  // the result is cached at module scope in challengeEngine.js and read from
+  // there by DrillWrapper/useDuelMatchStart whenever a duel actually happens.
+  useEffect(() => {
+    if (!ARENA_ENABLED || !user?.uid) return;
+    getServerClockOffset().catch(() => {});
+  }, [user?.uid]);
 
   // 2. Set up visibility presence tracking
   useEffect(() => {
@@ -267,6 +361,26 @@ export function AuthProvider({ children }) {
   };
 
   // 4. Finish a brand-new signup once the player has chosen a unique display name.
+  //
+  // Display names are permanent from this point on (see firestore.rules —
+  // the users/{uid} update rule locks the field out entirely) and globally
+  // unique, case-insensitively: the Arena's "invite a friend" flow searches
+  // the online player list by this exact name, so two people sharing one
+  // would make that search useless, and a name that could later change would
+  // let someone quietly stop being findable — or hand their identity to
+  // whoever claims it next.
+  //
+  // Uniqueness is enforced two ways, because this project has one generation
+  // of accounts that predates the second:
+  //  1. usernames/{lowercased name} — a reservation doc created atomically
+  //     alongside the profile in one batch. Firestore only allows a `create`
+  //     when the doc doesn't already exist, so if two people submit the same
+  //     name in the same instant, only one batch can ever actually commit —
+  //     this is the real guarantee, not just a client-side courtesy check.
+  //  2. A query against existing users/{uid} docs, case-sensitive — a
+  //     fallback that catches collisions with pre-existing accounts created
+  //     before the usernames/ collection existed (and therefore never
+  //     reserved their name there). New accounts are always covered by #1.
   const completeSignup = async (displayName) => {
     if (!pendingSignup || !dbInstance) return { ok: false, error: 'Not ready — try again.' };
 
@@ -274,7 +388,17 @@ export function AuthProvider({ children }) {
     if (clean.length < 3) return { ok: false, error: 'Must be at least 3 characters.' };
     if (clean.length > 20) return { ok: false, error: 'Must be 20 characters or fewer.' };
 
+    const nameKey = clean.toLowerCase();
+
     try {
+      const nameRef = doc(dbInstance, 'usernames', nameKey);
+      const nameSnap = await getDoc(nameRef);
+      if (nameSnap.exists()) return { ok: false, error: 'That name is already taken.' };
+
+      // Fallback check for pre-existing accounts not yet in usernames/ (see
+      // note above) — exact-match only, but that's the same guarantee this
+      // whole check used to be, so it's strictly an improvement, never a
+      // regression.
       const usersRef = collection(dbInstance, 'users');
       const q = query(usersRef, where('displayName', '==', clean));
       const snap = await getDocs(q);
@@ -295,7 +419,16 @@ export function AuthProvider({ children }) {
         createdAt: serverTimestamp(),
         lastSeen: serverTimestamp(),
       };
-      await setDoc(doc(dbInstance, 'users', pendingSignup.uid), publicProfile);
+
+      // Reserve the name and create the profile together — if someone else's
+      // signup wins the race and reserves nameKey a moment after the checks
+      // above, this whole batch is rejected by firestore.rules (no `update`
+      // path for usernames/{name}) and NEITHER document is written, so the
+      // profile can never exist without a matching reservation.
+      const batch = writeBatch(dbInstance);
+      batch.set(nameRef, { uid: pendingSignup.uid });
+      batch.set(doc(dbInstance, 'users', pendingSignup.uid), publicProfile);
+      await batch.commit();
 
       const profile = { ...publicProfile, email: pendingSignup.email || '' };
       setUser(profile);
@@ -304,6 +437,9 @@ export function AuthProvider({ children }) {
       return { ok: true };
     } catch (err) {
       console.error('Failed to complete signup:', err);
+      if (err?.code === 'permission-denied') {
+        return { ok: false, error: 'That name is already taken.' };
+      }
       return { ok: false, error: 'Something went wrong — try again.' };
     }
   };

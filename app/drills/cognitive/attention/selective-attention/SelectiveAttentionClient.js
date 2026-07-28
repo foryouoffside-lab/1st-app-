@@ -739,7 +739,7 @@ export default function SelectiveAttentionClient() {
     window.addEventListener('resize', resizeItemCanvas);
     window.addEventListener('orientationchange', resizeItemCanvas);
 
-    const baseItemRadius = () => (window.innerWidth >= 640 ? 24 : 20);
+    const baseItemRadius = () => (window.innerWidth >= 640 ? 22 : 18); // ~10% smaller for extra room to move
 
     const draw = (timestamp) => {
       const cvs = itemCanvasRef.current;

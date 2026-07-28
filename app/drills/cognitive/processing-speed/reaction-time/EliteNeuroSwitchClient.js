@@ -263,7 +263,6 @@ export default function EliteNeuroSwitchClient() {
     sceneDirty: true
   });
 
-  const [deviceScale, setDeviceScale] = useState(1.0);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const heartbeatTimerRef = useRef(null);
@@ -280,20 +279,12 @@ export default function EliteNeuroSwitchClient() {
     phaseRef.current = phase;
   }, [phase]);
 
+  // Matches KineticInterceptClient.js's (Moving Target) own getTargetRadius
+  // exactly — that drill's ball size was the reference the rest of the
+  // processing-speed ball drills were sized up to match.
   const getTargetRadius = useCallback((W, H) => {
-    const isMobile = deviceScale < 1;
-    if (isMobile) {
-      const screenFactor = Math.min(W / 800, H / 450);
-      return Math.max(14, Math.round(22 * screenFactor * deviceScale));
-    } else {
-      const baseRadius = 48;
-      if (document.fullscreenElement) {
-        return Math.max(20, baseRadius);
-      } else {
-        return Math.max(20, Math.round(baseRadius * (H / 1080)));
-      }
-    }
-  }, [deviceScale]);
+    return Math.max(24, Math.min(46, Math.min(W, H) * 0.075)) - 1;
+  }, []);
 
   useEffect(() => {
     setIsClient(true);
@@ -305,8 +296,6 @@ export default function EliteNeuroSwitchClient() {
       setBestLevel(saved.bestLevel);
     } catch (e) {}
 
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent || '') || ('ontouchstart' in window);
-    setDeviceScale(isMobile ? 0.8 : 1.25);
     setTimeout(() => { if (mountedRef.current) setLoading(false); }, 200);
 
     const handleFsChange = () => setIsFullscreen(!!document.fullscreenElement);
@@ -685,7 +674,7 @@ export default function EliteNeuroSwitchClient() {
     const drawLoop = (ts) => {
       if (phaseRef.current !== 'playing') return;
       // ~60fps cap — no point redrawing faster than this on 90-120Hz phones.
-      if (ts - lastDrawTs < 15) {
+      if (ts - lastDrawTs < 32) {
         animId = requestAnimationFrame(drawLoop);
         return;
       }
@@ -896,7 +885,7 @@ export default function EliteNeuroSwitchClient() {
     const by = (bluePosRef.current.y / 100) * H;
 
     const radius = getTargetRadius(W, H);
-    const hitRadius = radius * 1.5;
+    const hitRadius = radius * 1.3;
 
     const distToRed = Math.hypot(x - rx, y - ry);
     const distToBlue = Math.hypot(x - bx, y - by);
@@ -956,7 +945,13 @@ export default function EliteNeuroSwitchClient() {
         setTimeRemaining(0);
         endGameRef.current?.('time');
       } else {
-        setTimeRemaining(timeRemainingRef.current);
+        // Only when the DISPLAYED whole second changes — same fix as
+        // DualTargetFlowClient/FingerSequencingClient/GridMemorizationClient/
+        // TowerOfHanoiClient. The play field here is canvas-driven so this
+        // one only re-renders a small HUD tree, but it's free to make consistent.
+        setTimeRemaining((prev) => (
+          Math.ceil(prev) === Math.ceil(timeRemainingRef.current) ? prev : timeRemainingRef.current
+        ));
       }
     }, 200);
     scheduleHeartbeat();
@@ -1050,6 +1045,28 @@ export default function EliteNeuroSwitchClient() {
     }, delay);
     return () => clearTimeout(t);
   }, [isChallenge, matchStartAt, phase, enterDrill]);
+
+  // Pre-warm the landscape lock as soon as we know a duel is about to
+  // start, instead of waiting until the synchronized matchStartAt instant
+  // to begin it. lockLandscape() calls into Android's native orientation
+  // API, and how long it actually takes to finish rotating the device
+  // varies meaningfully by device/current-orientation — doing this AT
+  // matchStartAt meant the real game start happened at matchStartAt +
+  // however long THIS device's rotation took, which differed between the
+  // two duelists and showed up as a 1-2s gap between when their matches
+  // visibly began. The shared countdown always has a few seconds of lead
+  // time before matchStartAt (see MATCH_COUNTDOWN_MS in DrillWrapper.js),
+  // so there's room to finish this well beforehand on both devices —
+  // enterDrill's own lockLandscape() call then just resolves immediately
+  // since the device is already there.
+  useEffect(() => {
+    if (!isChallenge || !matchStartAt) return;
+    if (Capacitor.isNativePlatform()) {
+      StatusBar.setOverlaysWebView({ overlay: true }).catch(() => {});
+      StatusBar.hide().catch(() => {});
+    }
+    lockLandscape().catch(() => {});
+  }, [isChallenge, matchStartAt]);
 
   const prevChallengeIdRef = useRef(challengeId);
   useEffect(() => {
@@ -1215,9 +1232,14 @@ export default function EliteNeuroSwitchClient() {
           <>
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
               {/* scaleX, not width — a width animation forces layout + paint on
-                  every clock tick for the whole match; a transform is composited. */}
+                  every clock tick for the whole match; a transform is composited.
+                  duration-1000, not 100 — the state driving this only updates
+                  once a second (see the throttle above), so a 100ms transition
+                  meant the bar snapped quickly then sat frozen for ~900ms
+                  instead of gliding the full second, matching DualTargetFlowClient's
+                  already-correct 1000ms pairing. */}
               <div
-                className={`h-full w-full origin-left transition-transform duration-100 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-rose-500'}`}
+                className={`h-full w-full origin-left transition-transform duration-1000 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-rose-500'}`}
                 style={{ transform: `scaleX(${timePct / 100})` }}
               />
             </div>

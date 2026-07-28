@@ -34,35 +34,71 @@ service cloud.firestore {
           // from just self-writing inflated leaderboard stats directly —
           // that hole previously only existed on the "own document" branch
           // below, which had no bound on these fields at all.
+          //
+          // forfeitStreak/arenaLockedUntil are the same anti-abuse pair:
+          // forfeitStreak can only move like streak above (+1, or reset to
+          // 0 the moment a match is actually finished — see
+          // completeMatchInTx), and arenaLockedUntil can only ever move
+          // FORWARD in time, never back — so a player can't clear their own
+          // lockout by writing to their own doc; the only path that can set
+          // either field at all is this same bounded branch, driven by a
+          // real match completing.
           request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['wins', 'losses', 'streak', 'lastSeen', 'online', 'eiq']) &&
+            .hasOnly(['wins', 'losses', 'streak', 'lastSeen', 'online', 'eiq', 'forfeitStreak', 'arenaLockedUntil']) &&
           request.resource.data.get('wins', 0) <= resource.data.get('wins', 0) + 1 &&
           request.resource.data.get('losses', 0) <= resource.data.get('losses', 0) + 1 &&
           request.resource.data.get('streak', 0) <= resource.data.get('streak', 0) + 1 &&
           request.resource.data.get('eiq', 0) >= 0 &&
           request.resource.data.get('eiq', 0) >= resource.data.get('eiq', 0) - 100 &&
-          request.resource.data.get('eiq', 0) <= resource.data.get('eiq', 0) + 100
+          request.resource.data.get('eiq', 0) <= resource.data.get('eiq', 0) + 100 &&
+          request.resource.data.get('forfeitStreak', 0) <= resource.data.get('forfeitStreak', 0) + 1 &&
+          request.resource.data.get('arenaLockedUntil', 0) >= resource.data.get('arenaLockedUntil', 0)
         ) ||
         (
           // Own document: full self-service access for everything else
-          // (name/avatar/online-status/settings/etc.), except (1) photoURL
-          // is capped — profile photos are stored inline as a base64 data
-          // URL (no Firebase Storage / Blaze plan needed), and this field is
+          // (avatar/online-status/settings/etc.), except (1) photoURL is
+          // capped — profile photos are stored inline as a base64 data URL
+          // (no Firebase Storage / Blaze plan needed), and this field is
           // read by every other player who sees this user in the
           // leaderboard or online list, so an oversized value would bloat
           // everyone else's reads; (2) email is never allowed here at all
-          // (see note above); and (3) wins/losses/streak/eiq must NEVER move
-          // through this branch, even on your own doc — those only ever move
-          // through the bounded branch above.
+          // (see note above); (3) wins/losses/streak/eiq/forfeitStreak/
+          // arenaLockedUntil must NEVER move through this branch, even on
+          // your own doc — those only ever move through the bounded branch
+          // above; and (4) displayName is permanently locked after account
+          // creation — it's the identity a friend searches for to send a
+          // duel invite (see the Arena player-search filter), and letting it
+          // change would let someone silently become unfindable, or worse,
+          // impersonate whoever the name is handed off to next. The
+          // one-time reservation that keeps it unique lives in
+          // usernames/{name} below.
           request.auth.uid == uid &&
           !('email' in request.resource.data) &&
           !request.resource.data.diff(resource.data).affectedKeys()
-            .hasAny(['wins', 'losses', 'streak', 'eiq']) &&
+            .hasAny(['wins', 'losses', 'streak', 'eiq', 'displayName', 'forfeitStreak', 'arenaLockedUntil']) &&
           (!('photoURL' in request.resource.data) || request.resource.data.photoURL.size() < 300000)
         )
       );
 
       allow delete: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Username reservations — doc id is the lowercased display name, so
+    // Firestore's own "a create only succeeds if the document doesn't
+    // already exist" guarantee IS the uniqueness lock: two signups racing for
+    // the same name can both pass a client-side availability check, but only
+    // one of their `create`s here can ever actually land. No `update` rule
+    // means a reservation can never be handed to a different uid once made —
+    // that's what keeps a name pointing at one account for its whole
+    // lifetime, matching the display name itself being locked above. Written
+    // in the same batch as the users/{uid} doc it names (see completeSignup
+    // in contexts/AuthContext.js) — if this write is rejected because the
+    // name was just taken, the whole batch fails and no profile is created
+    // either, so the two documents can never disagree about who owns a name.
+    match /usernames/{name} {
+      allow read: if true;
+      allow create: if request.auth != null && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if false;
     }
 
     // 1v1 challenge/duel documents.

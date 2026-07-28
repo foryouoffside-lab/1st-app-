@@ -760,29 +760,6 @@ export default function StrobeLatencyClient() {
           WebkitTapHighlightColor: 'transparent' 
         }}
       >
-        <style>{`
-          @keyframes flash-cyan {
-            0% { background-color: rgba(6, 182, 212, 0.2); }
-            100% { background-color: transparent; }
-          }
-          @keyframes flash-red {
-            0% { background-color: rgba(239, 68, 68, 0.25); }
-            100% { background-color: transparent; }
-          }
-          .fx-flash {
-            position: absolute;
-            inset: 0;
-            pointer-events: none;
-            z-index: 55;
-            animation-duration: 0.15s;
-            animation-timing-function: ease-out;
-            animation-fill-mode: forwards;
-          }
-          /* success flashes are intentionally inert — see globals.css */
-          .fx-flash-cyan { animation-name: none; background: none; }
-          .fx-flash-red { animation-name: flash-red; }
-        `}</style>
-
         {phase === 'playing' && dangerLevel > 0.06 && (
           <div className="fx-vignette" style={{ '--v-min': Math.max(0.05, dangerLevel * 0.25), '--v-max': Math.min(0.55, dangerLevel * 0.75), animationDuration: `${heartbeatTempoRef.current}ms` }} />
         )}

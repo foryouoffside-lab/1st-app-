@@ -9,6 +9,7 @@ import {
 import { msUntilMidnight, getDailyChallenges } from '../../lib/dailyChallenge';
 import { getStreak } from '../../lib/progressStore';
 import { DRILL_INDEX } from '../../lib/drillIndex';
+import { getDrillGroup, getGroupIcon, getGroupMeta } from '../../lib/drillGroups';
 
 // Why each of today's 3 drills was picked — mirrors the `reason` tag
 // lib/dailyChallenge.js attaches during personalization. 'random' (cold
@@ -71,9 +72,6 @@ export default function DailyClient() {
 
   return (
     <div className="min-h-screen pb-28 text-slate-100 bg-[#050508]" style={{ paddingTop: 'calc(16px + env(safe-area-inset-top))' }}>
-      {/* Background Gradient */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-[320px] bg-[radial-gradient(circle_at_50%_0%,rgba(139,92,246,0.18),transparent_55%)]" />
-
       <div className="relative px-4 pt-0 max-w-lg mx-auto space-y-6">
         
         {/* Header */}
@@ -129,21 +127,26 @@ export default function DailyClient() {
             const difficulty = details.difficulty || 'intermediate';
             const duration = details.duration || '45s';
             const reasonMeta = REASON_META[drill.reason] || null;
+            const group = getDrillGroup(details);
+            const DrillIcon = getGroupIcon(group);
+            const groupAccent = getGroupMeta(group).accent;
 
             return (
-              <div 
+              <div
                 key={drill.id}
-                className={`relative rounded-3xl border p-5 transition-all duration-300 ${
-                  completed 
-                    ? 'border-emerald-500/20 bg-emerald-950/5' 
+                className={`viewfinder-box relative rounded-3xl border p-5 transition-all duration-300 ${
+                  completed
+                    ? 'border-emerald-500/20 bg-emerald-950/5'
                     : 'border-neutral-800 bg-[#12131c] hover:border-neutral-700'
                 }`}
+                style={{ '--a': groupAccent }}
               >
+                <div className="viewfinder-corner tl" />
+                <div className="viewfinder-corner tr" />
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex gap-3.5">
-                    {/* Emoji Box */}
-                    <div className="w-12 h-12 rounded-2xl bg-neutral-900 flex items-center justify-center text-2xl shadow-inner shrink-0">
-                      {drill.emoji || '🎯'}
+                    <div className="lab-ic shrink-0">
+                      <DrillIcon className="w-5 h-5" />
                     </div>
                     <div>
                       <h3 className="text-base font-black text-white leading-snug">

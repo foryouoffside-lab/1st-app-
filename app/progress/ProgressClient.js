@@ -184,14 +184,14 @@ export default function ProgressClient() {
   const handleSaveName = async () => {
     if (!tempName.trim()) return;
     try {
-      if (user && db) {
-        const userRef = doc(db, 'users', user.uid);
-        await updateDoc(userRef, { displayName: tempName.trim() });
-        user.displayName = tempName.trim();
-        localStorage.setItem('sd_user_session', JSON.stringify(user));
-      } else {
-        localStorage.setItem('sd_guest_name', tempName.trim());
-      }
+      // Signed-in accounts can no longer rename here — display names are
+      // permanent once chosen at signup (see completeSignup in
+      // contexts/AuthContext.js and the users/{uid} rule in firestore.rules,
+      // which reject a displayName change outright). This path only ever
+      // runs for guests now, whose local-only nickname isn't a unique,
+      // invite-by-name account identity, so it's free to change.
+      if (user && db) return;
+      localStorage.setItem('sd_guest_name', tempName.trim());
       setEditingName(false);
       setCleared(c => !c);
     } catch (e) {
@@ -244,8 +244,16 @@ export default function ProgressClient() {
       }
 
       await updateDoc(doc(db, 'users', user.uid), { photoURL: dataUrl });
-      user.photoURL = dataUrl;
-      localStorage.setItem('sd_user_session', JSON.stringify(user));
+      // Don't mutate `user` in place — it's the exact object AuthContext holds
+      // in its own state, and assigning a property on it directly changes the
+      // data without ever calling setUser, so nothing that reads `user` from
+      // context (this page, the header, Arena) re-renders to show the new
+      // photo. AuthContext's own onSnapshot live-sync on this doc (see
+      // contexts/AuthContext.js) picks up this write and updates the real
+      // state properly; this local copy only needs to exist to refresh the
+      // cached session so a cold app restart doesn't repaint the old photo
+      // for a moment before that listener reattaches.
+      localStorage.setItem('sd_user_session', JSON.stringify({ ...user, photoURL: dataUrl }));
 
       setPhotoFile(null);
       setCleared(c => !c);
@@ -415,6 +423,7 @@ export default function ProgressClient() {
               <img
                 src={user.photoURL}
                 alt={displayName}
+                referrerPolicy="no-referrer"
                 className="p-avatar object-cover"
               />
             ) : (
@@ -459,7 +468,10 @@ export default function ProgressClient() {
               </>
             )}
           </div>
-          {!editingName && (
+          {/* Guests only — a signed-in account's display name is permanent
+              (see handleSaveName above), so there's nothing left to edit
+              here once a real account exists. */}
+          {!editingName && !user && (
             <button className="p-edit cursor-pointer" onClick={handleEditName}>Edit Profile</button>
           )}
         </div>
@@ -540,13 +552,14 @@ export default function ProgressClient() {
           <div className="p-badges">
             {RANK_TIERS.map(tier => {
               const isUnlocked = unlockedBadges.has(tier.id) || (tier.id === 'practice' && drillsP > 0);
+              const Icon = tier.icon;
               return (
-                <span 
-                  key={tier.id} 
+                <span
+                  key={tier.id}
                   className={`p-badge ${tier.bg} ${tier.border} ${tier.color} border transition duration-200 ${isUnlocked ? 'opacity-100' : 'opacity-25'}`}
                   title={isUnlocked ? `Unlocked! Achieved on a drill.` : `Locked. Achieve ${tier.minScore}% to unlock.`}
                 >
-                  <span>{tier.icon}</span>
+                  <Icon className="w-3 h-3" />
                   <span>{tier.name}</span>
                 </span>
               );

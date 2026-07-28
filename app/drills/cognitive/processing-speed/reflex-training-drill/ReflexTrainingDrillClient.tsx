@@ -282,8 +282,6 @@ export default function ReflexTrainingDrillClient() {
     dashLimit: 150
   });
 
-  const [deviceScale, setDeviceScale] = useState(1.0);
-
   const roundTimerRef = useRef<any>(null);
   const gameTimerRef = useRef<any>(null);
   const heartbeatTimerRef = useRef<any>(null);
@@ -298,23 +296,14 @@ export default function ReflexTrainingDrillClient() {
     phaseRef.current = phase;
   }, [phase]);
 
-  // Radius helper — constant regardless of level (matches the sibling
-  // ReactionTimeTestClient.tsx and ConflictReflexClient.js's getBallRadius
-  // approach); only one target is ever on screen here, so there's no
-  // crowding constraint forcing it smaller at high difficulty.
+  // Radius helper — constant regardless of level; only one target is ever on
+  // screen here, so there's no crowding constraint forcing it smaller at high
+  // difficulty. Matches KineticInterceptClient.js's (Moving Target) own
+  // getTargetRadius exactly — that drill's ball size was the reference the
+  // rest of the processing-speed ball drills were sized up to match.
   const getTargetRadius = useCallback((W: number, H: number) => {
-    if (deviceScale < 1) {
-      const screenFactor = Math.min(W / 800, H / 450);
-      return Math.max(14, Math.round(22 * screenFactor * deviceScale));
-    } else {
-      const baseRadius = 48;
-      if (document.fullscreenElement) {
-        return Math.max(20, Math.round(baseRadius));
-      } else {
-        return Math.max(20, Math.round(baseRadius * (H / 1080)));
-      }
-    }
-  }, [deviceScale]);
+    return Math.max(24, Math.min(46, Math.min(W, H) * 0.075)) - 1;
+  }, []);
 
   // ── Mount / cleanup ────────────────────────────────────────
   useEffect(() => {
@@ -327,8 +316,6 @@ export default function ReflexTrainingDrillClient() {
       setBestLevel(saved.bestLevel);
     } catch (e) {}
 
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent || '') || ('ontouchstart' in window);
-    setDeviceScale(isMobile ? 0.8 : 1.2);
     setTimeout(() => { if (mountedRef.current) setLoading(false); }, 200);
 
     return () => {
@@ -606,7 +593,7 @@ export default function ReflexTrainingDrillClient() {
 
     const drawLoop = (ts: number) => {
       if (phaseRef.current !== 'playing') return;
-      if (ts - lastDrawTs < 15) { animId = requestAnimationFrame(drawLoop); return; }
+      if (ts - lastDrawTs < 32) { animId = requestAnimationFrame(drawLoop); return; }
       lastDrawTs = ts;
       if (!trackingState.current.lastTime) {
         trackingState.current.lastTime = ts;
@@ -814,7 +801,7 @@ export default function ReflexTrainingDrillClient() {
     const radius = getTargetRadius(W, H);
 
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent || '') || ('ontouchstart' in window);
-    const hitRadius = radius * (isMobile ? 2.25 : 1.75);
+    const hitRadius = radius * (isMobile ? 1.9 : 1.5);
 
     if (dist <= hitRadius) {
       const rt = Date.now() - lastTargetSpawnTimeRef.current;
@@ -1041,7 +1028,7 @@ export default function ReflexTrainingDrillClient() {
         }}
       >
         {phase === 'playing' && dangerLevel > 0.06 && (
-          <div className="fx-vignette" style={{ '--v-min': Math.max(0.05, dangerLevel * 0.25), '--v-max': Math.min(0.55, dangerLevel * 0.75), animationDuration: `${heartbeatTempoRef.current}ms` }} />
+          <div className="fx-vignette" style={{ '--v-min': Math.max(0.05, dangerLevel * 0.25), '--v-max': Math.min(0.55, dangerLevel * 0.75), animationDuration: `${heartbeatTempoRef.current}ms` } as React.CSSProperties} />
         )}
 
         {flashes.map((f) => (

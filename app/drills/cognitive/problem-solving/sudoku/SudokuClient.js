@@ -323,6 +323,19 @@ export default function SudokuClient() {
   const lastInputTimeRef = useRef(0);
   const cellWrongAttemptsRef = useRef({});
 
+  // Next round's puzzle, generated ahead of time in the browser's idle time
+  // while the player is still solving the current board — keyed by grid
+  // size. Solving a jigsaw board (5x5/7x7) is a real backtracking search, and
+  // punching unique-solution holes into it calls that same solver again once
+  // per candidate cell — at 7x7 that's a noticeably heavy synchronous
+  // computation. Running it synchronously the instant a round clears is
+  // exactly what produced the "next grid takes a moment, some boxes don't
+  // appear instantly" lag: the main thread blocks on the solve before React
+  // can paint the new board. Pre-warming one round ahead means that cost is
+  // already paid by the time the player clears the board.
+  const nextPuzzleCacheRef = useRef({});
+  const precomputeTimeoutRef = useRef(null);
+
   const syncToUI = useCallback(() => {
     setScore(scoreRef.current);
     setStats({ ...statsRef.current });
@@ -342,6 +355,7 @@ export default function SudokuClient() {
     if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
     if (overdriveTimeoutRef.current) clearTimeout(overdriveTimeoutRef.current);
     if (heartbeatTimerRef.current) clearTimeout(heartbeatTimerRef.current);
+    if (precomputeTimeoutRef.current) clearTimeout(precomputeTimeoutRef.current);
   }, []);
 
   useEffect(() => {
@@ -590,7 +604,11 @@ export default function SudokuClient() {
     return solutionCount; 
   }, [isValid]);
 
-  const generateSudoku = useCallback((size) => {
+  // Pure puzzle builder — identical logic to the old generateSudoku, just
+  // returning its result instead of pushing straight into React state, so it
+  // can run either synchronously (fallback) or ahead of time in idle time
+  // (the normal path — see schedulePrecompute below).
+  const buildPuzzle = useCallback((size) => {
     const tc = size * size;
     let regions = null;
     let solved = null;
@@ -613,45 +631,75 @@ export default function SudokuClient() {
     } else {
       solved = solveSudoku(Array(tc).fill(null), size, regions);
     }
-    setRegionsArray(regions);
 
     const puzzle = [...solved];
     const initial = new Set();
-    
-    let ctk; 
-    if (size === 4) ctk = 8; 
-    else if (size === 5) ctk = 10; 
-    else if (size === 6) ctk = 14; 
-    else ctk = 18; 
-    
+
+    let ctk;
+    if (size === 4) ctk = 8;
+    else if (size === 5) ctk = 10;
+    else if (size === 6) ctk = 14;
+    else ctk = 18;
+
     const cellsToBlank = Array.from({ length: tc }, (_, i) => i).sort(() => Math.random() - 0.5);
     let blankedCount = 0;
     for (const cellIdx of cellsToBlank) {
       if (blankedCount >= tc - ctk) break;
       const oldVal = puzzle[cellIdx];
       puzzle[cellIdx] = null;
-      
+
       const solutions = solveSudokuCount(puzzle, size, regions);
       if (solutions !== 1) {
-        puzzle[cellIdx] = oldVal; 
+        puzzle[cellIdx] = oldVal;
       } else {
         blankedCount++;
       }
     }
-    
+
     for (let i = 0; i < tc; i++) {
       if (puzzle[i] !== null) {
         initial.add(i);
       }
     }
-    
-    setSolution(solved); 
-    setGrid(puzzle); 
-    setInitialIndices(initial); 
+
+    return { puzzle, solved, initial, regions };
+  }, [solveSudoku, solveSudokuCount]);
+
+  // Warms nextPuzzleCacheRef for `size` during browser idle time, so the
+  // heavy solve/uniqueness-check work is already done by the time the player
+  // actually reaches that size. requestIdleCallback isn't available in every
+  // WebView, so a short setTimeout is the fallback — still off the frame
+  // that's busy rendering the current round's clear celebration.
+  const schedulePrecompute = useCallback((size) => {
+    if (nextPuzzleCacheRef.current[size]) return;
+    const run = () => {
+      if (!mountedRef.current || nextPuzzleCacheRef.current[size]) return;
+      nextPuzzleCacheRef.current[size] = buildPuzzle(size);
+    };
+    if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(run, { timeout: 1000 });
+    } else {
+      precomputeTimeoutRef.current = setTimeout(run, 50);
+    }
+  }, [buildPuzzle]);
+
+  const generateSudoku = useCallback((size) => {
+    const cached = nextPuzzleCacheRef.current[size];
+    const { puzzle, solved, initial, regions } = cached || buildPuzzle(size);
+    if (cached) delete nextPuzzleCacheRef.current[size];
+
+    setRegionsArray(regions);
+    setSolution(solved);
+    setGrid(puzzle);
+    setInitialIndices(initial);
     setSelectedCell(null);
     cellWrongAttemptsRef.current = {};
     lastInputTimeRef.current = Date.now();
-  }, [solveSudoku, solveSudokuCount]);
+
+    // Get a head start on whichever size the player will hit next (either
+    // this same size again, if already at the 7x7 cap, or one bigger).
+    schedulePrecompute(Math.min(MAX_GRID_SIZE, size + 1));
+  }, [buildPuzzle, schedulePrecompute]);
 
   const handleCellClick = useCallback((index, e) => {
     if (e) {
@@ -945,28 +993,24 @@ export default function SudokuClient() {
             animation: shake 0.3s ease-in-out;
           }
 
-          @keyframes flash-red {
-            0% { background-color: rgba(239, 68, 68, 0.25); }
-            100% { background-color: transparent; }
-          }
-          @keyframes flash-cyan {
-            0% { background-color: rgba(34, 211, 238, 0.25); }
-            100% { background-color: transparent; }
-          }
-          @keyframes flash-gold {
-            0% { background-color: rgba(250, 204, 21, 0.25); }
-            100% { background-color: transparent; }
+          @keyframes flash-fade {
+            0% { opacity: 1; }
+            100% { opacity: 0; }
           }
           .fx-flash {
             position: absolute;
             inset: 0;
             pointer-events: none;
             z-index: 55;
-            animation-duration: 0.15s;
+            animation-name: flash-fade;
+            animation-duration: 0.2s;
             animation-timing-function: ease-out;
             animation-fill-mode: forwards;
           }
-          .fx-flash-red { animation-name: flash-red; }
+          /* Radial + sized at 30% (not a flat full-screen tint) so it fades
+             to fully transparent before reaching the edges — the grid's own
+             numbers stay fully readable through a mistake flash now. */
+          .fx-flash-red { background: radial-gradient(ellipse 30% 30% at 50% 50%, rgba(239,68,68,.35) 0%, rgba(239,68,68,.35) 30%, rgba(239,68,68,.15) 60%, transparent 92%); }
           /* success flashes are intentionally inert — see globals.css */
           .fx-flash-cyan { animation-name: none; background: none; }
           .fx-flash-gold { animation-name: none; background: none; }
@@ -1047,7 +1091,7 @@ export default function SudokuClient() {
 
             <div className="absolute top-5 right-5 z-40 flex flex-col items-end pointer-events-none select-none">
               <span className={`text-3xl font-black font-mono leading-none ${localTimeRemaining <= 10 ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}>
-                {localTimeRemaining.toFixed(1)}s
+                {Math.ceil(localTimeRemaining)}s
               </span>
               <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest mt-1">Time Left</span>
             </div>

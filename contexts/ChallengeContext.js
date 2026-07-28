@@ -66,20 +66,33 @@ export function ChallengeProvider({ children }) {
     return () => unsubscribe();
   }, [user, db]);
 
-  // This user's own most recent sent challenge, live. Queried by `fromUid`
-  // only (no status filter) so a decline/accept transition is observed as an
-  // update rather than the doc dropping out of the result set.
+  // This user's own most recent sent challenge, live. Scoped server-side to
+  // `fromUid` + the transient statuses this actually cares about — it used to
+  // query every challenge this user had EVER sent with no status filter at
+  // all, relying purely on a client-side filter below to ignore the
+  // long-since-`completed`/`playing` ones. That result set only grows for the
+  // life of the account, and this Provider is mounted globally on every page,
+  // so every match ever played became permanent extra Firestore read cost +
+  // main-thread iteration work on every single snapshot, forever. `status`
+  // still transitions in place (accept/decline flips it without deleting the
+  // doc), so a doc simply drops out of this filtered result set once it's no
+  // longer pending/accepted/declined — exactly the same "observed as an
+  // update" behavior as before, just without dragging the user's whole match
+  // history along for the ride.
   useEffect(() => {
     if (!ARENA_ENABLED || !user || !db) {
       setOutgoingChallenge(null);
       return;
     }
-    const q = query(collection(db, 'challenges'), where('fromUid', '==', user.uid));
+    const q = query(
+      collection(db, 'challenges'),
+      where('fromUid', '==', user.uid),
+      where('status', 'in', ['pending', 'accepted', 'declined'])
+    );
     const unsubscribe = onSnapshot(q, (snapshot) => {
       let latest = null;
       snapshot.forEach((docSnap) => {
         const data = { id: docSnap.id, ...docSnap.data() };
-        if (!['pending', 'accepted', 'declined'].includes(data.status)) return;
         if (!latest || (data.createdAt?.seconds || 0) > (latest.createdAt?.seconds || 0)) latest = data;
       });
       // Every consumer of this value (ChallengeStatusToast, DrillWrapper,

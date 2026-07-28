@@ -81,52 +81,9 @@ h1, h2, h3, .display {
   }
 }
 
-/* ── logo ───────────────────────────────────────────────── */
-.logo { display: flex; align-items: center; gap: 8px; }
-.logo-mark { width: 27px; height: 27px; border-radius: 8px; background: var(--brand-grad); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.logo-word { font-family: var(--font-space-grotesk), 'Space Grotesk', sans-serif; font-weight: 700; font-size: 15.5px; }
-.logo-word em { font-style: normal; background: linear-gradient(90deg, var(--brand-1), var(--brand-3)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
-
-/* ── desktop header ─────────────────────────────────────── */
-.dh { display: flex; align-items: center; justify-content: space-between; padding: 14px 26px; background: rgba(10, 11, 20, .92); backdrop-filter: blur(20px); border-bottom: 1px solid var(--line-soft); gap: 20px; }
-.dh-left { display: flex; align-items: center; gap: 32px; }
-.dh-nav { display: flex; align-items: center; gap: 24px; font-size: 13.5px; font-weight: 600; color: var(--text-dim); }
-.dh-nav .active { color: var(--text); }
-.dh-nav .drills-trigger { display: flex; align-items: center; gap: 5px; color: var(--text); }
-.caret { width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid var(--text-dim); }
-.dh-right { display: flex; align-items: center; gap: 12px; }
-.chip { display: flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; padding: 6px 10px; border-radius: 99px; }
-.chip.streak { background: rgba(249, 115, 22, .15); color: #fb923c; border: 1px solid rgba(249, 115, 22, .25); }
-.chip.level { background: rgba(139, 92, 246, .15); color: var(--brand-3); border: 1px solid rgba(139, 92, 246, .28); }
-.avatar { width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg, #f472b6, #a78bfa); display: flex; align-items: center; justify-content: center; font-family: var(--font-space-grotesk), 'Space Grotesk', sans-serif; font-weight: 700; font-size: 12px; color: #fff; flex-shrink: 0; }
-
-/* ── identity block ──────────────────────────────────────── */
-.id-block { display: flex; align-items: center; gap: 10px; }
-.id-block .who { display: flex; flex-direction: column; line-height: 1.15; }
-.id-block .who b { font-size: 13.5px; font-weight: 700; }
-.id-block .who span { font-size: 10.5px; color: var(--text-faint); }
-.id-block.sm .avatar { width: 24px; height: 24px; font-size: 10px; }
-.id-block.sm .who b { font-size: 12px; }
-.id-block.sm .who span { display: none; }
-
-/* ── mobile header ──────────────────────────────────────── */
-.mh { display: flex; align-items: center; justify-content: space-between; padding: 11px 15px; background: rgba(5, 5, 8, .95); backdrop-filter: blur(20px); border-bottom: 1px solid var(--line-soft); }
-.mh .logo-mark { width: 21px; height: 21px; border-radius: 6px; }
-.mh .logo-word { font-size: 13px; }
-.mh-right { display: flex; gap: 6px; }
-.mh .chip { font-size: 10px; padding: 3px 7px; }
+/* ── mobile header XP bar (components/MobileHeader.js) ──── */
 .xp-track { height: 2px; background: rgba(255, 255, 255, .05); }
 .xp-fill { height: 100%; background: var(--brand-grad); }
-
-/* ── bottom nav ─────────────────────────────────────────── */
-.bn { display: flex; justify-content: space-around; align-items: center; padding: 9px 4px 12px; background: rgba(10, 11, 20, .95); backdrop-filter: blur(20px); border-top: 1px solid var(--line-soft); margin-top: auto; }
-.bn-item { display: flex; flex-direction: column; align-items: center; gap: 4px; }
-.bn-item svg { width: 16px; height: 16px; stroke: var(--text-faint); }
-.bn-item.active svg { stroke: var(--brand-3); }
-.bn-item span { font-size: 9px; font-weight: 700; color: var(--text-faint); }
-.bn-item.active span { color: var(--brand-3); }
-.ic-wrap { width: 30px; height: 23px; border-radius: 9px; display: flex; align-items: center; justify-content: center; }
-.bn-item.active .ic-wrap { background: rgba(139, 92, 246, .15); }
 
 /* ── shared icon rule ───────────────────────────────────── */
 .icon { stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; display: block; }
@@ -141,6 +98,15 @@ h1, h2, h3, .display {
 /* ── glow accent ── */
 .glow { position: absolute; top: -30px; right: -30px; width: 80px; height: 80px; border-radius: 50%; background: var(--a); opacity: .16; filter: blur(6px); pointer-events: none; }
 
+/* ── session-log icon treatment (kept from the reverted redesign) ── */
+.viewfinder-box { position: relative; isolation: isolate; }
+.viewfinder-corner { position: absolute; width: 7px; height: 7px; pointer-events: none; border-color: currentColor; opacity: 0.6; }
+.viewfinder-corner.tl { top: -1px; left: -1px; border-top: 1.5px solid; border-left: 1.5px solid; }
+.viewfinder-corner.tr { top: -1px; right: -1px; border-top: 1.5px solid; border-right: 1.5px solid; }
+.viewfinder-corner.bl { bottom: -1px; left: -1px; border-bottom: 1.5px solid; border-left: 1.5px solid; }
+.viewfinder-corner.br { bottom: -1px; right: -1px; border-bottom: 1.5px solid; border-right: 1.5px solid; }
+.lab-ic { width: 34px; height: 34px; border-radius: 6px; background: var(--card-raised); border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; color: var(--a, var(--brand-3)); position: relative; }
+
 /* ── difficulty pill / duration ─────────────────────────────
    Neutral chip + a small semantic dot, instead of a solid-color-filled
    pill — the old version put a saturated difficulty color right next to
@@ -153,6 +119,7 @@ h1, h2, h3, .display {
 .diff-pill.intermediate::before { background: #facc15; }
 .diff-pill.advanced::before { background: #fb923c; }
 .diff-pill.elite::before { background: #f87171; }
+.diff-pill.impossible::before { background: #dc2626; }
 .dur { font-size: 9.5px; color: var(--text-faint); white-space: nowrap; }
 
 /* ── play button ──────────────────────────────────────────── */
@@ -163,52 +130,23 @@ h1, h2, h3, .display {
 }
 .play-btn svg { width: 11px; height: 11px; margin-left: 1px; }
 
-/* ── adaptive hero: live challenge card (Home) ──────────── */
-.hero-challenge {
-  border-radius: 18px; padding: 20px; margin-bottom: 14px; position: relative; overflow: hidden;
-  background: linear-gradient(135deg, rgba(236, 72, 153, .20), rgba(139, 92, 246, .12)), var(--card);
-  border: 1px solid rgba(236, 72, 153, .35);
-  animation: heroPulse 2.6s ease-in-out infinite;
-}
-@keyframes heroPulse { 0%, 100% { box-shadow: 0 20px 50px -25px rgba(236, 72, 153, .3); } 50% { box-shadow: 0 24px 60px -20px rgba(236, 72, 153, .5); } }
-.hero-challenge .top { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #f472b6; position: relative; }
-.hero-challenge .vsrow { display: flex; align-items: center; justify-content: center; gap: 20px; margin: 14px 0 12px; position: relative; }
-.hero-challenge .who { display: flex; flex-direction: column; align-items: center; gap: 6px; }
-.hero-challenge .who span { font-size: 11px; font-weight: 700; color: var(--text-dim); }
-.hero-challenge .vsbadge { width: 26px; height: 26px; border-radius: 50%; background: rgba(236, 72, 153, .18); border: 1px solid rgba(236, 72, 153, .35); display: flex; align-items: center; justify-content: center; color: #f472b6; font-size: 10px; font-weight: 800; flex-shrink: 0; }
-.hero-challenge .drillname { text-align: center; font-family: var(--font-space-grotesk), 'Space Grotesk', sans-serif; font-weight: 700; font-size: 1.05rem; position: relative; }
-.hero-challenge .expiry { text-align: center; font-size: 11px; color: var(--text-faint); margin-top: 4px; position: relative; }
-.hero-challenge .cta-row { display: flex; gap: 10px; margin-top: 16px; position: relative; }
-.hero-challenge .accept { flex: 1; background: linear-gradient(90deg, #e2177b, #7e55f8); color: #fff; font-weight: 800; font-size: 13.5px; padding: 12px; border-radius: 11px; border: none; text-align: center; }
-.hero-challenge .decline { width: 44px; flex-shrink: 0; background: var(--card-raised); border: 1px solid var(--line); border-radius: 11px; display: flex; align-items: center; justify-content: center; color: var(--text-faint); }
-.hero-more { font-size: 11px; color: var(--text-faint); margin: -6px 0 16px; padding-left: 2px; }
-
-/* ── daily challenge card ────────────────────────────────── */
-.hero-row { display: grid; grid-template-columns: 1.5fr 1fr; gap: 16px; }
+/* ── daily challenge card (accent-driven, mirrors .cat-hero's premium
+   treatment below instead of a fixed purple/pink gradient) ────────── */
 .daily-card {
-  border-radius: 16px; padding: 22px; position: relative; overflow: hidden;
-  background: linear-gradient(135deg, rgba(99, 102, 241, .22), rgba(236, 72, 153, .10)), var(--card);
-  border: 1px solid rgba(139, 92, 246, .25);
+  border-radius: 20px; padding: 22px; position: relative; overflow: hidden;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--a, var(--brand-2)) 20%, transparent), transparent 60%), var(--card);
+  border: 1px solid color-mix(in srgb, var(--a, var(--brand-2)) 30%, transparent);
 }
-.daily-card::after { content: ""; position: absolute; top: -40%; right: -10%; width: 220px; height: 220px; background: radial-gradient(circle, rgba(167, 139, 250, .25), transparent 70%); }
-.daily-card .k { position: relative; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--brand-3); display: flex; align-items: center; gap: 6px; }
+.daily-card .glowspot { position: absolute; top: -34%; right: -10%; width: 220px; height: 220px; border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--a, var(--brand-2)) 32%, transparent), transparent 70%); animation: heroGlowPulse 3s ease-in-out infinite; pointer-events: none; }
+.daily-card .top { position: relative; display: flex; align-items: center; gap: 12px; }
+.daily-card .ic { width: 40px; height: 40px; border-radius: 12px; background: color-mix(in srgb, var(--a, var(--brand-2)) 22%, transparent); display: flex; align-items: center; justify-content: center; color: var(--a, var(--brand-3)); flex-shrink: 0; }
+.daily-card .k { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--a, var(--brand-3)); display: flex; align-items: center; gap: 6px; }
 .daily-card .t { position: relative; font-family: var(--font-space-grotesk), 'Space Grotesk', sans-serif; font-weight: 700; font-size: 1.4rem; margin-top: 8px; }
 .daily-card .d { position: relative; font-size: 12.5px; color: var(--text-dim); margin-top: 5px; }
-.daily-card .go { position: relative; margin-top: 16px; display: inline-flex; align-items: center; gap: 6px; background: var(--brand-grad-cta); color: #fff; font-weight: 600; font-size: 12.5px; padding: 9px 16px; border-radius: 10px; border: none; }
+.daily-card .go { position: relative; margin-top: 16px; display: inline-flex; align-items: center; gap: 8px; background: var(--a, var(--brand-2)); color: var(--ink); font-weight: 700; font-size: 13px; padding: 11px 20px; border-radius: 11px; border: none; }
 .daily-card.secondary { padding: 16px; }
 .daily-card.secondary .t { font-size: 1.02rem; }
 .daily-card.secondary .d { display: none; }
-
-/* ── XP/level snapshot card (Home) ──────────────────────── */
-.snap-card { border-radius: 16px; padding: 20px; background: var(--card); border: 1px solid var(--line); }
-.snap-top { display: flex; align-items: center; gap: 12px; }
-.ring { width: 46px; height: 46px; border-radius: 50%; background: conic-gradient(var(--brand-2) 64%, var(--card-raised) 0); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.ring i { width: 36px; height: 36px; border-radius: 50%; background: var(--card); display: flex; align-items: center; justify-content: center; font-family: var(--font-space-grotesk), 'Space Grotesk', sans-serif; font-weight: 700; font-size: 12px; font-style: normal; }
-.snap-top b { font-family: var(--font-space-grotesk), 'Space Grotesk', sans-serif; font-size: 14px; font-weight: 700; display: block; }
-.snap-top span { font-size: 11px; color: var(--text-faint); }
-.snap-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
-.snap-stats div b { display: block; font-family: var(--font-space-grotesk), 'Space Grotesk', sans-serif; font-weight: 700; font-size: 1.05rem; }
-.snap-stats div span { font-size: 10px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .05em; }
 
 /* ── category tiles (Home + /drills directory) ──────────── */
 .cat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
@@ -263,13 +201,6 @@ h1, h2, h3, .display {
 .cat-hero-stats div span { font-size: 10px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .05em; }
 .cat-hero .cta { position: relative; margin-top: 20px; display: inline-flex; align-items: center; gap: 8px; background: var(--a); color: var(--ink); font-weight: 700; font-size: 13px; padding: 11px 20px; border-radius: 11px; border: none; }
 
-/* ── filter chips row ──────────────────────────────────── */
-.filter-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; }
-.filter-chip { font-family: var(--font-inter), 'Inter', sans-serif; font-size: 11.5px; font-weight: 600; padding: 7px 13px; border-radius: 99px; background: var(--card); border: 1px solid var(--line); color: var(--text-dim); white-space: nowrap; cursor: pointer; }
-.filter-chip.active { background: color-mix(in srgb, var(--a) 20%, transparent); border-color: color-mix(in srgb, var(--a) 40%, transparent); color: var(--a); }
-.filter-sort { margin-left: auto; display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-dim); font-weight: 600; }
-.cat-chip-bar { display: flex; gap: 8px; overflow-x: auto; padding: 16px 0 2px; scrollbar-width: none; }
-
 /* ── subgroup category picker ───────────────────────────────
    Each subgroup (Attention/Focus/Memory/...) gets real visual identity
    here via its own --a accent (wired per-card from DRILL_GROUPS), instead
@@ -288,34 +219,6 @@ h1, h2, h3, .display {
 .group-card-name { font-size: 10.5px; font-weight: 700; color: var(--text); line-height: 1.2; }
 .group-card-count { font-size: 8.5px; color: var(--text-faint); font-weight: 600; }
 .group-card.active .group-card-name { color: var(--a); }
-.cat-chip-bar::-webkit-scrollbar { display: none; }
-.cat-chip-bar .filter-chip { cursor: pointer; }
-
-/* ── featured / recommended drill banner ──────────────────── */
-.featured-drill { display: flex; align-items: center; gap: 18px; padding: 18px; border-radius: 15px; margin-bottom: 22px; background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--a); }
-.featured-drill .tag { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--a); }
-.featured-drill .name { font-family: var(--font-space-grotesk), 'Space Grotesk', sans-serif; font-weight: 700; font-size: 1.1rem; margin-top: 4px; }
-.featured-drill .why { font-size: 11.5px; color: var(--text-dim); margin-top: 4px; max-width: 50ch; }
-.featured-drill .play { flex-shrink: 0; background: var(--a); color: #fff; font-weight: 700; font-size: 12px; padding: 10px 16px; border-radius: 10px; border: none; white-space: nowrap; }
-
-/* ── desktop drill grid (4-col cards) ──────────────────────── */
-.drill-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
-.drill-card {
-  container-type: inline-size; container-name: drillcard;
-  background: var(--card); border: 1px solid var(--line); border-radius: 13px; padding: 13px; position: relative; overflow: hidden;
-}
-.drill-card .play-btn { position: absolute; top: 11px; right: 11px; }
-.drill-card .ic { width: 30px; height: 30px; border-radius: 9px; background: color-mix(in srgb, var(--a) 18%, transparent); display: flex; align-items: center; justify-content: center; color: var(--a); }
-.drill-card .catlabel { font-size: 8.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--a); }
-.drill-card .nm {
-  font-weight: 700; font-size: 12px; margin-top: 10px; line-height: 1.3;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.6em;
-}
-.drill-card .meta { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
-.drill-card .prog .bar { height: 3px; border-radius: 99px; background: var(--card-raised); overflow: hidden; margin-top: 9px; }
-.drill-card .prog .bar i { display: block; height: 100%; background: var(--a); }
-.drill-card .prog span { font-size: 9px; color: var(--text-faint); margin-top: 4px; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.drill-card .notstarted { font-size: 9px; color: var(--text-faint); margin-top: 13px; white-space: nowrap; }
 
 /* ── mobile drill list ── */
 .drill-list { display: flex; flex-direction: column; gap: 8px; }
@@ -337,37 +240,7 @@ h1, h2, h3, .display {
 .drill-row .play-btn { width: 30px; height: 30px; }
 .drill-row .play-btn svg { width: 12px; height: 12px; }
 
-/* ── why train separately about block ── */
-.about-block { margin-top: 30px; padding-top: 22px; border-top: 1px solid var(--line-soft); }
-.about-block h2 { font-size: 1.05rem; }
-.about-block p { font-size: 13px; line-height: 1.7; color: var(--text-dim); max-width: 68ch; margin-top: 12px; }
-.about-benefits { display: flex; gap: 22px; margin-top: 16px; flex-wrap: wrap; }
-.about-benefits div { display: flex; align-items: flex-start; gap: 8px; max-width: 220px; }
-.about-benefits svg { color: var(--a); flex-shrink: 0; margin-top: 2px; }
-.about-benefits span { font-size: 11.5px; color: var(--text-dim); }
-
-/* ── search ── */
-.search-hero h1 { font-size: 1.6rem; }
-.search-hero .sub { font-size: 13px; color: var(--text-dim); margin-top: 6px; }
-.search-box { position: relative; margin-top: 16px; }
-.search-box .search-ic { position: absolute; left: 15px; top: 50%; transform: translateY(-50%); color: var(--text-faint); pointer-events: none; }
-.search-box input { width: 100%; background: var(--card); border: 1px solid var(--line); border-radius: 13px; padding: 13px 42px; font-size: 13.5px; color: var(--text); font-family: var(--font-inter), 'Inter', sans-serif; }
-.search-box input::placeholder { color: var(--text-faint); }
-.search-box input:focus { outline: none; border-color: var(--brand-2); box-shadow: 0 0 0 3px rgba(139, 92, 246, .15); }
-.search-box .clear-btn { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); width: 24px; height: 24px; border-radius: 50%; background: var(--card-raised); border: none; display: none; align-items: center; justify-content: center; color: var(--text-faint); cursor: pointer; }
-.search-box .clear-btn.show { display: flex; }
-.result-bar { display: flex; align-items: center; justify-content: space-between; margin: 14px 0; flex-wrap: wrap; gap: 8px; }
-.result-count { font-size: 11.5px; color: var(--text-faint); }
-.result-count b { color: var(--text-dim); font-family: var(--font-space-grotesk), 'Space Grotesk', sans-serif; }
-mark { background: none; color: var(--brand-3); font-weight: 800; }
-.empty-search { text-align: center; padding: 54px 20px; }
-.empty-search svg { color: var(--text-faint); margin: 0 auto 14px; }
-.empty-search b { display: block; font-size: 14px; font-weight: 700; }
-.empty-search span { display: block; font-size: 12px; color: var(--text-faint); margin-top: 6px; }
-.empty-search button { margin-top: 16px; background: var(--card-raised); border: 1px solid var(--line); color: var(--text); font-weight: 600; font-size: 12px; padding: 9px 16px; border-radius: 9px; cursor: pointer; }
-
 /* ── profile & progress ──────────────────────────────────── */
-.p-body{padding:18px 16px 6px; flex:1; overflow:hidden;}
 .p-hero{display:flex; align-items:center; gap:14px; margin-bottom:18px;}
 .p-avatar{width:58px;height:58px;border-radius:50%;background:linear-gradient(135deg,#f472b6,#a78bfa);display:flex;align-items:center;justify-content:center;font-family:var(--font-space-grotesk), 'Space Grotesk', sans-serif;font-weight:700;font-size:20px;color:#fff;flex-shrink:0;border:2px solid var(--line);}
 .p-hero .who b{font-family:var(--font-space-grotesk), 'Space Grotesk', sans-serif;font-size:17px;font-weight:700;display:block;}
@@ -406,105 +279,7 @@ mark { background: none; color: var(--brand-3); font-weight: 800; }
 .acct-row.danger{color:#f87171;margin-top:10px;border:1px solid rgba(248,113,113,.2);border-radius:12px;}
 .acct-row.danger svg{stroke:#f87171;}
 
-/* ── results screen ── */
-.results-screen { flex: 1; display: flex; flex-direction: column; padding: 28px 20px 20px; background: var(--ink); position: relative; overflow: hidden; }
-.rs-glow { position: absolute; inset: 0; background: radial-gradient(ellipse 260px 300px at 50% 0%, rgba(239, 68, 68, .2), transparent 65%); animation: glowPulse 2.4s ease-in-out infinite; pointer-events: none; }
-@keyframes glowPulse { 0%, 100% { opacity: .7; } 50% { opacity: 1; } }
-.confetti { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
-.confetti i { position: absolute; top: 34%; left: 50%; width: 6px; height: 10px; border-radius: 1px; opacity: 0; animation-name: confettiBurst; animation-duration: 1.5s; animation-timing-function: cubic-bezier(.2, .7, .4, 1); animation-fill-mode: forwards; }
-@keyframes confettiBurst { 0% { opacity: 1; transform: translate(-50%, -50%) rotate(0deg); } 100% { opacity: 0; transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) rotate(var(--rot)); } }
-@keyframes popIn { 0% { opacity: 0; transform: scale(.5) translateY(10px); } 70% { opacity: 1; transform: scale(1.08); } 100% { opacity: 1; transform: scale(1); } }
-@keyframes fadeUp { 0% { opacity: 0; transform: translateY(10px); } 100% { opacity: 1; transform: translateY(0); } }
-.rs-trophy { position: relative; animation: popIn .6s cubic-bezier(.34, 1.56, .64, 1) both; }
-.rs-badge { position: relative; align-self: center; display: flex; align-items: center; gap: 7px; background: rgba(34, 211, 238, .14); border: 1px solid rgba(34, 211, 238, .3); color: #22d3ee; font-weight: 700; font-size: 12.5px; padding: 7px 16px; border-radius: 99px; margin-top: 6px; animation: popIn .6s cubic-bezier(.34, 1.56, .64, 1) .1s both; }
-.rs-name { position: relative; text-align: center; margin-top: 18px; font-size: 11.5px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .06em; }
-.rs-drill { position: relative; text-align: center; font-family: var(--font-space-grotesk), 'Space Grotesk', sans-serif; font-weight: 700; font-size: 1.1rem; margin-top: 4px; }
-.rs-score { position: relative; text-align: center; font-family: var(--font-space-grotesk), 'Space Grotesk', sans-serif; font-weight: 700; font-size: 3.6rem; margin-top: 14px; line-height: 1; }
-.rs-score span { font-size: 1rem; color: var(--text-faint); font-weight: 600; display: block; margin-top: 2px; }
-.rs-best { position: relative; text-align: center; margin-top: 8px; font-size: 11px; font-weight: 700; color: #facc15; letter-spacing: .03em; animation: fadeUp .5s ease .2s both; }
-.rs-stats { position: relative; display: flex; gap: 8px; margin-top: 22px; }
-.rs-stats .st { flex: 1; text-align: center; background: var(--card); border: 1px solid var(--line); border-radius: 11px; padding: 11px 6px; animation: fadeUp .45s ease both; }
-.rs-stats .st:nth-child(1) { animation-delay: .3s; } .rs-stats .st:nth-child(2) { animation-delay: .4s; } .rs-stats .st:nth-child(3) { animation-delay: .5s; }
-.rs-stats .st b { display: block; font-family: var(--font-space-grotesk), 'Space Grotesk', sans-serif; font-weight: 700; font-size: 1.05rem; }
-.rs-stats .st span { font-size: 9.5px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .04em; }
-.rs-xp { position: relative; margin-top: 20px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; animation: fadeUp .5s ease .6s both; }
-.rs-xp-top { display: flex; justify-content: space-between; font-size: 11.5px; margin-bottom: 8px; }
-.rs-xp-top b { color: var(--brand-3); font-family: var(--font-space-grotesk), 'Space Grotesk', sans-serif; }
-.rs-actions { position: relative; margin-top: auto; display: flex; flex-direction: column; gap: 9px; padding-top: 22px; animation: fadeUp .5s ease .7s both; }
-.rs-btn { border-radius: 12px; padding: 13px; font-weight: 700; font-size: 13.5px; text-align: center; border: 1px solid transparent; }
-.rs-btn.primary { background: var(--brand-grad-cta); color: #fff; }
-.rs-btn.secondary { background: var(--card-raised); color: var(--text); border-color: var(--line); }
-.rs-btn.ghost { background: transparent; color: var(--text-faint); font-weight: 600; font-size: 12.5px; padding: 6px; }
-
-/* ── HUD ── */
-.game-stage { position: relative; overflow: hidden; background: radial-gradient(ellipse 700px 500px at 50% 30%, #1a0a12, #050508 68%); min-height: 520px; }
-.game-stage.mobile { min-height: 0; height: 100%; flex: 1; }
-.hud-topleft { position: absolute; top: 18px; left: 22px; z-index: 3; }
-.hud-topleft .hlabel { font-size: 9.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: rgba(255, 255, 255, .45); }
-.hud-topleft .hscore { font-family: var(--font-space-grotesk), 'Space Grotesk', sans-serif; font-weight: 700; font-size: 2rem; color: #fff; text-shadow: 0 2px 14px rgba(0, 0, 0, .7); line-height: 1; }
-.hud-topleft .hacc { font-size: 11px; color: rgba(255, 255, 255, .55); margin-top: 4px; }
-.hud-topright { position: absolute; top: 14px; right: 14px; z-index: 3; display: flex; align-items: center; gap: 8px; }
-.hud-timer { font-family: var(--font-space-grotesk), 'Space Grotesk', sans-serif; font-weight: 700; font-size: 1rem; color: #fff; background: rgba(5, 5, 8, .55); padding: 7px 13px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, .12); }
-.game-exit, .game-rotate { width: 32px; height: 32px; border-radius: 50%; background: rgba(5, 5, 8, .75); border: 1px solid rgba(255, 255, 255, .1); display: flex; align-items: center; justify-content: center; color: #f1f5f9; }
-.game-exit { color: #f87171; }
-.hud-combo { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 3; display: flex; align-items: center; gap: 7px; background: rgba(251, 146, 60, .16); border: 1px solid rgba(251, 146, 60, .35); padding: 7px 16px; border-radius: 99px; color: #fb923c; font-weight: 800; font-size: 12.5px; animation: comboPulse 1.3s ease-in-out infinite; }
-@keyframes comboPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(251, 146, 60, .25); } 50% { box-shadow: 0 0 0 7px rgba(251, 146, 60, 0); } }
-.game-stage.calm { background: radial-gradient(ellipse 700px 500px at 50% 30%, #0a1a1c, #050508 68%); }
-.hud-combo.calm { background: rgba(45, 212, 191, .14); border-color: rgba(45, 212, 191, .32); color: #2dd4bf; animation: calmPulse 3.2s ease-in-out infinite; }
-@keyframes calmPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(45, 212, 191, .18); } 50% { box-shadow: 0 0 0 6px rgba(45, 212, 191, 0); } }
-.phone-outer.landscape { width: 100%; max-width: 560px; padding: 9px; }
-.phone-outer.landscape .phone-screen { min-height: 0; aspect-ratio: 2.05 / 1; border-radius: 20px; }
-
-/* ── duel overlay ── */
-.duel-strip { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); z-index: 3; text-align: center; }
-.duel-strip .vslabel { font-size: 8.5px; font-weight: 800; letter-spacing: .06em; color: #f472b6; text-transform: uppercase; }
-.duel-strip .oppo { display: flex; align-items: center; gap: 8px; margin-top: 4px; background: rgba(5, 5, 8, .6); border: 1px solid rgba(236, 72, 153, .3); padding: 6px 14px; border-radius: 99px; }
-.duel-strip .oppo .avatar { width: 20px; height: 20px; font-size: 8px; }
-.duel-strip .oppo .nm { font-size: 10px; font-weight: 700; color: #fff; display: block; }
-.duel-strip .oppo .sc { font-family: var(--font-space-grotesk), 'Space Grotesk', sans-serif; font-weight: 700; font-size: 11.5px; color: #f472b6; }
-.duel-momentum { width: 110px; height: 4px; border-radius: 99px; background: rgba(255, 255, 255, .14); overflow: hidden; margin: 6px auto 0; }
-.duel-momentum i { display: block; height: 100%; background: linear-gradient(90deg, #6366f1, #a78bfa); }
-.arena-sub { font-size: 13px; color: var(--text-dim); margin-top: 6px; max-width: 60ch; }
-.duel-player-card { display: flex; align-items: center; gap: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-top: 12px; position: relative; overflow: hidden; }
-.duel-player-card.winner { border-color: rgba(250, 204, 21, .4); background: linear-gradient(135deg, rgba(250, 204, 21, .1), transparent 60%), var(--card); }
-.duel-player-card .win-tag { position: absolute; top: 0; right: 0; background: #facc15; color: #000; font-size: 8.5px; font-weight: 800; padding: 3px 10px 3px 12px; border-radius: 0 0 0 10px; letter-spacing: .04em; }
-.duel-player-card .pnm { font-weight: 700; font-size: 13px; }
-.duel-player-card .pdrill { font-size: 10.5px; color: var(--text-dim); margin-top: 2px; display: flex; align-items: center; gap: 5px; }
-.duel-player-card .pscore { text-align: right; flex-shrink: 0; }
-.duel-player-card .pscore b { font-family: var(--font-space-grotesk), 'Space Grotesk', sans-serif; font-weight: 700; font-size: 1.25rem; display: block; }
-.duel-player-card .pscore span { font-size: 9px; color: var(--text-faint); }
-.duel-total { margin-top: 18px; text-align: center; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
-.duel-total .marginline { font-size: 12px; color: #4ade80; font-weight: 700; margin-top: 4px; }
-
-/* ── tone chip ── */
-.tone-chip { border-radius: 14px; padding: 18px; position: relative; overflow: hidden; }
-.tone-chip.intense { background: linear-gradient(135deg, rgba(239, 68, 68, .22), rgba(249, 115, 22, .10)), var(--card); border: 1px solid rgba(239, 68, 68, .3); }
-.tone-chip.calm { background: linear-gradient(135deg, rgba(20, 184, 166, .16), rgba(59, 130, 246, .08)), var(--card); border: 1px solid rgba(20, 184, 166, .25); }
-
-/* ── shared UI primitives ── */
-.toast-demo { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-radius: 14px; background: var(--card); border: 1px solid var(--line); box-shadow: 0 20px 40px -20px rgba(0, 0, 0, .6); max-width: 340px; animation: toastIn .4s cubic-bezier(.34, 1.56, .64, 1) both; }
-.toast-demo .ic { width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.toast-demo.success .ic { background: rgba(74, 222, 128, .15); color: #4ade80; }
-.toast-demo .txt b { display: block; font-size: 13px; font-weight: 700; }
-.toast-demo .txt span { font-size: 11.5px; color: var(--text-dim); }
-@keyframes toastIn { 0% { opacity: 0; transform: translateY(12px); } 100% { opacity: 1; transform: translateY(0); } }
-.skeleton-card { background: var(--card); border: 1px solid var(--line); border-radius: 13px; padding: 13px; display: flex; flex-direction: column; gap: 10px; }
-.skel-block { border-radius: 6px; background: linear-gradient(90deg, var(--card-raised) 25%, #22232f 37%, var(--card-raised) 63%); background-size: 400% 100%; animation: skeletonShimmer 1.6s ease-in-out infinite; }
-@keyframes skeletonShimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
-
 /* ── container max width queries ── */
-@container drillcard (max-width: 155px) {
-  .drill-card { padding: 11px; }
-  .drill-card .ic { width: 26px; height: 26px; }
-  .drill-card .nm { font-size: 11px; min-height: 2.3em; }
-  .diff-pill { font-size: 8px; padding: 2px 6px; }
-  .drill-card .dur { font-size: 8.5px; }
-  .drill-card .prog span, .drill-card .notstarted { font-size: 8.5px; }
-}
-@container drillcard (max-width: 120px) {
-  .drill-card .meta { gap: 4px; }
-  .drill-card .nm { font-size: 10.5px; }
-}
 @container drillrow (max-width: 270px) {
   .drill-row { gap: 8px; padding: 10px; }
   .drill-row .ic { width: 28px; height: 28px; }
@@ -557,20 +332,25 @@ body.is-drill-page footer {
    GAMEPLAY JUICE — reusable adrenaline FX (screen shake, hit flash, danger vignette)
    Any drill can trigger these by toggling a key/class; not scoped to one drill.
    ───────────────────────────────────────────────────────────────────────────── */
-@keyframes fxShakeSoft { 0%,100%{transform:translate(0,0);} 20%{transform:translate(-3px,2px);} 40%{transform:translate(3px,-2px);} 60%{transform:translate(-2px,-2px);} 80%{transform:translate(2px,2px);} }
-@keyframes fxShakeHard { 0%,100%{transform:translate(0,0) rotate(0);} 15%{transform:translate(-8px,4px) rotate(-0.6deg);} 30%{transform:translate(7px,-5px) rotate(0.6deg);} 45%{transform:translate(-6px,-3px) rotate(-0.4deg);} 60%{transform:translate(6px,4px) rotate(0.4deg);} 75%{transform:translate(-4px,2px) rotate(-0.2deg);} 90%{transform:translate(3px,-2px) rotate(0.2deg);} }
-.fx-shake-soft-a, .fx-shake-soft-b { animation: fxShakeSoft .28s ease-in-out; }
-.fx-shake-hard-a, .fx-shake-hard-b { animation: fxShakeHard .4s ease-in-out; }
-
 /* Screen flash — mistake feedback only.
-   Red is now a quick glow around the EDGES with the middle left clear, instead
-   of a half-opaque wash spreading out from the centre across the whole play
-   area. It still reads instantly as "that was wrong", but it no longer covers
-   the thing the player is looking at, and it's short enough not to feel like
-   the screen is strobing. */
+   A previous pass shrank this into an edge-only ring (transparent for the
+   inner 58%, red only past that at low opacity) to stop it from covering the
+   thing the player is looking at — but that landed too subtle: at .34 opacity
+   for 0.3s, with the entire centre of the screen exempt, it reads as "no
+   flash happened" rather than "smaller flash". This version keeps the same
+   idea (centre stays clearer than the edges so it never fully obscures
+   gameplay) but with real, immediately-visible red coverage that fades out
+   toward the corners instead of starting fully transparent. */
+/* Sized at 30% (not 100%) so the wash fades to fully transparent well
+   before it reaches the screen edges — at 100% it never actually cleared
+   before the border, tinting HUD/content in every corner in both
+   orientations (worst in portrait, where score/lives text sits close to
+   the edges). ellipse-%-of-own-axis still self-adjusts to whatever
+   aspect ratio the screen is, so the shrunk version stays centered and
+   edge-clear in landscape and portrait alike. */
 @keyframes fxFlash { 0%{opacity:1;} 100%{opacity:0;} }
-.fx-flash { position:absolute; inset:0; pointer-events:none; z-index:55; animation: fxFlash .3s ease-out forwards; }
-.fx-flash-red { background:radial-gradient(ellipse 100% 100% at 50% 50%, transparent 58%, rgba(239,68,68,.34) 100%); }
+.fx-flash { position:absolute; inset:0; pointer-events:none; z-index:55; animation: fxFlash .2s ease-out forwards; }
+.fx-flash-red { background:radial-gradient(ellipse 30% 30% at 50% 50%, rgba(239,68,68,.5) 0%, rgba(239,68,68,.5) 30%, rgba(239,68,68,.22) 60%, transparent 92%); }
 
 /* Positive-feedback flashes are deliberately blank. Only a mistake or a timeout
    flashes the screen now; a correct answer is already confirmed by the target
@@ -598,5 +378,3 @@ body.is-drill-page footer {
 .fx-pop-in { animation: fxPopIn .18s cubic-bezier(.34,1.56,.64,1) both; }
 @keyframes fxFadeSlideUp { 0%{opacity:0; transform:translateY(8px);} 100%{opacity:1; transform:translateY(0);} }
 .fx-fade-up { animation: fxFadeSlideUp .18s ease-out both; }
-@keyframes fxFadeIn { from{opacity:0;} to{opacity:1;} }
-.fx-fade-in { animation: fxFadeIn .18s ease-out both; }

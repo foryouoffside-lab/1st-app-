@@ -286,8 +286,6 @@ export default function VisualTrackingSpeedTestClient() {
     dashLimit: 0
   });
 
-  const [deviceScale, setDeviceScale] = useState(1.0);
-
   const roundTimerRef = useRef<any>(null);
   const gameTimerRef = useRef<any>(null);
   const heartbeatTimerRef = useRef<any>(null);
@@ -300,23 +298,14 @@ export default function VisualTrackingSpeedTestClient() {
     phaseRef.current = phase;
   }, [phase]);
 
-  // Radius helper — constant regardless of level (matches the sibling
-  // ReactionTimeTestClient.tsx and ConflictReflexClient.js's getBallRadius
-  // approach); only one target is ever on screen here, so there's no
-  // crowding constraint forcing it smaller at high difficulty.
+  // Radius helper — constant regardless of level; only one target is ever on
+  // screen here, so there's no crowding constraint forcing it smaller at high
+  // difficulty. Matches KineticInterceptClient.js's (Moving Target) own
+  // getTargetRadius exactly — that drill's ball size was the reference the
+  // rest of the processing-speed ball drills were sized up to match.
   const getTargetRadius = useCallback((W: number, H: number) => {
-    if (deviceScale < 1) {
-      const screenFactor = Math.min(W / 800, H / 450);
-      return Math.max(14, Math.round(22 * screenFactor * deviceScale));
-    } else {
-      const baseRadius = 48;
-      if (document.fullscreenElement) {
-        return Math.max(20, Math.round(baseRadius));
-      } else {
-        return Math.max(20, Math.round(baseRadius * (H / 1080)));
-      }
-    }
-  }, [deviceScale]);
+    return Math.max(24, Math.min(46, Math.min(W, H) * 0.075)) - 1;
+  }, []);
 
   // ── Mount / cleanup ────────────────────────────────────────
   useEffect(() => {
@@ -329,8 +318,6 @@ export default function VisualTrackingSpeedTestClient() {
       setBestLevel(saved.bestLevel);
     } catch (e) {}
 
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent || '') || ('ontouchstart' in window);
-    setDeviceScale(isMobile ? 0.8 : 1.2);
     setTimeout(() => { if (mountedRef.current) setLoading(false); }, 200);
 
     return () => {
@@ -611,6 +598,32 @@ export default function VisualTrackingSpeedTestClient() {
       return true;
     };
 
+    // CRT scanline overlay — static (scanlinesActive never changes), so it's
+    // cached exactly like the backdrop instead of redrawn with ~100-200
+    // fillRect calls every frame for the drill's whole runtime. Kept as a
+    // SEPARATE cache from the backdrop (rather than merged into it) because
+    // it has to paint on top of the target/trail each frame, not underneath.
+    const scanlineCanvas = document.createElement('canvas');
+    const scanlineCtx = scanlineCanvas.getContext('2d');
+    let scanlineW = 0;
+    let scanlineH = 0;
+
+    const ensureScanlines = (w: number, h: number, dpr: number) => {
+      if (!scanlineCtx || w <= 0 || h <= 0) return false;
+      if (scanlineW === w && scanlineH === h && scanlineCanvas.width > 0) return true;
+      scanlineW = w;
+      scanlineH = h;
+      scanlineCanvas.width = Math.round(w * dpr);
+      scanlineCanvas.height = Math.round(h * dpr);
+      scanlineCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      scanlineCtx.clearRect(0, 0, w, h);
+      scanlineCtx.fillStyle = 'rgba(255, 255, 255, 0.01)';
+      for (let y = 0; y < h; y += 4) {
+        scanlineCtx.fillRect(0, y, w, 1.5);
+      }
+      return true;
+    };
+
     let animId = 0;
     // ~60fps cap. This loop was uncapped, so on a 90Hz or 120Hz phone it ran
     // 1.5-2x more frames than the game needs for an identical result — pure
@@ -620,7 +633,7 @@ export default function VisualTrackingSpeedTestClient() {
 
     const drawLoop = (ts: number) => {
       if (phaseRef.current !== 'playing') return;
-      if (ts - lastDrawTs < 15) { animId = requestAnimationFrame(drawLoop); return; }
+      if (ts - lastDrawTs < 32) { animId = requestAnimationFrame(drawLoop); return; }
       lastDrawTs = ts;
       if (!trackingState.current.lastTime) {
         trackingState.current.lastTime = ts;
@@ -767,12 +780,10 @@ export default function VisualTrackingSpeedTestClient() {
         ctx.stroke();
       }
 
-      // CRT overlay scanlines
-      if (scanlinesActive) {
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.01)';
-        for (let y = 0; y < H; y += 4) {
-          ctx.fillRect(0, y, W, 1.5);
-        }
+      // CRT overlay scanlines — blit of the cached pattern from ensureScanlines
+      // above (see its comment); was ~100-200 fillRect calls rebuilt every frame.
+      if (scanlinesActive && ensureScanlines(W, H, dpr)) {
+        ctx.drawImage(scanlineCanvas, 0, 0, W, H);
       }
 
       // Draw Hit Ring Bursts
@@ -861,7 +872,7 @@ export default function VisualTrackingSpeedTestClient() {
     const radius = getTargetRadius(W, H);
 
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent || '') || ('ontouchstart' in window);
-    const hitRadius = radius * (isMobile ? 2.25 : 1.75);
+    const hitRadius = radius * (isMobile ? 1.9 : 1.5);
 
     if (dist <= hitRadius) {
       const rt = Date.now() - lastTargetSpawnTimeRef.current;
@@ -1094,7 +1105,7 @@ export default function VisualTrackingSpeedTestClient() {
         )}
 
         {phase === 'playing' && dangerLevel > 0.06 && (
-          <div className="fx-vignette" style={{ '--v-min': Math.max(0.05, dangerLevel * 0.25), '--v-max': Math.min(0.55, dangerLevel * 0.75), animationDuration: `${heartbeatTempoRef.current}ms` }} />
+          <div className="fx-vignette" style={{ '--v-min': Math.max(0.05, dangerLevel * 0.25), '--v-max': Math.min(0.55, dangerLevel * 0.75), animationDuration: `${heartbeatTempoRef.current}ms` } as React.CSSProperties} />
         )}
 
         {flashes.map((f) => (

@@ -54,11 +54,17 @@ const fisherYatesShuffle = (arr) => {
   return array;
 };
 
-const getOptionsForTrial = (targetColor, optionCount) => {
-  const otherColors = STROOP_COLORS.filter(c => c.name !== targetColor.name);
+// Both the ink color AND the word's own color name are guaranteed a slot
+// among the options — not just the ink color. Whichever rule is live for
+// this trial (see spawnTrial's ruleMode), the correct button has to actually
+// be on screen, and revealing the rule via "is the answer even present"
+// would give it away for free.
+const getOptionsForTrial = (targetColor, textColor, optionCount) => {
+  const excludeNames = new Set([targetColor.name, textColor.name]);
+  const otherColors = STROOP_COLORS.filter(c => !excludeNames.has(c.name));
   const shuffledOthers = fisherYatesShuffle(otherColors);
-  const decoys = shuffledOthers.slice(0, optionCount - 1);
-  return fisherYatesShuffle([targetColor, ...decoys]);
+  const decoys = shuffledOthers.slice(0, Math.max(0, optionCount - 2));
+  return fisherYatesShuffle([targetColor, textColor, ...decoys]);
 };
 
 // ============================================================
@@ -355,20 +361,30 @@ export default function DistractionFighterClient() {
     if (timeLeftRef.current <= 0 || livesRef.current <= 0 || phaseRef.current !== 'playing') return;
 
     const targetColorObj = STROOP_COLORS[Math.floor(Math.random() * STROOP_COLORS.length)];
-    
+
     let textColorObj;
     do {
       textColorObj = STROOP_COLORS[Math.floor(Math.random() * STROOP_COLORS.length)];
     } while (textColorObj.name === targetColorObj.name);
 
+    // Two rules, picked fresh each trial: 'ink' is the original mechanic
+    // (tap the physical ink color, ignore the word). 'word' flips it — tap
+    // the color the word itself names, ignoring what it's actually printed
+    // in. Randomizing per-trial (rather than fixing one rule for the whole
+    // run) is the actual difficulty add the player asked for: autopilot on a
+    // single fixed rule stops working, since the rule banner has to be read
+    // every round.
+    const ruleMode = Math.random() < 0.5 ? 'ink' : 'word';
+
     const cosmeticLvl = Math.max(1, Math.floor((1500 - deadlineRef.current) / 100) + 1);
     const optCount = getOptionCountForLevel(cosmeticLvl);
-    const trialOptions = getOptionsForTrial(targetColorObj, optCount);
+    const trialOptions = getOptionsForTrial(targetColorObj, textColorObj, optCount);
 
     const newTrial = {
       displayWord: textColorObj.name.toUpperCase(),
       hex: targetColorObj.hex,
-      trueColorName: targetColorObj.name,
+      trueColorName: ruleMode === 'ink' ? targetColorObj.name : textColorObj.name,
+      ruleMode,
       options: trialOptions,
       spawnedAt: performance.now()
     };
@@ -529,9 +545,9 @@ export default function DistractionFighterClient() {
 
     const loop = (time) => {
       if (!gameActiveRef.current) return;
-      // ~60fps cap — matches the rest of the catalog; dt still measures real
+      // ~30fps cap — matches the rest of the catalog; dt still measures real
       // elapsed time between drawn frames since lastTime updates below.
-      if (time - lastTime < 15) {
+      if (time - lastTime < 32) {
         animationRef.current = requestAnimationFrame(loop);
         return;
       }
@@ -744,8 +760,8 @@ export default function DistractionFighterClient() {
               <h1 className="text-[17px] font-bold tracking-tight text-white">Distraction Fighter</h1>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
-                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Tap the button matching the physical ink color</>} />
-                <HowToRow icon={<Zap className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Ignore the word text; speed scales with each correct tap</>} />
+                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Read the RULE banner each round — it changes every trial</>} />
+                <HowToRow icon={<Zap className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<><span className="text-cyan-300 font-bold">Color of Text</span>: tap the ink color. <span className="text-amber-300 font-bold">Select the Color</span>: tap the word itself</>} />
                 <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>5 lives — wrong taps and timeouts cost points, combo, and a life</>} />
               </div>
 
@@ -801,8 +817,19 @@ export default function DistractionFighterClient() {
             <div className="relative w-full h-[100dvh] flex flex-col items-center justify-center p-4">
               <div className="flex-1 flex flex-col items-center justify-center">
                 {currentTrial && (
-                  <span 
-                    className="text-6xl sm:text-7xl font-black uppercase tracking-widest transition-all drop-shadow-[0_2px_15px_rgba(0,0,0,0.6)] animate-pulse select-none" 
+                  <div
+                    className={`mb-4 px-3.5 py-1.5 rounded-full border text-[10px] font-black uppercase tracking-wider select-none ${
+                      currentTrial.ruleMode === 'ink'
+                        ? 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300'
+                        : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+                    }`}
+                  >
+                    Rule: {currentTrial.ruleMode === 'ink' ? 'Select the Color of Text' : 'Select the Color'}
+                  </div>
+                )}
+                {currentTrial && (
+                  <span
+                    className="text-6xl sm:text-7xl font-black uppercase tracking-widest transition-all drop-shadow-[0_2px_15px_rgba(0,0,0,0.6)] animate-pulse select-none"
                     style={{ color: currentTrial.hex }}
                   >
                     {currentTrial.displayWord}

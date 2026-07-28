@@ -467,12 +467,14 @@ export default function CardMatchingClient() {
         setFlippedIndices([]);
       }
     } else {
-      // MISMATCH
+      // MISMATCH — no full-screen flash here (unlike most other drills):
+      // a round can involve dozens of flip attempts, and a flash on every
+      // single mismatch reads as constant strobing rather than a discrete
+      // "you got it wrong" cue. The cards flipping back over is already
+      // clear feedback.
       audioSynth?.playPenalty();
       comboRef.current = 0;
       setCombo(0);
-
-      triggerFlash('red');
 
       waitingRef.current = true;
       setTimeout(() => {
@@ -720,30 +722,25 @@ export default function CardMatchingClient() {
         }}
       >
         <style>{`
-          @keyframes flash-cyan {
-            0% { background-color: rgba(6, 182, 212, 0.2); }
-            100% { background-color: transparent; }
-          }
-          @keyframes flash-red {
-            0% { background-color: rgba(239, 68, 68, 0.2); }
-            100% { background-color: transparent; }
-          }
-          @keyframes flash-gold {
-            0% { background-color: rgba(234, 179, 8, 0.2); }
-            100% { background-color: transparent; }
+          @keyframes flash-fade {
+            0% { opacity: 1; }
+            100% { opacity: 0; }
           }
           .fx-flash {
             position: absolute;
             inset: 0;
             pointer-events: none;
             z-index: 55;
-            animation-duration: 0.15s;
+            animation-name: flash-fade;
+            animation-duration: 0.2s;
             animation-timing-function: ease-out;
             animation-fill-mode: forwards;
           }
           /* success flashes are intentionally inert — see globals.css */
           .fx-flash-cyan { animation-name: none; background: none; }
-          .fx-flash-red { animation-name: flash-red; }
+          /* Radial + sized at 30% (not a flat full-screen tint) so it fades
+             to fully transparent before reaching the edges. */
+          .fx-flash-red { background: radial-gradient(ellipse 30% 30% at 50% 50%, rgba(239,68,68,.35) 0%, rgba(239,68,68,.35) 30%, rgba(239,68,68,.15) 60%, transparent 92%); }
           .fx-flash-gold { animation-name: none; background: none; }
 
           @keyframes particle-fade {

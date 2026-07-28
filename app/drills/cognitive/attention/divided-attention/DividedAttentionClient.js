@@ -819,7 +819,7 @@ export default function DividedAttentionClient() {
     window.addEventListener('resize', resizeOrbCanvas);
     window.addEventListener('orientationchange', resizeOrbCanvas);
 
-    const baseOrbRadius = () => (window.innerWidth >= 640 ? 28 : 22);
+    const baseOrbRadius = () => (window.innerWidth >= 640 ? 25 : 20); // ~10% smaller for extra room to move
 
     const drawOrb = (ctx, t, r) => {
       const w = orbCanvasSizeRef.current.width;

@@ -471,7 +471,7 @@ export default function FingerSequencingClient() {
     else if (currentTempo >= 0.35) tier = 2;
     cueTierRef.current = tier;
 
-    const radius = Math.max(14, 28 - currentTempo * 18);
+    const radius = Math.max(13, 25 - currentTempo * 16); // ~10% smaller for extra room to move
     const windowTime = Math.max(0.6, 2.5 - currentTempo * 1.9);
     
     nodeWindowMsRef.current = windowTime;
@@ -947,6 +947,28 @@ export default function FingerSequencingClient() {
     return () => clearTimeout(t);
   }, [isChallenge, matchStartAt, phase, startGame]);
 
+  // Pre-warm the landscape lock as soon as we know a duel is about to
+  // start, instead of waiting until the synchronized matchStartAt instant
+  // to begin it. lockLandscape() calls into Android's native orientation
+  // API, and how long it actually takes to finish rotating the device
+  // varies meaningfully by device/current-orientation — doing this AT
+  // matchStartAt meant the real game start happened at matchStartAt +
+  // however long THIS device's rotation took, which differed between the
+  // two duelists and showed up as a 1-2s gap between when their matches
+  // visibly began. The shared countdown always has a few seconds of lead
+  // time before matchStartAt (see MATCH_COUNTDOWN_MS in DrillWrapper.js),
+  // so there's room to finish this well beforehand on both devices — the
+  // startGame path's own lockLandscape() call then just resolves
+  // immediately since the device is already there.
+  useEffect(() => {
+    if (!isChallenge || !matchStartAt) return;
+    if (Capacitor.isNativePlatform()) {
+      StatusBar.setOverlaysWebView({ overlay: true }).catch(() => {});
+      StatusBar.hide().catch(() => {});
+    }
+    lockLandscape().catch(() => {});
+  }, [isChallenge, matchStartAt]);
+
   // Rematch reuses this same route with only ?challengeId= changing — reset
   // all per-match state so the previous match doesn't leak into the new one.
   const prevChallengeIdRef = useRef(challengeId);
@@ -1037,7 +1059,7 @@ export default function FingerSequencingClient() {
       // ~60fps cap — an uncapped loop makes 90-120Hz phones redraw more
       // than needed for the same visual result. The timeout check below
       // reads performance.now() directly, so it stays accurate regardless.
-      if (ts - lastDrawTs < 15) {
+      if (ts - lastDrawTs < 32) {
         animationFrameId = requestAnimationFrame(render);
         return;
       }
@@ -1270,6 +1292,8 @@ export default function FingerSequencingClient() {
     return () => resizeObserver.disconnect();
   }, []);
 
+  const timePct = Math.max(0, Math.min(100, (timeLeft / totalTime) * 100));
+
   return (
     <DrillWrapper
       drillName="Sequence Aim Trainer"
@@ -1289,6 +1313,17 @@ export default function FingerSequencingClient() {
         {/* Danger Heartbeat Vignette */}
         {phase === 'playing' && dangerLevel > 0.05 && (
           <div className="fx-vignette" style={{ '--v-min': Math.max(0.04, dangerLevel * 0.22), '--v-max': Math.min(0.55, dangerLevel * 0.70), animationDuration: `${heartbeatTempoRef.current}ms` }} />
+        )}
+
+        {/* Timer bar — this drill was missing it entirely. duration-1000, not
+            100 — timeLeft only updates once a second (see the throttle in
+            the game-timer effect above), so a 100ms transition would snap
+            quickly then sit frozen for ~900ms instead of gliding the full
+            second; matches DualTargetFlowClient's pairing. */}
+        {(phase === 'playing' || phase === 'countdown') && (
+          <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
+            <div className={`h-full transition-all duration-1000 ease-linear ${timeLeft <= 10 ? 'bg-red-500 animate-pulse' : 'bg-violet-500'}`} style={{ width: `${timePct}%` }} />
+          </div>
         )}
 
         {/* Live Gameplay Canvas — draws its own opaque background + grid

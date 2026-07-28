@@ -20,7 +20,7 @@ import {
 import { getDailyMission, getTrainingFocus, setTrainingFocus, TRAINING_FOCUSES } from '../lib/playerJourney';
 import { Storage } from '../lib/storage';
 import { DRILL_INDEX } from '../lib/drillIndex';
-import { DRILL_GROUPS, getDrillGroup } from '../lib/drillGroups';
+import { DRILL_GROUPS, getDrillGroup, getGroupIcon } from '../lib/drillGroups';
 
 const HOMEPAGE_CATEGORIES = DRILL_GROUPS.map(g => ({
   slug: g.id,
@@ -142,6 +142,15 @@ export default function HomePageClient() {
     return total ? Math.round((level.xpInLevel / total) * 100) : 0;
   }, [level]);
 
+  // Themes the Daily Challenge card off whichever category today's drill
+  // belongs to, so it reads as a premium category-branded card (matching
+  // the Cognitive hub's .cat-hero) instead of a fixed purple/pink gradient.
+  const dailyTheme = useMemo(() => {
+    if (!daily?.drill) return null;
+    return HOMEPAGE_CATEGORIES.find(c => c.slug === getDrillGroup(daily.drill)) || null;
+  }, [daily]);
+  const DailyIcon = dailyTheme?.icon || Sparkles;
+
   async function joinArenaChallenge(challenge) {
     if (!user) {
       router.push('/challenge');
@@ -152,7 +161,7 @@ export default function HomePageClient() {
       router.push(`/drills/${challenge.drillSlug}?challengeId=${challenge.id}`);
     } catch (error) {
       console.error('Unable to join arena challenge', error);
-      alert('This challenge is no longer available. Please choose another one.');
+      alert(error?.code === 'arena/locked-out' ? error.message : 'This challenge is no longer available. Please choose another one.');
     }
   }
 
@@ -171,13 +180,11 @@ export default function HomePageClient() {
   };
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-[#080914] pb-28 text-slate-100">
+    <div className="min-h-screen overflow-x-hidden bg-[#050508] pb-28 text-slate-100">
       <style dangerouslySetInnerHTML={{ __html: `
         .home-scroll::-webkit-scrollbar { display: none; }
         .home-scroll { -ms-overflow-style: none; scrollbar-width: none; }
       ` }} />
-
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-[390px] bg-[radial-gradient(circle_at_20%_0%,rgba(124,58,237,.32),transparent_45%),radial-gradient(circle_at_90%_15%,rgba(14,165,233,.18),transparent_40%)]" />
 
       <main className="relative mx-auto max-w-lg px-4 sm:px-6" style={{ paddingTop: 'calc(16px + env(safe-area-inset-top))' }}>
         <header className="mb-7 flex items-center justify-between">
@@ -195,11 +202,17 @@ export default function HomePageClient() {
             instead of a duplicate inline card competing with it here. */}
 
         {/* 2. Daily Challenge — full width. Level/XP detail lives on /progress only. */}
-        <div className="daily-card mb-6">
-          <span className="k">
-            <Sparkles className="w-3 h-3 text-cyan-300 animate-pulse" />
-            {isNewUser ? 'Your First Daily Challenge' : 'Daily Challenge'}
-          </span>
+        <div className="daily-card mb-6" style={dailyTheme ? { '--a': dailyTheme.accent } : undefined}>
+          <div className="glowspot" />
+          <div className="top">
+            <div className="ic">
+              <DailyIcon className="w-5 h-5" />
+            </div>
+            <span className="k">
+              <Sparkles className="w-3 h-3 animate-pulse" />
+              {isNewUser ? 'Your First Daily Challenge' : 'Daily Challenge'}
+            </span>
+          </div>
           <h2 className="t">{daily?.drill?.name || 'Loading Daily...'}</h2>
           <p className="d">
             {isNewUser
@@ -293,18 +306,21 @@ export default function HomePageClient() {
         ) : (
           <div className="cont-row home-scroll mb-8">
             {recent.map(item => {
-              const drill = DRILL_INDEX.find(d => d.id === item.id) || { name: prettyDrillName(item.id), path: '/drills', emoji: '🧠' };
+              const drill = DRILL_INDEX.find(d => d.id === item.id) || { name: prettyDrillName(item.id), path: '/drills' };
               const theme = HOMEPAGE_CATEGORIES.find(c => c.slug === getDrillGroup(drill)) || { accent: 'var(--c-cognitive)' };
+              const DrillIcon = getGroupIcon(getDrillGroup(drill));
               const attempts = item.attempts || 0;
               const pct = Math.min(100, Math.round((attempts / 10) * 100));
               return (
-                <Link 
-                  key={item.id} 
+                <Link
+                  key={item.id}
                   href={drill.path || '/drills'}
-                  className="cont-card"
+                  className="cont-card viewfinder-box"
                   style={{ '--a': theme.accent }}
                 >
-                  <span className="text-xl mb-2 block">{drill.emoji}</span>
+                  <div className="viewfinder-corner tl" />
+                  <div className="viewfinder-corner tr" />
+                  <div className="lab-ic mb-2"><DrillIcon className="w-5 h-5" /></div>
                   <b>{drill.name}</b>
                   <div className="bar">
                     <i style={{ width: `${pct}%` }} />

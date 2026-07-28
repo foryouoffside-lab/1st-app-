@@ -319,6 +319,7 @@ export default function ChallengeArenaClient() {
       await joinMatchmakingQueue(user, drill.slug, drill.name);
     } catch (e) {
       console.error('Failed to join matchmaking queue:', e);
+      if (e?.code === 'arena/locked-out') alert(e.message);
       setMatchmakingState('idle');
       return;
     }
@@ -416,7 +417,7 @@ export default function ChallengeArenaClient() {
         setChallengeStatusMessage(`Invited ${player.displayName.split(' ')[0]} to duel. Waiting for response...`);
       } catch (e) {
         console.error(e);
-        alert("Failed to send challenge invitation.");
+        alert(e?.code === 'arena/locked-out' ? e.message : "Failed to send challenge invitation.");
         setIsSending(false);
         setSelectedOpponent(null);
       }
@@ -431,7 +432,7 @@ export default function ChallengeArenaClient() {
         setChallengeStatusMessage("Your challenge lobby is now open. Waiting for a challenger to connect...");
       } catch (e) {
         console.error(e);
-        alert("Failed to send challenge invitation.");
+        alert(e?.code === 'arena/locked-out' ? e.message : "Failed to send challenge invitation.");
         setIsSending(false);
         setSelectedOpponent(null);
       }
@@ -444,7 +445,7 @@ export default function ChallengeArenaClient() {
       router.push(`/drills/${invite.drillSlug}?challengeId=${invite.id}`);
     } catch (e) {
       console.error(e);
-      alert("Failed to accept challenge.");
+      alert(e?.code === 'arena/locked-out' ? e.message : "Failed to accept challenge.");
     }
   };
 
@@ -491,7 +492,7 @@ export default function ChallengeArenaClient() {
 
   const renderAvatar = (userObj, sizeClass = "w-10 h-10", borderClass = "border border-neutral-800") => {
     if (userObj.photoURL) {
-      return <img src={userObj.photoURL} alt={userObj.displayName} className={`${sizeClass} rounded-full ${borderClass} object-cover`} />;
+      return <img src={userObj.photoURL} alt={userObj.displayName} referrerPolicy="no-referrer" className={`${sizeClass} rounded-full ${borderClass} object-cover`} />;
     }
     const initials = userObj.displayName ? userObj.displayName.substring(0, 2).toUpperCase() : '??';
     return (
@@ -542,9 +543,6 @@ export default function ChallengeArenaClient() {
 
   return (
     <div className="min-h-screen bg-[#050508] text-slate-100 flex flex-col relative pb-28 overflow-x-hidden" style={{ paddingTop: 'calc(16px + env(safe-area-inset-top))' }}>
-      {/* Background Gradient */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-[340px] bg-[radial-gradient(circle_at_50%_0%,rgba(139,92,246,0.14),transparent_55%)]" />
-
       {/* Main List Container */}
       <div className="flex-1 px-4 pt-0 pb-6 relative z-10">
         <div className="max-w-xl mx-auto">

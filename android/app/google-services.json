@@ -14,6 +14,22 @@
       },
       "oauth_client": [
         {
+          "client_id": "220381726989-c4tcaai2cgv7s657kva4faaunneiohje.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.skilldrills.pro",
+            "certificate_hash": "e9e140f8a3f3396a5f3b3c6790d56fc014848b9e"
+          }
+        },
+        {
+          "client_id": "220381726989-qhjmotjptph5snp57a0vr4nslmioh6dg.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.skilldrills.pro",
+            "certificate_hash": "1fbf3f724695306079226e785fe770bddbe7c706"
+          }
+        },
+        {
           "client_id": "220381726989-247776slhaptmb17b5eqtpre89p19l8t.apps.googleusercontent.com",
           "client_type": 3
         }

@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Real vector art for the Android 12+ SplashScreen API icon slot (see
+  windowSplashScreenAnimatedIcon in styles.xml) — hand-converted from the
+  same source as public/favicon.svg, not a raster PNG. Renders pixel-perfect
+  at any density instead of being upscaled/downscaled from a fixed-size
+  bitmap, and the inner <group> scale below (0.20) is what keeps the mark
+  small with generous padding within its 240dp slot. This OS-mandated splash
+  (API 31+) can't be skipped/removed by the app at all, so the only lever
+  here is size — kept a notch smaller than the platform default look.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="240dp"
+    android:height="240dp"
+    android:viewportWidth="100"
+    android:viewportHeight="100">
+
+    <group
+        android:pivotX="50"
+        android:pivotY="50"
+        android:scaleX="0.20"
+        android:scaleY="0.20">
+
+        <path android:pathData="M2,50 A48,48 0 1,0 98,50 A48,48 0 1,0 2,50 Z" android:strokeWidth="2">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="0" android:startY="0"
+                    android:endX="100" android:endY="100"
+                    android:startColor="#2563eb"
+                    android:endColor="#7c3aed" />
+            </aapt:attr>
+            <aapt:attr name="android:strokeColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="0" android:startY="0"
+                    android:endX="100" android:endY="100"
+                    android:startColor="#1e40af"
+                    android:endColor="#5b21b6" />
+            </aapt:attr>
+        </path>
+
+        <path
+            android:pathData="M28,50 A22,22 0 1,0 72,50 A22,22 0 1,0 28,50 Z"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="3"
+            android:strokeAlpha="0.9"
+            android:fillColor="#00000000" />
+
+        <path
+            android:pathData="M36,50 A14,14 0 1,0 64,50 A14,14 0 1,0 36,50 Z"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="2"
+            android:strokeAlpha="0.8"
+            android:fillColor="#00000000" />
+
+        <path
+            android:pathData="M44,50 A6,6 0 1,0 56,50 A6,6 0 1,0 44,50 Z"
+            android:fillColor="#FFFFFF"
+            android:fillAlpha="0.9" />
+
+        <path
+            android:pathData="M50,18 L50,32 M50,68 L50,82 M18,50 L32,50 M68,50 L82,50"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="2.5"
+            android:strokeAlpha="0.9" />
+
+        <path
+            android:pathData="M30,30 L38,38 M70,30 L62,38 M30,70 L38,62 M70,70 L62,62"
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="2"
+            android:strokeAlpha="0.6" />
+
+        <path
+            android:pathData="M47.5,50 A2.5,2.5 0 1,0 52.5,50 A2.5,2.5 0 1,0 47.5,50 Z"
+            android:fillColor="#FFFFFF" />
+
+    </group>
+</vector>

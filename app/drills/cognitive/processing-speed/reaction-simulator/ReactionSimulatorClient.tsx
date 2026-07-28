@@ -280,6 +280,7 @@ export default function ReactionSimulatorClient() {
   const rafRef = useRef<number | null>(null);
   const clockIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const heartbeatTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastPointerTimeRef = useRef<number>(0);
   const mountedRef = useRef(true);
   const isMobileRef = useRef(false);
@@ -290,6 +291,7 @@ export default function ReactionSimulatorClient() {
     return () => {
       mountedRef.current = false;
       if (heartbeatTimeoutRef.current) clearTimeout(heartbeatTimeoutRef.current);
+      if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
       try { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); } catch (e) {}
       if (Capacitor.isNativePlatform()) {
         StatusBar.setOverlaysWebView({ overlay: false }).catch(() => {});
@@ -377,8 +379,12 @@ export default function ReactionSimulatorClient() {
     };
   };
 
-  const getTargetRadius = (isMicro = false) => {
-    const base = window.innerWidth >= 640 ? 28 : 22;
+  // Base radius matches KineticInterceptClient.js's (Moving Target) own
+  // getTargetRadius — that drill's ball size was the reference the rest of
+  // the processing-speed ball drills were sized up to match. Micro targets
+  // (the smaller decoy variant) stay a fixed fraction of that.
+  const getTargetRadius = (W: number, H: number, isMicro = false) => {
+    const base = Math.max(24, Math.min(46, Math.min(W, H) * 0.075)) - 1;
     return isMicro ? Math.round(base * 0.6) : base;
   };
 
@@ -555,10 +561,11 @@ export default function ReactionSimulatorClient() {
   }, [scheduleHeartbeat]);
 
   const runCountdown = useCallback((n: number) => {
+    if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
     setCountdownValue(n);
     if (n > 0) {
       if (audioSynth) audioSynth.playCountdownTick();
-      setTimeout(() => runCountdown(n - 1), 700);
+      countdownTimerRef.current = setTimeout(() => runCountdown(n - 1), 700);
     } else {
       if (audioSynth) audioSynth.playGo();
       beginPlaying();
@@ -763,13 +770,31 @@ export default function ReactionSimulatorClient() {
       }
     });
 
+    // Overdrive vignette gradient — depends only on canvas size, not on
+    // anything that changes frame to frame, so it's cached and only rebuilt
+    // when the canvas is resized instead of allocating a new CanvasGradient
+    // every single frame for the whole ~5s overdrive window (which can recur
+    // several times a session).
+    let overdriveGrad: CanvasGradient | null = null;
+    let overdriveGradW = 0;
+    let overdriveGradH = 0;
+    const ensureOverdriveGrad = (w: number, h: number) => {
+      if (overdriveGrad && overdriveGradW === w && overdriveGradH === h) return overdriveGrad;
+      overdriveGradW = w;
+      overdriveGradH = h;
+      overdriveGrad = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.45, w / 2, h / 2, Math.max(w, h) * 0.85);
+      overdriveGrad.addColorStop(0, 'rgba(236, 72, 153, 0)');
+      overdriveGrad.addColorStop(1, 'rgba(236, 72, 153, 0.12)');
+      return overdriveGrad;
+    };
+
     const mainLoop = (timestamp: number) => {
       if (phaseRef.current !== 'playing') return;
       // ~60fps cap. This loop was uncapped, so on a 90Hz or 120Hz phone it ran
       // 1.5-2x more frames than the game needs for an identical result — pure
       // heat. Frame-skipping happens BEFORE lastTime is touched, so the physics
       // delta below still measures real elapsed time between drawn frames.
-      if (timestamp - lastDrawTsRef < 15) {
+      if (timestamp - lastDrawTsRef < 32) {
         rafRef.current = requestAnimationFrame(mainLoop);
         return;
       }
@@ -786,8 +811,8 @@ export default function ReactionSimulatorClient() {
       const currentLevel = levelRef.current;
       const diffParams = getDifficultyParameters(currentLevel);
 
-      const baseRadius = window.innerWidth >= 640 ? 28 : 22;
-      const microRadius = Math.round(baseRadius * 0.6);
+      const baseRadius = getTargetRadius(W, H);
+      const microRadius = getTargetRadius(W, H, true);
 
       // Backdrop blitted from cache — this was a nested loop laying down one
       // fillRect per dot every frame (150+ draw calls a frame, ~9,000 a second)
@@ -953,10 +978,7 @@ export default function ReactionSimulatorClient() {
 
       if (overdriveActiveRef.current) {
         ctx.save();
-        const grad = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.45, W / 2, H / 2, Math.max(W, H) * 0.85);
-        grad.addColorStop(0, 'rgba(236, 72, 153, 0)');
-        grad.addColorStop(1, 'rgba(236, 72, 153, 0.12)');
-        ctx.fillStyle = grad;
+        ctx.fillStyle = ensureOverdriveGrad(W, H);
         ctx.fillRect(0, 0, W, H);
         ctx.restore();
       }
@@ -1030,13 +1052,13 @@ export default function ReactionSimulatorClient() {
 
     for (let i = targets.length - 1; i >= 0; i--) {
       const t = targets[i];
-      const radius = getTargetRadius(t.isMicro);
+      const radius = getTargetRadius(rect.width, rect.height, t.isMicro);
 
       const dx = x - t.x;
       const dy = y - t.y;
       const dist = Math.hypot(dx, dy);
 
-      const hitRadius = radius * (isMobileRef.current ? 2.25 : 1.75);
+      const hitRadius = radius * (isMobileRef.current ? 1.9 : 1.5);
 
       if (dist <= hitRadius) {
         hitAny = true;

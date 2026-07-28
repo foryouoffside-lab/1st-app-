@@ -266,8 +266,8 @@ export default function ConflictReflexClient() {
   // responsive ball size
   const getBallRadius = useCallback((W, H) => {
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent || '') || ('ontouchstart' in window);
-    const baseSize = isMobile ? Math.min(W, H) * 0.08 : Math.min(W, H) * 0.07;
-    return Math.max(22, Math.min(50, baseSize)) * deviceScale;
+    const baseSize = isMobile ? Math.min(W, H) * 0.072 : Math.min(W, H) * 0.063;
+    return Math.max(20, Math.min(45, baseSize)) * deviceScale; // ~10% smaller for extra room to move
   }, [deviceScale]);
 
   // Mount/cleanup
@@ -670,7 +670,7 @@ export default function ConflictReflexClient() {
       if (phaseRef.current !== 'playing') return;
       if (!trackingState.current.lastTime) {
         trackingState.current.lastTime = ts;
-      } else if (ts - trackingState.current.lastTime < 15) {
+      } else if (ts - trackingState.current.lastTime < 32) {
         // ~60fps cap — high-refresh phones fire rAF at 90-120Hz, doubling
         // the draw cost for no visual gain. dt below is real elapsed time,
         // so nothing game-visible changes speed.

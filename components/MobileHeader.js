@@ -46,7 +46,7 @@ export default function MobileHeader() {
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-full bg-gradient-to-br from-pink-500 to-violet-400 flex items-center justify-center font-bold text-xs text-white shrink-0 overflow-hidden border border-white/[0.08]">
             {user?.photoURL ? (
-              <img src={user.photoURL} alt={displayName} className="w-full h-full object-cover" />
+              <img src={user.photoURL} alt={displayName} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
             ) : (
               initials
             )}

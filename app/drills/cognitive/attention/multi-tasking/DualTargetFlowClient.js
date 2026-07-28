@@ -565,7 +565,7 @@ export default function MultiTaskingClient() {
     // split made shapes *smaller* in the orientation the drill actually
     // runs in than in the portrait fallback that's barely ever shown,
     // which is why they read as too-small-to-see-comfortably.
-    const fontSize = isMobile ? 35.2 : 51.2; // px equivalents of 2.2rem/3.2rem
+    const fontSize = isMobile ? 31.7 : 46.1; // ~10% smaller than the 2.2rem/3.2rem base, for extra room to move
 
     const isTarget = Math.random() < 0.35;
     let glyph = isTarget ? targetGlyph : SHAPES[Math.floor(Math.random() * SHAPES.length)];
@@ -763,6 +763,28 @@ export default function MultiTaskingClient() {
     }, delay);
     return () => clearTimeout(t);
   }, [isChallenge, matchStartAt, phase, enterDrill]);
+
+  // Pre-warm the landscape lock as soon as we know a duel is about to
+  // start, instead of waiting until the synchronized matchStartAt instant
+  // to begin it. lockLandscape() calls into Android's native orientation
+  // API, and how long it actually takes to finish rotating the device
+  // varies meaningfully by device/current-orientation — doing this AT
+  // matchStartAt meant the real game start happened at matchStartAt +
+  // however long THIS device's rotation took, which differed between the
+  // two duelists and showed up as a 1-2s gap between when their matches
+  // visibly began. The shared countdown always has a few seconds of lead
+  // time before matchStartAt (see MATCH_COUNTDOWN_MS in DrillWrapper.js),
+  // so there's room to finish this well beforehand on both devices —
+  // enterDrill's own lockLandscape() call then just resolves immediately
+  // since the device is already there.
+  useEffect(() => {
+    if (!isChallenge || !matchStartAt) return;
+    if (Capacitor.isNativePlatform()) {
+      StatusBar.setOverlaysWebView({ overlay: true }).catch(() => {});
+      StatusBar.hide().catch(() => {});
+    }
+    lockLandscape().catch(() => {});
+  }, [isChallenge, matchStartAt]);
 
   const prevChallengeIdRef = useRef(challengeId);
   useEffect(() => {

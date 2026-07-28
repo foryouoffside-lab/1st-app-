@@ -3,10 +3,10 @@
 // components/AuthGate.js
 // SkillDrills Pro — Real Google Sign-In Gate
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '../contexts/AuthContext';
-import { ShieldCheck, Layers, Loader2, User, Trophy, CalendarDays, TrendingUp } from 'lucide-react';
+import { ShieldCheck, Loader2, User, Trophy, CalendarDays, TrendingUp } from 'lucide-react';
 import { DRILL_INDEX } from '../lib/drillIndex';
 import { DRILL_GROUPS } from '../lib/drillGroups';
 
@@ -20,6 +20,38 @@ const GRID_BG = {
     'linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px)',
   backgroundSize: '40px 40px',
 };
+
+// Real vector art (same design as public/favicon.svg), not a raster <img> —
+// crisp at any size/DPI instead of a PNG that looks soft when scaled.
+function LogoMark({ className }) {
+  return (
+    <svg viewBox="0 0 100 100" className={className} role="img" aria-label="SkillDrills">
+      <defs>
+        <linearGradient id="sdLogoBg" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#2563eb" />
+          <stop offset="100%" stopColor="#7c3aed" />
+        </linearGradient>
+        <linearGradient id="sdLogoBgStroke" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#1e40af" />
+          <stop offset="100%" stopColor="#5b21b6" />
+        </linearGradient>
+      </defs>
+      <circle cx="50" cy="50" r="48" fill="url(#sdLogoBg)" stroke="url(#sdLogoBgStroke)" strokeWidth="2" />
+      <circle cx="50" cy="50" r="22" fill="none" stroke="#fff" strokeWidth="3" opacity="0.9" />
+      <circle cx="50" cy="50" r="14" fill="none" stroke="#fff" strokeWidth="2" opacity="0.8" />
+      <circle cx="50" cy="50" r="6" fill="#fff" opacity="0.9" />
+      <line x1="50" y1="18" x2="50" y2="32" stroke="#fff" strokeWidth="2.5" opacity="0.9" />
+      <line x1="50" y1="68" x2="50" y2="82" stroke="#fff" strokeWidth="2.5" opacity="0.9" />
+      <line x1="18" y1="50" x2="32" y2="50" stroke="#fff" strokeWidth="2.5" opacity="0.9" />
+      <line x1="68" y1="50" x2="82" y2="50" stroke="#fff" strokeWidth="2.5" opacity="0.9" />
+      <line x1="30" y1="30" x2="38" y2="38" stroke="#fff" strokeWidth="2" opacity="0.6" />
+      <line x1="70" y1="30" x2="62" y2="38" stroke="#fff" strokeWidth="2" opacity="0.6" />
+      <line x1="30" y1="70" x2="38" y2="62" stroke="#fff" strokeWidth="2" opacity="0.6" />
+      <line x1="70" y1="70" x2="62" y2="62" stroke="#fff" strokeWidth="2" opacity="0.6" />
+      <circle cx="50" cy="50" r="2.5" fill="#fff" />
+    </svg>
+  );
+}
 
 function GoogleIcon(props) {
   return (
@@ -45,9 +77,7 @@ function Frame({ children }) {
 function Brand() {
   return (
     <div className="flex flex-col items-center text-center mb-7">
-      <div className="w-14 h-14 rounded-[16px] bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center mb-4 shadow-[0_0_30px_rgba(139,92,246,.4)]">
-        <Layers className="w-7 h-7 text-white" />
-      </div>
+      <LogoMark className="w-14 h-14 mb-4 drop-shadow-[0_0_20px_rgba(139,92,246,.5)]" />
       <h1 className="text-[22px] font-black tracking-tight text-white">
         SkillDrills <span className="text-violet-400 font-bold text-[10px] uppercase tracking-widest ml-1 bg-violet-500/10 px-2 py-0.5 rounded-full border border-violet-500/20 align-middle">Pro</span>
       </h1>
@@ -142,6 +172,19 @@ export default function AuthGate({ children }) {
   const { user, loading, pendingSignup, completeSignup, signInWithGoogle } = useAuth();
   const [signingIn, setSigningIn] = useState(false);
 
+  // A returning session now resolves from cache almost instantly (see
+  // AuthContext), which was the right fix for the old multi-second wait —
+  // but it also meant this branded loading moment barely appeared at all.
+  // Hold it visible for a short, fixed minimum so it still reads as a
+  // deliberate loading screen rather than a flash, without reintroducing
+  // any real wait: this is presentation-only and never delays anything
+  // network-bound, which already takes longer than this on its own.
+  const [minHoldDone, setMinHoldDone] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setMinHoldDone(true), 900);
+    return () => clearTimeout(t);
+  }, []);
+
   if (PUBLIC_PATHS.includes(pathname)) {
     return children;
   }
@@ -155,15 +198,13 @@ export default function AuthGate({ children }) {
     }
   };
 
-  if (loading) {
+  if (loading || !minHoldDone) {
     return (
       <Frame>
         <div className="flex flex-col items-center text-center">
           <div className="relative flex items-center justify-center mb-6">
-            <div className="absolute w-20 h-20 rounded-full border-[3px] border-t-violet-500 border-r-transparent border-b-transparent border-l-transparent animate-spin" />
-            <div className="w-14 h-14 rounded-[16px] bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center shadow-[0_0_30px_rgba(139,92,246,.4)]">
-              <Layers className="w-7 h-7 text-white" />
-            </div>
+            <div className="absolute w-16 h-16 rounded-full border-[3px] border-t-violet-500 border-r-transparent border-b-transparent border-l-transparent animate-spin" />
+            <LogoMark className="w-11 h-11 drop-shadow-[0_0_20px_rgba(139,92,246,.5)]" />
           </div>
           <h2 className="text-[15px] font-bold tracking-wide text-white">Loading SkillDrills</h2>
           <p className="text-slate-500 text-[11px] mt-1.5">Connecting to secure servers...</p>

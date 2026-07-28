@@ -17,7 +17,7 @@ import { StatusBar } from '@capacitor/status-bar';
 import generateShareCard, { shareScoreCard } from '../../../../../components/ShareScoreCard';
 import DrillWrapper from '../../../../../components/DrillWrapper';
 import { useDuelMatchStart } from '../../../../../lib/challengeEngine';
-import { canvasDpr } from '../../../../../lib/canvasFx';
+import { canvasDpr, createBackdropCache } from '../../../../../lib/canvasFx';
 
 // ============================================================
 // TUNING
@@ -25,22 +25,26 @@ import { canvasDpr } from '../../../../../lib/canvasFx';
 const TOTAL_TIME = 45;
 const MAX_LIVES = 5;
 
+// Thresholds compressed ~30% and speed/spawnDelay tightened at every tier —
+// the old curve let a full 45s solo run pass at trivial difficulty (see
+// PLAYER_HIT_R and homingRate below for the other half of the fix). Density
+// (maxEnemies) ramps a little faster too so the board fills in sooner.
 const LEVEL_TABLE = [
-  { threshold: 0,     speed: 20,  spawnDelay: 1.10, maxEnemies: 6,  basePoints: 2 },
-  { threshold: 10,    speed: 24,  spawnDelay: 0.95, maxEnemies: 8,  basePoints: 3 },
-  { threshold: 50,    speed: 30,  spawnDelay: 0.82, maxEnemies: 10, basePoints: 4 },
-  { threshold: 150,   speed: 37,  spawnDelay: 0.70, maxEnemies: 13, basePoints: 5 },
-  { threshold: 350,   speed: 45,  spawnDelay: 0.58, maxEnemies: 16, basePoints: 6 },
-  { threshold: 600,   speed: 53,  spawnDelay: 0.48, maxEnemies: 19, basePoints: 8 },
-  { threshold: 1000,  speed: 62,  spawnDelay: 0.40, maxEnemies: 22, basePoints: 10 },
-  { threshold: 1600,  speed: 71,  spawnDelay: 0.32, maxEnemies: 25, basePoints: 13 },
-  { threshold: 2500,  speed: 80,  spawnDelay: 0.25, maxEnemies: 28, basePoints: 16 },
-  { threshold: 4000,  speed: 90,  spawnDelay: 0.18, maxEnemies: 32, basePoints: 20 },
-  { threshold: 6000,  speed: 96,  spawnDelay: 0.15, maxEnemies: 34, basePoints: 22 },
-  { threshold: 9000,  speed: 102, spawnDelay: 0.13, maxEnemies: 36, basePoints: 25 },
-  { threshold: 13000, speed: 107, spawnDelay: 0.11, maxEnemies: 38, basePoints: 28 },
-  { threshold: 18000, speed: 111, spawnDelay: 0.10, maxEnemies: 40, basePoints: 30 },
-  { threshold: 25000, speed: 114, spawnDelay: 0.09, maxEnemies: 42, basePoints: 32 },
+  { threshold: 0,     speed: 30,  spawnDelay: 0.72, maxEnemies: 9,  basePoints: 2 },
+  { threshold: 8,     speed: 36,  spawnDelay: 0.62, maxEnemies: 11, basePoints: 3 },
+  { threshold: 35,    speed: 44,  spawnDelay: 0.54, maxEnemies: 13, basePoints: 4 },
+  { threshold: 100,   speed: 53,  spawnDelay: 0.46, maxEnemies: 16, basePoints: 5 },
+  { threshold: 230,   speed: 63,  spawnDelay: 0.38, maxEnemies: 19, basePoints: 6 },
+  { threshold: 420,   speed: 72,  spawnDelay: 0.32, maxEnemies: 22, basePoints: 8 },
+  { threshold: 700,   speed: 81,  spawnDelay: 0.27, maxEnemies: 25, basePoints: 10 },
+  { threshold: 1100,  speed: 82,  spawnDelay: 0.25, maxEnemies: 27, basePoints: 13 },
+  { threshold: 1700,  speed: 92,  spawnDelay: 0.20, maxEnemies: 30, basePoints: 16 },
+  { threshold: 2700,  speed: 103, spawnDelay: 0.15, maxEnemies: 34, basePoints: 20 },
+  { threshold: 4200,  speed: 110, spawnDelay: 0.12, maxEnemies: 36, basePoints: 22 },
+  { threshold: 6300,  speed: 117, spawnDelay: 0.10, maxEnemies: 38, basePoints: 25 },
+  { threshold: 9200,  speed: 123, spawnDelay: 0.09, maxEnemies: 40, basePoints: 28 },
+  { threshold: 13000, speed: 128, spawnDelay: 0.08, maxEnemies: 42, basePoints: 30 },
+  { threshold: 18000, speed: 131, spawnDelay: 0.07, maxEnemies: 44, basePoints: 32 },
 ];
 
 // ============================================================
@@ -376,7 +380,7 @@ export default function QuickDodgeClient() {
     const id = ++e.obstacleIdCounter;
     const levelProgress = (e.level - 1) / (LEVEL_TABLE.length - 1);
     const sizeScale = 1.0 + levelProgress * 0.5;
-    const maxR = 5.5 * sizeScale;
+    const maxR = 4.95 * sizeScale; // ~10% smaller for extra room to move
 
     e.obstacles.push({
       id, x, y,
@@ -511,11 +515,21 @@ export default function QuickDodgeClient() {
         e.spawnTimer = 0;
       }
 
-      const homingRate = ((e.level - 1) / (LEVEL_TABLE.length - 1)) * 0.85;
+      // Floor raised from 0.15 to 0.28 (and ceiling from 0.85 to 1.13
+      // rad/sec) — even level-1 obstacles now visibly curve toward the
+      // player instead of nearly flying past in a straight line, and top-level
+      // obstacles track aggressively enough that standing still is a losing
+      // move.
+      const homingRate = 0.28 + ((e.level - 1) / (LEVEL_TABLE.length - 1)) * 0.85;
       let playerHit = false;
       const px = e.player.x;
       const py = e.player.y;
-      const PLAYER_HIT_R = 1.2;
+      // Was 1.5 — smaller than the player dot actually renders at (pr =
+      // minDim * 0.024, i.e. ~2.4% of minDim in this same percentage-of-field
+      // space). A near-miss that visibly grazed the dot wasn't registering as
+      // a hit, which was a big part of why the drill felt too forgiving.
+      // 2.6 now matches (slightly exceeds) the rendered dot.
+      const PLAYER_HIT_R = 2.6;
 
       for (let i = e.obstacles.length - 1; i >= 0; i--) {
         const o = e.obstacles[i];
@@ -575,7 +589,10 @@ export default function QuickDodgeClient() {
         triggerFlash('red');
         spawnBurst(px, py, '#ef4444', 18);
 
-        const clearRadius = 12;
+        // Was 12 — the post-hit mercy clear was wiping out most of the
+        // nearby board on every hit, which combined with the weak hitbox
+        // above made getting hit almost consequence-free for the next second.
+        const clearRadius = 8;
         e.obstacles = e.obstacles.filter(o => Math.hypot(px - o.x, py - o.y) > clearRadius);
 
         if (!isChallenge && e.lives <= 0) {
@@ -750,17 +767,55 @@ export default function QuickDodgeClient() {
     window.addEventListener('resize', resizeCanvas);
     window.addEventListener('orientationchange', resizeCanvas);
 
-    const drawPulseRing = (ctx, x, y, baseR, color, time, seed, periodSec, maxScale, alphaStart) => {
+    // Static play-field backdrop (flat fill + grid), rendered once per size
+    // instead of redrawn from scratch every frame — same pattern as the other
+    // canvas drills (see createBackdropCache in lib/canvasFx.js).
+    const backdrop = createBackdropCache((c, w, h) => {
+      c.fillStyle = '#050508';
+      c.fillRect(0, 0, w, h);
+      c.strokeStyle = 'rgba(255,255,255,0.015)';
+      c.lineWidth = 1;
+      c.beginPath();
+      for (let x = 0; x < w; x += 40) { c.moveTo(x, 0); c.lineTo(x, h); }
+      for (let y = 0; y < h; y += 40) { c.moveTo(0, y); c.lineTo(w, y); }
+      c.stroke();
+    });
+
+    // Pre-rendered ring sprites, one per obstacle color — this replaces a
+    // live arc()+stroke() PER OBSTACLE PER FRAME (up to 44 of them at max
+    // level, each forcing its own circle tessellation and anti-aliased line
+    // rasterization) with a cheap drawImage blit. This was the single
+    // biggest per-frame cost once the board filled up at higher levels —
+    // exactly the "the red things look great but cost CPU" tradeoff, now
+    // paid once at setup instead of 30-40x every frame. The one visible
+    // difference: the ring's line thickness now scales with its radius
+    // (baked into the bitmap) instead of staying a fixed 1.5px — barely
+    // perceptible on a fast-expanding, fading ping like this.
+    const RING_SPRITE_SIZE = 64;
+    const makeRingSprite = (color) => {
+      const s = document.createElement('canvas');
+      s.width = RING_SPRITE_SIZE;
+      s.height = RING_SPRITE_SIZE;
+      const sctx = s.getContext('2d');
+      const lw = RING_SPRITE_SIZE * 0.045;
+      sctx.strokeStyle = color;
+      sctx.lineWidth = lw;
+      sctx.beginPath();
+      sctx.arc(RING_SPRITE_SIZE / 2, RING_SPRITE_SIZE / 2, RING_SPRITE_SIZE / 2 - lw, 0, Math.PI * 2);
+      sctx.stroke();
+      return s;
+    };
+    const ringSpriteGlow = makeRingSprite('#fecaca');
+    const ringSpriteBase = makeRingSprite('#f87171');
+
+    const drawPulseRing = (ctx, x, y, baseR, glowing, time, seed, periodSec, maxScale, alphaStart) => {
       const cycle = ((time + seed) % periodSec) / periodSec;
       const ringR = baseR * (1 + cycle * (maxScale - 1));
       const alpha = alphaStart * (1 - cycle);
       if (alpha <= 0) return;
-      ctx.beginPath();
-      ctx.arc(x, y, ringR, 0, Math.PI * 2);
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1.5;
+      const d = ringR * 2;
       ctx.globalAlpha = alpha;
-      ctx.stroke();
+      ctx.drawImage(glowing ? ringSpriteGlow : ringSpriteBase, x - ringR, y - ringR, d, d);
       ctx.globalAlpha = 1.0;
     };
 
@@ -770,7 +825,11 @@ export default function QuickDodgeClient() {
       const ctx = cvs?.getContext('2d');
       if (!ctx) { drawAnimRef.current = requestAnimationFrame(draw); return; }
 
-      if (timestamp - lastDrawTs < 15) {
+      // ~30fps cap on the actual canvas repaint. Physics (runGameLoop) stays
+      // on its own fixed-timestep accumulator so hit-detection precision is
+      // unaffected — only the paint work (the real CPU/heat cost, especially
+      // the per-obstacle glow/pulse layers below) is throttled.
+      if (timestamp - lastDrawTs < 32) {
         drawAnimRef.current = requestAnimationFrame(draw);
         return;
       }
@@ -786,15 +845,12 @@ export default function QuickDodgeClient() {
       ctx.save();
       ctx.scale(dpr, dpr);
 
-      ctx.fillStyle = '#050508';
-      ctx.fillRect(0, 0, w, h);
-
-      ctx.strokeStyle = 'rgba(255,255,255,0.015)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      for (let x = 0; x < w; x += 40) { ctx.moveTo(x, 0); ctx.lineTo(x, h); }
-      for (let y = 0; y < h; y += 40) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
-      ctx.stroke();
+      if (backdrop.ensure(w, h, dpr)) {
+        ctx.drawImage(backdrop.canvas, 0, 0, w, h);
+      } else {
+        ctx.fillStyle = '#050508';
+        ctx.fillRect(0, 0, w, h);
+      }
 
       if (phase === 'playing') {
         const px = (e.player.x / 100) * w;
@@ -880,7 +936,7 @@ export default function QuickDodgeClient() {
 
         const period = Math.max(0.55, 1.3 - levelProgress * 0.75);
         pts.forEach(({ o, ox, oy, or_ }) => {
-          drawPulseRing(ctx, ox, oy, or_, glowing ? 'rgba(254,202,202,1)' : 'rgba(248,113,113,1)', time, o.id * 0.37, period, 2.0 + levelProgress * 0.6, 0.4);
+          drawPulseRing(ctx, ox, oy, or_, glowing, time, o.id * 0.37, period, 2.0 + levelProgress * 0.6, 0.4);
         });
       }
 

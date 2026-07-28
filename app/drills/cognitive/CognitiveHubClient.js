@@ -150,6 +150,7 @@ export default function CognitiveHubClient() {
     if (diff === 'beginner' || diff === 'easy') return 'beginner';
     if (diff === 'intermediate' || diff === 'medium') return 'intermediate';
     if (diff === 'advanced' || diff === 'hard') return 'advanced';
+    if (diff === 'impossible') return 'impossible';
     return 'elite';
   };
 
@@ -161,6 +162,7 @@ export default function CognitiveHubClient() {
     const diff = String(drill.difficulty || '').toLowerCase();
     if (diff === 'easy' || diff === 'beginner') return 'Beginner';
     if (diff === 'hard' || diff === 'advanced') return 'Advanced';
+    if (diff === 'impossible') return 'Impossible';
     if (diff === 'elite') return 'Elite';
     return 'Intermediate';
   };
@@ -181,9 +183,6 @@ export default function CognitiveHubClient() {
       className="min-h-screen pb-28 text-slate-100 bg-[#050508] relative overflow-hidden"
       style={{ '--a': activeGroupMeta ? activeGroupMeta.accent : 'var(--c-cognitive)', paddingTop: 'calc(16px + env(safe-area-inset-top))' }}
     >
-      {/* Background Gradient */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-[320px] bg-[radial-gradient(circle_at_50%_0%,rgba(139,92,246,0.12),transparent_55%)]" />
-
       {/* Decorative Particle Canvas */}
       <canvas style={{ touchAction: 'none' }} ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none z-0 opacity-30" />
 

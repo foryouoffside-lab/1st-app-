@@ -52,7 +52,7 @@ export default function ChallengeNotificationBanner() {
       router.push(`/drills/${activeChallenge.drillSlug}?challengeId=${activeChallenge.id}`);
     } catch (e) {
       console.error(e);
-      alert("Failed to accept challenge. The challenge may have expired or been cancelled.");
+      alert(e?.code === 'arena/locked-out' ? e.message : "Failed to accept challenge. The challenge may have expired or been cancelled.");
     }
   };
 

@@ -456,8 +456,15 @@ export default function TowerOfHanoiClient() {
       setTimeRemaining(totalTime);
     }
 
+    // Was 1100ms — a leftover from when this pause existed to let a gold/cyan
+    // "level clear" flash play before the board reset. That flash was later
+    // made invisible catalog-wide (see the fx-flash-gold/fx-flash-cyan note
+    // in globals.css) to stop rapid-scoring drills from strobing, but this
+    // drill's pause was never shortened to match — so it sat there doing
+    // nothing for over a second. Trimmed to a brief beat that still lets the
+    // hit sound/score-tick register without feeling delayed.
     if (advanceTimerRef.current) clearTimeout(advanceTimerRef.current);
-    advanceTimerRef.current = setTimeout(() => { if (gameActiveRef.current) advanceLevel(); }, 1100);
+    advanceTimerRef.current = setTimeout(() => { if (gameActiveRef.current) advanceLevel(); }, 350);
   }, [advanceLevel, triggerFlash, totalTime, isChallenge]);
 
   // Valid move: NO score awarded for individual moves to prevent back-and-forth farming
@@ -568,7 +575,12 @@ export default function TowerOfHanoiClient() {
         setTimeRemaining(0);
         endGameRef.current?.('time');
       } else {
-        setTimeRemaining(timeRemainingRef.current);
+        // Only when the DISPLAYED whole second changes — same fix as
+        // DualTargetFlowClient/FingerSequencingClient/GridMemorizationClient.
+        // This re-rendered the whole towers/disks tree 5x/sec unconditionally.
+        setTimeRemaining((prev) => (
+          Math.ceil(prev) === Math.ceil(timeRemainingRef.current) ? prev : timeRemainingRef.current
+        ));
       }
     }, 200);
     scheduleHeartbeat();
@@ -661,6 +673,28 @@ export default function TowerOfHanoiClient() {
     }, delay);
     return () => clearTimeout(t);
   }, [isChallenge, matchStartAt, phase, enterDrill]);
+
+  // Pre-warm the landscape lock as soon as we know a duel is about to
+  // start, instead of waiting until the synchronized matchStartAt instant
+  // to begin it. lockLandscape() calls into Android's native orientation
+  // API, and how long it actually takes to finish rotating the device
+  // varies meaningfully by device/current-orientation — doing this AT
+  // matchStartAt meant the real game start happened at matchStartAt +
+  // however long THIS device's rotation took, which differed between the
+  // two duelists and showed up as a 1-2s gap between when their matches
+  // visibly began. The shared countdown always has a few seconds of lead
+  // time before matchStartAt (see MATCH_COUNTDOWN_MS in DrillWrapper.js),
+  // so there's room to finish this well beforehand on both devices —
+  // enterDrill's own lockLandscape() call then just resolves immediately
+  // since the device is already there.
+  useEffect(() => {
+    if (!isChallenge || !matchStartAt) return;
+    if (Capacitor.isNativePlatform()) {
+      StatusBar.setOverlaysWebView({ overlay: true }).catch(() => {});
+      StatusBar.hide().catch(() => {});
+    }
+    lockLandscape().catch(() => {});
+  }, [isChallenge, matchStartAt]);
 
   // Rematch reuses this same route with only ?challengeId= changing — reset
   // all per-match state so the previous match doesn't leak into the new one.
@@ -804,9 +838,14 @@ export default function TowerOfHanoiClient() {
           <>
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
               {/* scaleX, not width — a width animation forces layout + paint on
-                  every clock tick for the whole match; a transform is composited. */}
+                  every clock tick for the whole match; a transform is composited.
+                  duration-1000, not 100 — the state driving this only updates
+                  once a second (see the throttle above), so a 100ms transition
+                  meant the bar snapped quickly then sat frozen for ~900ms
+                  instead of gliding the full second, matching DualTargetFlowClient's
+                  already-correct 1000ms pairing. */}
               <div
-                className={`h-full w-full origin-left transition-transform duration-100 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-violet-500'}`}
+                className={`h-full w-full origin-left transition-transform duration-1000 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-violet-500'}`}
                 style={{ transform: `scaleX(${timePct / 100})` }}
               />
             </div>
