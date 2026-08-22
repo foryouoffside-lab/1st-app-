@@ -23,7 +23,7 @@ to Production on Google Play, for a worldwide audience.
 | Data Safety form answers | Drafted in `PLAY_STORE_SUBMISSION.md` §6 |
 | Content rating questionnaire | Drafted in `PLAY_STORE_SUBMISSION.md` §4 |
 | Placeholders in legal pages | Done 2026-08-22 — Sangmesh, India |
-| **Store listing claims** | **NEEDS EDIT — see §4** |
+| Store listing claims | Rewritten 2026-08-22 — see §4 |
 | **OAuth consent screen branding** | Outstanding (Console only) |
 | **Privacy policy version drift** | **NEEDS FIX — see §2** |
 
@@ -219,7 +219,7 @@ the only fields in that category; email is correctly excluded from the document.
 
 - [x] Fill the operator identity (§1) — Sangmesh, India
 - [ ] Redeploy the website so both privacy policies match (§2)
-- [ ] Rewrite the store listing claims (§4)
+- [x] Rewrite the store listing claims (§4) — done, copy is in the submission doc
 - [ ] Set the OAuth consent screen App name (see `PLAY_STORE_SUBMISSION.md` §1)
 - [ ] Enter the data deletion URL in Play Console
 - [ ] Create a reviewer test account and document it in App access

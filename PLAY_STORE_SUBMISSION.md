@@ -68,34 +68,50 @@ exists today), add the DNS records, then change `authDomain` in
 
 ## 2. Store listing text
 
+> Rewritten 2026-08-22 to remove efficacy claims — see `LAUNCH_COMPLIANCE.md` §4.
+> The previous copy said "science-based" and "sharpen the mental skills that
+> matter every day"; both are real-world-improvement claims of the kind the FTC
+> fined Lumosity $2M over. This version keeps the appeal and drops the claim.
+
 **Short description** (max 80 characters):
 ```
-Train focus, memory & reaction time with 24 free brain training drills.
+24 free reaction, memory and focus drills. Train daily, duel players worldwide.
 ```
-(72 characters)
+(79 characters)
 
 **Full description** (max 4000 characters):
 ```
-SkillDrills Pro is a free cognitive training app with 24 science-based drills across five categories — Attention, Focus, Memory, Problem Solving, and Processing Speed.
+SkillDrills is a free training-game app with 24 drills across five categories - Attention, Focus, Memory, Problem Solving, and Processing Speed.
 
-TRAIN YOUR MIND
-Sharpen the mental skills that matter every day: staying focused under distraction, holding information in working memory, reacting faster, and thinking clearly under pressure. Every drill adapts its difficulty as you improve, so you're always training at the edge of your ability.
+TRAIN AND COMPETE
+Practise the skills each drill measures: holding attention under distraction, keeping information in working memory, reacting quickly under time pressure, and working through problems against the clock. Every drill adapts its difficulty as you improve, so you are always playing at the edge of your ability.
 
 DAILY CHALLENGES
-A new set of challenges rotates in every day, keeping your training varied and building a real streak — miss a day and your streak resets, so there's a reason to come back.
+A new set of challenges rotates in every day, keeping your training varied and building a streak - miss a day and your streak resets, so there is a reason to come back.
 
-ARENA — HEAD-TO-HEAD DUELS
-Challenge other players in real-time 1v1 duels across a rotating set of drills. Win to climb the EIQ ranking ladder — a competitive score built from both your performance and the difficulty of the drill.
+ARENA - HEAD-TO-HEAD DUELS
+Challenge other players to real-time 1v1 duels across a rotating set of drills. Win to climb the EIQ ladder - a competitive ranking built from both your score and the difficulty of the drill. EIQ is a leaderboard ranking inside SkillDrills, not an IQ score or a measure of intelligence.
 
 TRACK YOUR PROGRESS
 See your best scores, streaks, and XP level over time, all saved to your account so your progress follows you across sessions.
 
 WHY SKILLDRILLS
 - 24 free drills, no paywall, no ads
-- Sign in with Google — no separate password to remember
+- Sign in with Google - no separate password to remember
 - Your solo drill scores and progress stay on your device
-- Built for quick, focused sessions — most drills run 30-45 seconds
+- Built for quick, focused sessions - most drills run 30-45 seconds
+- Play solo, or duel players from anywhere in the world
+
+SkillDrills is a set of training games made for practice and entertainment. It is not a medical device or a diagnostic tool, and we make no claim that playing it improves your performance outside the app.
 ```
+(1620 characters)
+
+**Suggested title** (max 30 chars — see `PLAY_STORE_ASO.md` §2):
+```
+SkillDrills: Focus & Reaction
+```
+(29 characters. Current "SkillDrills Pro" uses 15 and spends 3 of them on a
+word nobody searches for.)
 
 **Contact email:** skilldrills.contact@gmail.com
 
