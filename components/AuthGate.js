@@ -71,7 +71,7 @@ function Brand() {
     <div className="flex flex-col items-center text-center mb-7">
       <LogoMark className="w-14 h-14 mb-4 drop-shadow-[0_0_20px_rgba(139,92,246,.5)]" />
       <h1 className="text-[22px] font-black tracking-tight text-white">
-        SkillDrills <span className="text-violet-400 font-bold text-[10px] uppercase tracking-widest ml-1 bg-violet-500/10 px-2 py-0.5 rounded-full border border-violet-500/20 align-middle">Pro</span>
+        SkillDrills
       </h1>
     </div>
   );
