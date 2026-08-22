@@ -61,7 +61,7 @@ export default function TermsOfServicePage() {
         </Section>
 
         <Section title="Governing law">
-          <p>These terms are governed by the laws of [YOUR COUNTRY], and any dispute will be handled by the courts of [YOUR CITY/STATE, COUNTRY]. If you are a consumer in the EEA or UK, this does not take away the protections of the mandatory consumer laws of the country you live in, or your right to bring a claim there.</p>
+          <p>These terms are governed by the laws of India, and any dispute will be subject to the jurisdiction of the courts of India. If you are a consumer in the EEA or UK, this does not take away the protections of the mandatory consumer laws of the country you live in, or your right to bring a claim there.</p>
         </Section>
 
         <Section title="Changes to these terms">

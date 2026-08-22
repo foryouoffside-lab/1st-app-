@@ -22,32 +22,32 @@ to Production on Google Play, for a worldwide audience.
 | Firestore security rules | Published and verified live |
 | Data Safety form answers | Drafted in `PLAY_STORE_SUBMISSION.md` §6 |
 | Content rating questionnaire | Drafted in `PLAY_STORE_SUBMISSION.md` §4 |
-| **Placeholders in legal pages** | **OUTSTANDING — see §1** |
+| Placeholders in legal pages | Done 2026-08-22 — Sangmesh, India |
 | **Store listing claims** | **NEEDS EDIT — see §4** |
 | **OAuth consent screen branding** | Outstanding (Console only) |
 | **Privacy policy version drift** | **NEEDS FIX — see §2** |
 
 ---
 
-## 1. Placeholders you must fill in — blocking
+## 1. Operator identity — filled in
 
-Three placeholders are sitting in live legal text right now. They must be real
-before submission; shipping them as-is is worse than having no clause at all.
+The legal pages now name the operator:
 
-**`app/privacy/page.js`** — "Who is responsible for your data":
-- `[YOUR LEGAL NAME]` — the person or company that legally operates the app.
-  If you have not registered a company, this is your own legal name. GDPR
-  requires the controller to be identifiable; "SkillDrills" alone is not enough.
-- `[YOUR COUNTRY]` — where you are based.
+- **Data controller:** Sangmesh, based in India (`app/privacy/page.js`)
+- **Governing law:** the laws of India; jurisdiction, the courts of India
+  (`app/terms/page.js`)
 
-**`app/terms/page.js`** — "Governing law":
-- `[YOUR COUNTRY]` and `[YOUR CITY/STATE, COUNTRY]`.
+Two refinements worth considering, neither blocking:
 
-**LAWYER:** whether to name yourself personally or register an entity is a real
-decision with liability consequences. A one-person app naming a private
-individual as controller publishes that person's name and exposes them
-personally. Most solo developers accept this; some register a company first.
-Worth one conversation before you publish.
+- **Full legal name.** "Sangmesh" is what appears publicly. If that is a first
+  name only, a full legal name is a stronger controller identification under
+  GDPR and India's DPDP Act. Be aware this publishes your real name to the
+  world — that is the normal trade-off for a solo developer, and the way to
+  avoid it is to register a company and name that instead.
+- **A named city.** The clause currently says "the courts of India", which is
+  workable but broad. Naming your actual city (e.g. "the courts of Pune,
+  Maharashtra, India") is the stronger form. Tell me the city and it is a
+  one-line change.
 
 ---
 
@@ -154,8 +154,10 @@ question, and the answer depends on evidence you would need to hold.
 data subject rights, international transfers, right to complain to a supervisory
 authority.
 
-> **LAWYER — GDPR Article 27 representative.** If you are established outside
-> the EU but offer the app to people inside it, you may be legally required to
+> **LAWYER — GDPR Article 27 representative. This one is now live.** You are
+> established in India, i.e. outside the EU, and you intend to offer the app
+> to people inside it — which is exactly the trigger condition. You may be
+> legally required to
 > appoint a representative *inside* the EU (and separately, one in the UK).
 > There are exemptions for small-scale, low-risk processing, and an argument
 > exists that this app qualifies — but that is a judgement call with a real
@@ -170,9 +172,19 @@ it that way, and if that ever changes the obligation appears immediately.
 **Children (COPPA / UK Age Appropriate Design Code).** Policy says 13+, Terms
 now say 13+ (16 where required). Keep the Play declaration matching.
 
-**India (DPDP Act 2023).** If you are based in India, this applies to you
-directly as a data fiduciary, including notice and consent requirements and
-breach reporting. The current policy substantially covers the notice side.
+**India (DPDP Act 2023) — this is your home jurisdiction and applies
+directly.** You are a Data Fiduciary under the Act. The current policy covers
+the notice obligations well. Two things the Act adds that a GDPR-shaped policy
+does not automatically give you: a defined route for a Data Principal to raise
+a grievance (your contact email serves, but it should be described as the
+grievance channel), and breach notification to the Data Protection Board and
+to affected users. Verifiable parental consent is required for under-18s,
+which is a stricter age line than the 13+ used elsewhere — your app is not
+directed at children, which is the right posture, but keep it that way.
+
+> **LAWYER:** the DPDP Act's rules are still being operationalised. Worth
+> asking specifically about the under-18 consent rule, since India's age
+> threshold is higher than the 13+ your Play declaration will use.
 
 **Brazil (LGPD), Canada (PIPEDA), Australia (Privacy Act).** The GDPR-shaped
 policy you now have covers the substance of these. No separate action for an
@@ -205,7 +217,7 @@ the only fields in that category; email is correctly excluded from the document.
 
 ## 7. Pre-submission checklist
 
-- [ ] Fill the three placeholders (§1)
+- [x] Fill the operator identity (§1) — Sangmesh, India
 - [ ] Redeploy the website so both privacy policies match (§2)
 - [ ] Rewrite the store listing claims (§4)
 - [ ] Set the OAuth consent screen App name (see `PLAY_STORE_SUBMISSION.md` §1)

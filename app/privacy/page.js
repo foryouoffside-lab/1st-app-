@@ -49,7 +49,7 @@ export default function PrivacyPolicyPage() {
         </Section>
 
         <Section title="Who is responsible for your data">
-          <p>SkillDrills is operated by [YOUR LEGAL NAME], based in [YOUR COUNTRY], acting as the data controller for the information described in this policy. You can reach us at <span className="text-slate-300">skilldrills.contact@gmail.com</span> for anything relating to your data.</p>
+          <p>SkillDrills is operated by Sangmesh, based in India, acting as the data controller for the information described in this policy. You can reach us at <span className="text-slate-300">skilldrills.contact@gmail.com</span> for anything relating to your data.</p>
         </Section>
 
         <Section title="Why we are allowed to process your data (EEA & UK)">
