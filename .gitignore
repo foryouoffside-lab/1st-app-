@@ -51,3 +51,5 @@ coverage/
 # OS
 .DS_Store
 Thumbs.db
+# Graphify knowledge graph output
+graphify-out/

@@ -1,20 +1,6 @@
 // capacitor.config.ts
 import type { CapacitorConfig } from '@capacitor/cli';
 
-// Live-reload target for on-device development.
-//
-// Set CAP_DEV_URL (see `npm run mobile:live`) and the installed app loads from
-// the Next.js dev server running on your machine instead of the assets baked
-// into the APK — a code change then shows up on the phone in about a second,
-// versus the ~60s `next build` + sync + rebuild + reinstall round trip. The
-// export build is a full 35-page production render, which is simply the wrong
-// tool to run on every small edit.
-//
-// Read from the environment rather than hardcoded on purpose: with no env var
-// set this is an ordinary production config, so a machine-specific LAN URL can
-// never be committed or shipped by accident. `mobile:release` also re-syncs
-// before bundling, which overwrites any dev URL a previous live session left
-// behind in the native project.
 const devUrl = process.env.CAP_DEV_URL;
 
 const config: CapacitorConfig = {
