@@ -1,6 +1,6 @@
 import Link from 'next/link';
 
-const LAST_UPDATED = 'July 17, 2026';
+const LAST_UPDATED = 'August 22, 2026';
 
 function Section({ title, children }) {
   return (
@@ -46,6 +46,33 @@ export default function PrivacyPolicyPage() {
 
         <Section title="Children's privacy">
           <p>SkillDrills is not directed at children under 13, and creating an account requires a Google account. If we become aware that we've collected information from a child under 13 without appropriate consent, we will delete it — contact us below to request this.</p>
+        </Section>
+
+        <Section title="Who is responsible for your data">
+          <p>SkillDrills is operated by [YOUR LEGAL NAME], based in [YOUR COUNTRY], acting as the data controller for the information described in this policy. You can reach us at <span className="text-slate-300">skilldrills.contact@gmail.com</span> for anything relating to your data.</p>
+        </Section>
+
+        <Section title="Why we are allowed to process your data (EEA & UK)">
+          <p>If you are in the European Economic Area or the United Kingdom, the GDPR requires us to name a lawful basis for each use of your data:</p>
+          <p><strong className="text-slate-300">Performance of a contract.</strong> Your account information, player profile, and gameplay progress are processed so we can actually provide the service you signed up for — saving your scores, ranking you, and matching you against other players.</p>
+          <p><strong className="text-slate-300">Legitimate interests.</strong> Crash reports and usage analytics are processed so we can keep the app working, fix bugs, and understand which drills people use. We have weighed this against your privacy: the data is not linked to your name and is never used for advertising or profiling.</p>
+          <p><strong className="text-slate-300">Consent.</strong> Where consent is required for analytics in your country, we rely on the consent you give at that point, and you can withdraw it at any time.</p>
+        </Section>
+
+        <Section title="Your rights over your data">
+          <p>Wherever you live, you can ask us to: give you a copy of your data, correct anything wrong, delete your account and its data, export your data in a portable format, restrict or object to how we process it, or withdraw consent you previously gave.</p>
+          <p>The fastest route for deletion is <span className="text-slate-300">Progress &rarr; Delete Account &amp; Wipe Data</span> inside the app, or see our <Link href="/delete-account" className="text-violet-400">account deletion page</Link>. For anything else, email <span className="text-slate-300">skilldrills.contact@gmail.com</span> and we will respond within 30 days. We will never charge you or degrade your experience for exercising these rights.</p>
+          <p>If you are in the EEA or UK and think we have handled your data wrongly, you also have the right to complain to your local data protection authority.</p>
+        </Section>
+
+        <Section title="California residents">
+          <p>Under the CCPA/CPRA, the categories of personal information we collect are identifiers (name, email address, profile photo, account ID) and internet or app activity (gameplay events, crash and usage diagnostics). We collect these for the purposes described above.</p>
+          <p><strong className="text-slate-300">We do not sell or share your personal information</strong>, and we never have. We do not use it for cross-context behavioural advertising, and we do not knowingly collect it from anyone under 16.</p>
+          <p>You have the right to know what we hold, to delete it, to correct it, and not to be discriminated against for asking. Use the same routes described above.</p>
+        </Section>
+
+        <Section title="Where your data is stored">
+          <p>SkillDrills runs on Firebase (Google Cloud). Your data may be stored and processed on servers outside your own country, including in the United States. Where data leaves the EEA or UK, Google Cloud&apos;s standard data protection terms and Standard Contractual Clauses cover that transfer.</p>
         </Section>
 
         <Section title="Security">

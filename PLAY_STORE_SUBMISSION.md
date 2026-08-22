@@ -1,5 +1,8 @@
 # Play Store Submission — Reference Content
 
+> Companion docs: **`LAUNCH_COMPLIANCE.md`** (legal + Play policy blockers,
+> global release) and **`PLAY_STORE_ASO.md`** (how ranking actually works).
+
 Everything below is content to paste directly into Play Console when you submit.
 Nothing here is code — this file isn't read by the app or the build, it's just
 your copy-paste reference for the day you deploy.
@@ -97,6 +100,16 @@ WHY SKILLDRILLS
 **Contact email:** skilldrills.contact@gmail.com
 
 **Privacy policy URL:** https://skilldrills.online/privacy
+
+**Data deletion URL:** https://skilldrills.online/delete-account
+(Play Console -> Data safety -> Data deletion. Required because the app has
+accounts. The page is `app/delete-account/page.js`.)
+
+> **Do not submit the description above as written.** "science-based" and
+> "sharpen the mental skills that matter every day" are efficacy claims of
+> the kind the FTC fined Lumosity $2M over. See `LAUNCH_COMPLIANCE.md` §4 for
+> the reason and a drop-in rewrite that keeps the appeal without the claim.
+> Also see `PLAY_STORE_ASO.md` §2 — the title wastes 15 of its 30 characters.
 
 ---
 
