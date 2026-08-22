@@ -9,6 +9,22 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // Confirms uid/request.auth.uid are exactly the two parties of a real,
+    // just-completed, non-self challenge — see the users/{uid} bounded
+    // match-stat branch below for why this exists. getAfter() reads the
+    // challenge doc's state as it will be immediately AFTER this same
+    // transaction commits, which is what lets this see a challenge doc's
+    // status flip to 'completed' in the very same write that's also moving
+    // both players' stats (see completeMatchInTx in lib/challengeEngine.js —
+    // it updates the challenge doc and both user docs in one transaction).
+    function matchupValid(uid, matchId) {
+      let c = getAfter(/databases/$(database)/documents/challenges/$(matchId)).data;
+      return c.status == 'completed' &&
+        c.fromUid != c.toUid &&
+        ((c.fromUid == uid && c.toUid == request.auth.uid) ||
+         (c.toUid == uid && c.fromUid == request.auth.uid));
+    }
+
     // Player profiles — public read (leaderboards/opponent cards need this),
     // but only the owning signed-in user may create or fully edit their own doc.
     match /users/{uid} {
@@ -17,10 +33,30 @@ service cloud.firestore {
       // below on every create/full-update, not just trusted to app code.
       allow read: if true;
 
+      // Every stat field must start at its zero value — a brand-new account
+      // has played nothing yet, and this is what stops a forged create call
+      // (bypassing completeSignup entirely) from self-assigning a starting
+      // win count, EIQ, or an oversized photo on day one. The bounded
+      // update branch below is the ONLY path any of these can ever move
+      // through after creation. A legacy pre-Google-auth account that
+      // genuinely needs its old wins/losses/eiq carried over is a manual,
+      // one-off Firebase Console edit now — not a client-writable path.
       allow create: if request.auth != null && request.auth.uid == uid &&
-        !('email' in request.resource.data);
+        !('email' in request.resource.data) &&
+        request.resource.data.get('wins', 0) == 0 &&
+        request.resource.data.get('losses', 0) == 0 &&
+        request.resource.data.get('streak', 0) == 0 &&
+        request.resource.data.get('eiq', 0) == 0 &&
+        request.resource.data.get('forfeitStreak', 0) == 0 &&
+        request.resource.data.get('arenaLockedUntil', 0) == 0 &&
+        (!('photoURL' in request.resource.data) || request.resource.data.photoURL.size() < 300000);
 
       allow update: if request.auth != null && (
+        (
+          // Plain presence heartbeat — no stat movement at all, so no match
+          // proof is needed. Always allowed, on anyone's doc, same as before.
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['online', 'lastSeen'])
+        ) ||
         (
           // Match-stat movement — allowed on a player's OWN doc and, since
           // match completion runs as a single transaction from one client
@@ -30,10 +66,32 @@ service cloud.firestore {
           // whose doc it is: wins/losses can only increment by at most 1,
           // streak can only increment by at most 1 (or reset to 0 on a
           // loss), and eiq can only move by at most one match's swing
-          // (±100) per write, floored at 0. This is what stops a player
-          // from just self-writing inflated leaderboard stats directly —
-          // that hole previously only existed on the "own document" branch
-          // below, which had no bound on these fields at all.
+          // (±100) per write, floored at 0.
+          //
+          // That per-write bound alone used to be the ONLY protection here —
+          // and it was not enough: nothing checked WHO could make this write
+          // or WHY, so any signed-in user could call this against ANY OTHER
+          // user's doc directly (their own or a stranger's), with no
+          // relationship to a real duel, and just repeat it in a loop to
+          // grind stats with zero games played. Now every such write must
+          // also prove it's the direct result of a real match: `lastMatchId`
+          // must point at a challenges/{id} doc that is, in this SAME
+          // transaction, genuinely completing between exactly these two uids
+          // (matchupValid, above — completeMatchInTx is the only code that
+          // ever sets this field). `lastMatchId` must itself be part of
+          // THIS write's diff, not merely sitting unchanged from an earlier
+          // real match, or one legitimate match's id could be replayed
+          // forever afterward to keep re-passing this check — an unchanged
+          // value never counts as a "diff" a second time.
+          //
+          // This narrows the hole, it doesn't fully close it: two Firebase
+          // accounts under the same person's control could still create and
+          // "complete" fake challenges between themselves to grind stats —
+          // closing that completely needs match completion to happen
+          // server-side (Cloud Functions), which this client-only project
+          // doesn't have. What this DOES stop: a stranger touching another
+          // player's stats with no relationship to them at all, and
+          // unlimited free-form self-grinding with no match required.
           //
           // forfeitStreak/arenaLockedUntil are the same anti-abuse pair:
           // forfeitStreak can only move like streak above (+1, or reset to
@@ -41,10 +99,13 @@ service cloud.firestore {
           // completeMatchInTx), and arenaLockedUntil can only ever move
           // FORWARD in time, never back — so a player can't clear their own
           // lockout by writing to their own doc; the only path that can set
-          // either field at all is this same bounded branch, driven by a
-          // real match completing.
+          // either field at all is this same bounded, match-verified branch.
+          'lastMatchId' in request.resource.data &&
+          request.resource.data.lastMatchId is string &&
+          request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastMatchId']) &&
+          matchupValid(uid, request.resource.data.lastMatchId) &&
           request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['wins', 'losses', 'streak', 'lastSeen', 'online', 'eiq', 'forfeitStreak', 'arenaLockedUntil']) &&
+            .hasOnly(['wins', 'losses', 'streak', 'lastSeen', 'online', 'eiq', 'forfeitStreak', 'arenaLockedUntil', 'lastMatchId']) &&
           request.resource.data.get('wins', 0) <= resource.data.get('wins', 0) + 1 &&
           request.resource.data.get('losses', 0) <= resource.data.get('losses', 0) + 1 &&
           request.resource.data.get('streak', 0) <= resource.data.get('streak', 0) + 1 &&
@@ -63,19 +124,19 @@ service cloud.firestore {
           // leaderboard or online list, so an oversized value would bloat
           // everyone else's reads; (2) email is never allowed here at all
           // (see note above); (3) wins/losses/streak/eiq/forfeitStreak/
-          // arenaLockedUntil must NEVER move through this branch, even on
-          // your own doc — those only ever move through the bounded branch
-          // above; and (4) displayName is permanently locked after account
-          // creation — it's the identity a friend searches for to send a
-          // duel invite (see the Arena player-search filter), and letting it
-          // change would let someone silently become unfindable, or worse,
-          // impersonate whoever the name is handed off to next. The
-          // one-time reservation that keeps it unique lives in
-          // usernames/{name} below.
+          // arenaLockedUntil/lastMatchId must NEVER move through this
+          // branch, even on your own doc — those only ever move through the
+          // match-verified branch above; and (4) displayName is permanently
+          // locked after account creation — it's the identity a friend
+          // searches for to send a duel invite (see the Arena player-search
+          // filter), and letting it change would let someone silently
+          // become unfindable, or worse, impersonate whoever the name is
+          // handed off to next. The one-time reservation that keeps it
+          // unique lives in usernames/{name} below.
           request.auth.uid == uid &&
           !('email' in request.resource.data) &&
           !request.resource.data.diff(resource.data).affectedKeys()
-            .hasAny(['wins', 'losses', 'streak', 'eiq', 'displayName', 'forfeitStreak', 'arenaLockedUntil']) &&
+            .hasAny(['wins', 'losses', 'streak', 'eiq', 'displayName', 'forfeitStreak', 'arenaLockedUntil', 'lastMatchId']) &&
           (!('photoURL' in request.resource.data) || request.resource.data.photoURL.size() < 300000)
         )
       );
@@ -105,14 +166,43 @@ service cloud.firestore {
     match /challenges/{id} {
       allow read: if request.auth != null;
 
+      // fromUid != toUid stops a self-targeted challenge from ever being
+      // created — needed now that users/{uid}'s bounded branch (above) trusts
+      // a completed challenge's two uids as proof a real duel happened
+      // between two distinct players.
+      //
+      // status == 'pending' matters for the same reason: without it, a client
+      // could mint a doc that is ALREADY 'completed' between itself and any
+      // victim in a single write, and immediately use it as the match "proof"
+      // for a stat write against that victim. Every real challenge starts
+      // pending (sendChallenge/sendGlobalChallenge in lib/challengeEngine.js
+      // are the only creators, and both do), so requiring it costs nothing and
+      // forces a fabricated match to at least walk the whole state machine.
       allow create: if request.auth != null &&
-        request.auth.uid == request.resource.data.fromUid;
+        request.auth.uid == request.resource.data.fromUid &&
+        request.resource.data.fromUid != request.resource.data.toUid &&
+        request.resource.data.status == 'pending';
 
-      allow update: if request.auth != null && (
+      // Once a match is completed, its outcome is permanent: nothing
+      // legitimate ever writes to a challenge doc again afterward (result
+      // screens only read it), and this immutability is also what stops the
+      // SAME challenge id being reused to justify more than one round of
+      // stat movement on users/{uid} above.
+      //
+      // A match may only REACH 'completed' from 'playing' — the status the
+      // host sets once both players readied up and the shared countdown
+      // elapsed (see DrillWrapper.js). Same reasoning as the create rule:
+      // it doesn't make fabrication impossible for a determined client, but
+      // it removes every shortcut to it.
+      allow update: if request.auth != null && resource.data.status != 'completed' &&
+        (request.resource.data.status != 'completed' || resource.data.status == 'playing') && (
         request.auth.uid == resource.data.fromUid ||
         request.auth.uid == resource.data.toUid ||
-        // Open/global challenges start with toUid == 'global' until someone accepts.
-        (resource.data.toUid == 'global' && request.resource.data.toUid == request.auth.uid)
+        // Open/global challenges start with toUid == 'global' until someone
+        // accepts. auth.uid != fromUid stops the poster from "accepting"
+        // their own open challenge and duelling themselves.
+        (resource.data.toUid == 'global' && request.resource.data.toUid == request.auth.uid &&
+          request.auth.uid != resource.data.fromUid)
       );
 
       allow delete: if request.auth != null &&

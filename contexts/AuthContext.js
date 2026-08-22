@@ -30,8 +30,6 @@ import {
   reauthenticateWithCredential,
 } from 'firebase/auth';
 import { clearAllProgress } from '../lib/progressStore';
-import { getServerClockOffset } from '../lib/challengeEngine';
-import { ARENA_ENABLED } from '../lib/featureFlags';
 
 const AuthContext = createContext({
   user: null,
@@ -143,15 +141,23 @@ async function resolveProfile(db, fbUser) {
   }
 
   if (legacy) {
+    // wins/losses/streak/eiq intentionally start at 0, NOT carried over from
+    // the legacy doc — firestore.rules' create rule now requires every stat
+    // field be exactly 0 on a brand-new users/{uid} doc (closes a hole where
+    // a forged create call could self-assign a starting EIQ/win count), and
+    // that applies here too since this is itself a create (no doc exists yet
+    // at fbUser.uid). If a legacy account genuinely has real stats worth
+    // preserving, carry them over as a one-off manual edit in the Firebase
+    // Console after this migration runs — not a client-writable path.
     const merged = {
       uid: fbUser.uid,
       displayName: legacy.displayName,
       photoURL: fbUser.photoURL || legacy.photoURL || fallbackAvatar(fbUser.uid),
       online: true,
-      wins: legacy.wins || 0,
-      losses: legacy.losses || 0,
-      streak: legacy.streak || 0,
-      eiq: legacy.eiq || 0,
+      wins: 0,
+      losses: 0,
+      streak: 0,
+      eiq: 0,
       createdAt: legacy.createdAt || serverTimestamp(),
       lastSeen: serverTimestamp(),
     };
@@ -280,23 +286,20 @@ export function AuthProvider({ children }) {
     return () => unsubscribe();
   }, [dbInstance, user?.uid]);
 
-  // 1c. Prewarm the Arena clock-sync measurement as soon as we know who's
-  // signed in, long before any duel actually needs it. getServerClockOffset()
-  // (lib/challengeEngine.js) runs 5 sequential Firestore round trips to
-  // measure this device's clock drift from the server — on a real mobile
-  // network that's routinely 1-3 seconds. It used to only ever get called
-  // for the first time once a duel's lobby reached "both ready", which put
-  // that whole measurement directly on the critical path of writing/reading
-  // `matchStartAt` — the exact 1-3s of "sometimes the duel takes a couple
-  // extra seconds to actually start" a player would see on their very first
-  // match of a session. Firing it here means it's almost always already
-  // resolved and cached by the time anyone reaches a duel. Fire-and-forget:
-  // the result is cached at module scope in challengeEngine.js and read from
-  // there by DrillWrapper/useDuelMatchStart whenever a duel actually happens.
-  useEffect(() => {
-    if (!ARENA_ENABLED || !user?.uid) return;
-    getServerClockOffset().catch(() => {});
-  }, [user?.uid]);
+  // 1c. The Arena clock-sync measurement (getServerClockOffset, in
+  // lib/challengeEngine.js) used to be prewarmed here, for every signed-in
+  // user on every app open. It's a handful of sequential Firestore WRITES to
+  // the profile doc, and this file runs for the whole userbase — including
+  // the large majority who only ever play solo drills and never open the
+  // Arena at all. That made it the app's biggest write cost, paid mostly on
+  // behalf of players who never needed the result.
+  //
+  // It now runs on entering the Arena instead (see ChallengeArenaClient),
+  // which is still comfortably ahead of any duel — so the measurement stays
+  // off the critical path of a duel's countdown, which is the reason it was
+  // prewarmed in the first place — while costing nothing for solo players.
+  // The value is cached at module scope, so useDuelMatchStart still reads it
+  // for free whenever a duel actually happens.
 
   // 2. Set up visibility presence tracking
   useEffect(() => {

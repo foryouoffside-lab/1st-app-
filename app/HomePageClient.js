@@ -69,6 +69,7 @@ export default function HomePageClient() {
   const [trainingFocus, setTrainingFocusState] = useState(null);
   const [mission, setMission] = useState(null);
   const [progress, setProgress] = useState({});
+  const [dashboardReady, setDashboardReady] = useState(false);
   const countdown = useMidnightCountdown();
 
   useEffect(() => {
@@ -103,6 +104,8 @@ export default function HomePageClient() {
         );
       } catch (error) {
         console.error('Unable to load home dashboard', error);
+      } finally {
+        setDashboardReady(true);
       }
     }
     loadDashboard();
@@ -203,34 +206,51 @@ export default function HomePageClient() {
 
         {/* 2. Daily Challenge — full width. Level/XP detail lives on /progress only. */}
         <div className="daily-card mb-6" style={dailyTheme ? { '--a': dailyTheme.accent } : undefined}>
-          <div className="glowspot" />
-          <div className="top">
-            <div className="ic">
-              <DailyIcon className="w-5 h-5" />
-            </div>
-            <span className="k">
-              <Sparkles className="w-3 h-3 animate-pulse" />
-              {isNewUser ? 'Your First Daily Challenge' : 'Daily Challenge'}
-            </span>
-          </div>
-          <h2 className="t">{daily?.drill?.name || 'Loading Daily...'}</h2>
-          <p className="d">
-            {isNewUser
-              ? 'Two minutes to your first score — every streak starts with drill one.'
-              : 'Complete it today for double XP.'}
-          </p>
-          {daily?.completed ? (
-            <div className="mt-4 flex items-center justify-center gap-2 rounded-2xl bg-emerald-400/10 py-3 text-sm font-bold text-emerald-300">
-              <CheckCircle2 className="h-4 w-4" /> Challenge complete
-            </div>
+          {dashboardReady ? (
+            <>
+              <div className="top">
+                <div className="ic">
+                  <DailyIcon className="w-5 h-5" />
+                </div>
+                <span className="k">
+                  <Sparkles className="w-3 h-3 animate-pulse" />
+                  {isNewUser ? 'Your First Daily Challenge' : 'Daily Challenge'}
+                </span>
+              </div>
+              <h2 className="t">{daily?.drill?.name || 'Daily Challenge'}</h2>
+              <p className="d">
+                {isNewUser
+                  ? 'Two minutes to your first score — every streak starts with drill one.'
+                  : 'Complete it today for double XP.'}
+              </p>
+              {daily?.completed ? (
+                <div className="mt-4 flex items-center justify-center gap-2 rounded-2xl bg-emerald-400/10 py-3 text-sm font-bold text-emerald-300">
+                  <CheckCircle2 className="h-4 w-4" /> Challenge complete
+                </div>
+              ) : (
+                <Link
+                  href={daily?.drill?.path || '/drills'}
+                  className="go cursor-pointer"
+                >
+                  {isNewUser ? 'Start now' : 'Play daily challenge'}
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+              )}
+            </>
           ) : (
-            <Link
-              href={daily?.drill?.path || '/drills'}
-              className="go cursor-pointer"
-            >
-              {isNewUser ? 'Start now' : 'Play daily challenge'}
-              <ArrowRight className="h-4 w-4" />
-            </Link>
+            // Real progress hasn't loaded from device storage yet (an async
+            // native call on Android). Holding a neutral skeleton here — instead
+            // of the isNewUser/"Loading Daily..." defaults — avoids painting
+            // content that's about to be replaced a few ms later.
+            <div className="animate-pulse">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-white/10" />
+                <div className="h-3 w-28 rounded-full bg-white/10" />
+              </div>
+              <div className="mt-3 h-6 w-40 rounded-md bg-white/10" />
+              <div className="mt-2 h-3.5 w-52 rounded-md bg-white/10" />
+              <div className="mt-4 h-11 w-44 rounded-[11px] bg-white/10" />
+            </div>
           )}
         </div>
 
@@ -275,7 +295,6 @@ export default function HomePageClient() {
                 className="cat-tile"
                 style={{ '--a': cat.accent }}
               >
-                <div className="glow" />
                 <div className="ic">
                   <Icon className="w-5 h-5" />
                 </div>
@@ -295,7 +314,20 @@ export default function HomePageClient() {
 
         {/* 6. Continue Training / Onboarding Empty State */}
         <div className="section-label">Continue training</div>
-        {isNewUser ? (
+        {!dashboardReady ? (
+          // Neutral placeholder cards — we don't yet know if this is the
+          // empty-state or the real list, so avoid flashing the wrong one.
+          <div className="cont-row home-scroll mb-8">
+            {[0, 1].map(i => (
+              <div key={i} className="cont-card animate-pulse" style={{ '--a': 'rgba(255,255,255,.15)' }}>
+                <div className="mb-2 h-[34px] w-[34px] rounded-md bg-white/10" />
+                <div className="h-3 w-20 rounded bg-white/10" />
+                <div className="mt-2.5 h-1 w-full rounded-full bg-white/10" />
+                <div className="mt-1.5 h-2.5 w-16 rounded bg-white/10" />
+              </div>
+            ))}
+          </div>
+        ) : isNewUser ? (
           <div className="empty-block mb-8">
             <div className="ic">
               <Target className="icon w-5 h-5" />

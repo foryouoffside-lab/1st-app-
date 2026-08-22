@@ -15,12 +15,6 @@ import { DRILL_GROUPS } from '../lib/drillGroups';
 // reach these before the sign-in wall, not after it.
 const PUBLIC_PATHS = ['/privacy', '/terms'];
 
-const GRID_BG = {
-  backgroundImage:
-    'linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px)',
-  backgroundSize: '40px 40px',
-};
-
 // Real vector art (same design as public/favicon.svg), not a raster <img> —
 // crisp at any size/DPI instead of a PNG that looks soft when scaled.
 function LogoMark({ className }) {
@@ -67,8 +61,6 @@ function GoogleIcon(props) {
 function Frame({ children }) {
   return (
     <div className="min-h-[100dvh] bg-[#050508] flex items-center justify-center text-white p-5 relative overflow-hidden font-sans">
-      <div className="pointer-events-none absolute inset-0" style={GRID_BG} />
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_600px_400px_at_50%_0%,rgba(139,92,246,0.14),transparent_70%)]" />
       <div className="w-full max-w-[380px] relative z-10">{children}</div>
     </div>
   );

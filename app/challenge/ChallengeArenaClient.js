@@ -3,13 +3,13 @@
 // app/challenge/ChallengeArenaClient.js
 // SkillDrills Pro — Multiplayer Arena & Rankings Hub
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useChallenge } from '../../contexts/ChallengeContext';
 import {
   sendChallenge, sendGlobalChallenge, acceptChallenge, declineChallenge, cleanupStaleChallenges,
   joinMatchmakingQueue, leaveMatchmakingQueue, refreshMatchmakingQueue, scanForMatch, matchmakingEiqRange,
-  tierForEiq, DUEL_DRILLS,
+  tierForEiq, DUEL_DRILLS, getServerClockOffset,
 } from '../../lib/challengeEngine';
 import { collection, query, where, onSnapshot, orderBy, limit, getDocs } from 'firebase/firestore';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -26,6 +26,22 @@ import {
 // invite has to be to count as belonging to the search running right now.
 const MATCH_ACCEPT_TIMEOUT_MS = 20 * 1000;
 const MATCHMAKING_INVITE_MAX_AGE_MS = 90 * 1000;
+
+// How often a running search re-scans the queue. Every scan is a batch of
+// Firestore reads, and a 60-second search repeats it for the whole minute, so
+// this was the single most expensive thing one player could do — and unlike
+// the listeners above, the cost lands once per searching player rather than
+// once per visit.
+//
+// Widening it barely affects how fast matches are found, because the poll
+// interval is NOT what catches most matches. Whoever joins the queue second
+// scans immediately on joining (attemptMatchmakingScan runs once before this
+// interval is ever set up) and finds the player already waiting — so the
+// common case is settled in one round trip regardless of this value. The
+// interval only governs the narrower case of noticing someone who arrived
+// while you were already waiting, and their own join-time scan catches that
+// pairing anyway, from the other side.
+const MATCHMAKING_POLL_MS = 8000;
 
 // Firestore hands `createdAt` back as a Timestamp object, not a date string or
 // a number — so `new Date(createdAt)` produces an Invalid Date. That silently
@@ -45,13 +61,22 @@ const tsToMillis = (ts) => {
 export default function ChallengeArenaClient() {
   const { user, db, signOut, deleteAccount } = useAuth();
   const { outgoingChallenge, incomingChallenges } = useChallenge();
+  // AuthContext live-syncs the profile doc and hands back a NEW `user` object
+  // on every write to it (presence, lastSeen, eiq after a duel). Effects that
+  // open Firestore listeners key off this stable uid instead, so an unrelated
+  // profile write can't tear a subscription down and make it re-read
+  // everything from scratch.
+  const uid = user?.uid;
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const [activeTab, setActiveTab] = useState('players'); // 'players', 'invites', 'results', 'leaderboard'
   const [onlinePlayers, setOnlinePlayers] = useState([]);
   const [leaderboardUsers, setLeaderboardUsers] = useState([]);
-  const [pendingInvites, setPendingInvites] = useState([]);
+  // Open-lobby posts from other players only. Direct invites addressed to this
+  // user arrive separately via ChallengeContext; the two are merged into
+  // `pendingInvites` below.
+  const [globalInvites, setGlobalInvites] = useState([]);
   const [challengeHistory, setChallengeHistory] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   
@@ -101,13 +126,32 @@ export default function ChallengeArenaClient() {
   // 0. Opportunistically clean up this user's own abandoned pending/accepted
   // challenge docs (invites nobody ever responded to, lobbies nobody ever
   // joined) so they don't accumulate in Firestore forever.
+  //
+  // Keyed on `uid`, not the whole `user` object: this effect costs a batch of
+  // Firestore reads plus a delete every time it runs, and depending on `user`
+  // meant it re-ran on every presence/lastSeen/eiq write to the profile doc —
+  // repeating that cost many times per Arena visit instead of once, and
+  // yanking a queue entry out from under an in-flight search.
   useEffect(() => {
-    if (!ARENA_ENABLED || !db || !user) return;
-    cleanupStaleChallenges(user.uid);
+    if (!ARENA_ENABLED || !db || !uid) return;
+    cleanupStaleChallenges(uid);
     // Also clear any matchmaking queue entry left behind by a previous
     // session that was closed mid-search rather than cancelled cleanly.
-    leaveMatchmakingQueue(user.uid);
-  }, [db, user]);
+    leaveMatchmakingQueue(uid);
+  }, [db, uid]);
+
+  // Measure this device's clock drift from the server now, while the player is
+  // browsing the Arena — long before a duel needs it. See getServerClockOffset
+  // (lib/challengeEngine.js): it costs a couple of Firestore round trips, and
+  // putting it on the critical path of a duel's start would add that delay to
+  // the countdown. This used to be prewarmed in AuthContext for every signed-in
+  // user on every app open, which charged the whole userbase — including the
+  // majority who never duel — for something only the Arena uses. The result is
+  // cached at module scope, so this is a no-op after the first call.
+  useEffect(() => {
+    if (!ARENA_ENABLED || !uid) return;
+    getServerClockOffset().catch(() => {});
+  }, [uid]);
 
   // 1. Subscribe to online players list (excluding current user)
   useEffect(() => {
@@ -148,26 +192,39 @@ export default function ChallengeArenaClient() {
   useEffect(() => {
     if (!ARENA_ENABLED || !db || !user) return;
 
+    // Open-lobby posts ONLY, and bounded.
+    //
+    // This used to subscribe to EVERY pending challenge in the app and pick
+    // out the relevant ones on the phone, which made the cost of simply
+    // sitting on the Arena screen scale with the total number of players
+    // online: N viewers each streaming N lobby posts. At a few hundred
+    // concurrent players that's tens of thousands of document reads per
+    // refresh wave — enough to exhaust a day's Firestore quota in minutes and
+    // take the whole Arena offline — and the same unbounded list had to be
+    // held in React state and rendered on a low-end phone.
+    //
+    // Two equality filters are served by merging single-field indexes, so this
+    // needs no composite index (same reasoning as the online-players query
+    // above, and as listenForIncomingChallenges in lib/challengeEngine.js).
+    //
+    // Direct invites addressed to this user are NOT lost: ChallengeContext
+    // already runs exactly one server-scoped `toUid == uid` listener for them,
+    // and they're merged back in at `pendingInvites` below.
     const q = query(
       collection(db, 'challenges'),
-      where('status', '==', 'pending')
+      where('toUid', '==', 'global'),
+      where('status', '==', 'pending'),
+      limit(30)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const invites = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        if (data.toUid === user.uid || (data.toUid === 'global' && data.fromUid !== user.uid)) {
-          invites.push({
-            id: doc.id,
-            ...data
-          });
-        }
+      const posts = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        // Your own open lobby post isn't an invite to yourself.
+        if (data.fromUid !== uid) posts.push({ id: docSnap.id, ...data });
       });
-
-      invites.sort((a, b) => tsToMillis(b.createdAt) - tsToMillis(a.createdAt));
-
-      setPendingInvites(invites);
+      setGlobalInvites(posts);
     }, (error) => {
       console.error("Invites subscription error:", error);
     });
@@ -176,10 +233,26 @@ export default function ChallengeArenaClient() {
     // Deliberately NOT keyed on hiddenGlobalInvites — dismissing someone
     // else's open-lobby post is a purely local "hide this from my inbox"
     // action, but having it in the dependency list tore down this Firestore
-    // listener and opened a fresh one (re-reading every pending challenge) on
+    // listener and opened a fresh one (re-reading every lobby post) on
     // every dismissal. The hidden ids are applied where they belong, at render
     // time, via visibleInvites below.
-  }, [db, user]);
+    //
+    // Keyed on `uid`, not the whole `user` object, for the same reason the
+    // matchmaking cleanup effect below is — see the note there. Depending on
+    // `user` meant every presence/lastSeen/eiq write to the profile doc tore
+    // this listener down and re-read the entire lobby from scratch.
+  }, [db, uid]);
+
+  // The Invites inbox: direct invites (ChallengeContext's own server-scoped
+  // `toUid == uid` listener) plus the open-lobby posts above, newest first.
+  // The two sources are disjoint by construction — `toUid == uid` versus
+  // `toUid == 'global'` — so there's nothing to de-duplicate. Memoized so the
+  // list keeps a stable identity across unrelated re-renders.
+  const pendingInvites = useMemo(
+    () => [...incomingChallenges, ...globalInvites]
+      .sort((a, b) => tsToMillis(b.createdAt) - tsToMillis(a.createdAt)),
+    [incomingChallenges, globalInvites]
+  );
 
   // 3. Fetch leaderboard (Top 50 users by EIQ). One-shot fetch each time the
   // tab is opened — the old realtime listener kept a live subscription on 50
@@ -325,7 +398,7 @@ export default function ChallengeArenaClient() {
     }
 
     await attemptMatchmakingScan(drill);
-    matchmakingPollRef.current = setInterval(() => attemptMatchmakingScan(drill), 4000);
+    matchmakingPollRef.current = setInterval(() => attemptMatchmakingScan(drill), MATCHMAKING_POLL_MS);
     matchmakingTickRef.current = setInterval(() => {
       matchmakingElapsedRef.current += 1;
       setMatchmakingSeconds((s) => s + 1);
@@ -496,7 +569,7 @@ export default function ChallengeArenaClient() {
     }
     const initials = userObj.displayName ? userObj.displayName.substring(0, 2).toUpperCase() : '??';
     return (
-      <div className={`${sizeClass} rounded-full ${borderClass} flex items-center justify-center font-bold text-xs bg-gradient-to-br from-purple-500 to-indigo-500 text-white shrink-0`}>
+      <div className={`${sizeClass} rounded-full ${borderClass} flex items-center justify-center font-bold text-xs bg-violet-600 text-white shrink-0`}>
         {initials}
       </div>
     );
@@ -734,8 +807,7 @@ export default function ChallengeArenaClient() {
                   </div>
 
                   {/* Automated EIQ matchmaking */}
-                  <div className="bg-gradient-to-r from-emerald-950/20 via-teal-950/15 to-neutral-900/40 border border-emerald-500/20 hover:border-emerald-500/30 rounded-3xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4 transition shadow-xl relative overflow-hidden">
-                    <div className="absolute -right-6 -top-6 w-20 h-20 rounded-full opacity-10 blur-xl pointer-events-none bg-emerald-500" />
+                  <div className="bg-[#12131c] border border-emerald-500/20 hover:border-emerald-500/30 rounded-3xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4 transition relative overflow-hidden">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 bg-emerald-500/10 border border-emerald-500/20 rounded-xl flex items-center justify-center text-emerald-400 shrink-0">
                         <Target className="w-5 h-5" />
@@ -754,8 +826,7 @@ export default function ChallengeArenaClient() {
                   </div>
 
                   {/* Manual open challenge post */}
-                  <div className="bg-gradient-to-r from-purple-950/15 via-indigo-950/10 to-neutral-900/40 border border-purple-500/20 hover:border-purple-500/30 rounded-3xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4 transition shadow-xl relative overflow-hidden">
-                    <div className="absolute -right-6 -top-6 w-20 h-20 rounded-full opacity-10 blur-xl pointer-events-none bg-purple-500" />
+                  <div className="bg-[#12131c] border border-purple-500/20 hover:border-purple-500/30 rounded-3xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4 transition relative overflow-hidden">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 bg-purple-500/10 border border-purple-500/20 rounded-xl flex items-center justify-center text-purple-400 shrink-0">
                         <Swords className="w-5 h-5" />
@@ -885,7 +956,7 @@ export default function ChallengeArenaClient() {
 
                             <button
                               onClick={() => handleAcceptInvite(invite)}
-                              className="flex items-center gap-1 px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold rounded-xl shadow-lg transition cursor-pointer"
+                              className="flex items-center gap-1 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-xl shadow-md transition cursor-pointer"
                             >
                               <Check className="w-3.5 h-3.5" />
                               Accept
@@ -902,10 +973,7 @@ export default function ChallengeArenaClient() {
               {activeTab === 'results' && (
                 <div className="space-y-6">
                   {/* Wins and Losses Stats Card */}
-                  <div className="bg-gradient-to-b from-[#15161f] to-[#0e0f16] border border-neutral-800 rounded-3xl p-5 shadow-2xl relative overflow-hidden">
-                    <div className="absolute -top-8 -right-8 w-40 h-40 bg-violet-600/10 rounded-full blur-2xl pointer-events-none" />
-                    <div className="absolute -bottom-10 -left-10 w-32 h-32 bg-yellow-500/5 rounded-full blur-2xl pointer-events-none" />
-
+                  <div className="bg-[#12131c] border border-neutral-800 rounded-3xl p-5 relative overflow-hidden">
                     <div className="flex items-center justify-between relative">
                       <span className="text-[10px] text-neutral-500 font-black uppercase tracking-wider">Your Performance Summary</span>
                       <span className="text-[9px] text-neutral-500 font-bold uppercase tracking-widest bg-neutral-900/80 border border-neutral-800 px-2 py-0.5 rounded-full">
@@ -925,7 +993,7 @@ export default function ChallengeArenaClient() {
                     </div>
                     <div className="relative w-full h-2 rounded-full bg-neutral-950 border border-neutral-800/80 overflow-hidden mb-5">
                       <div
-                        className="h-full rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-500 transition-all duration-500"
+                        className="h-full rounded-full bg-violet-500 transition-all duration-500"
                         style={{ width: `${winRate}%` }}
                       />
                     </div>
