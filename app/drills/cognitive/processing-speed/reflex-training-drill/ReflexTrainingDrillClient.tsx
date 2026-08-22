@@ -10,7 +10,7 @@ import {
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade } from '../../../../../lib/scoringEngine';
 import { canvasDpr, createBackdropCache } from '../../../../../lib/canvasFx';
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
-import { lockLandscape, unlockOrientation } from '../../../../../lib/orientation';
+import { lockLandscape, unlockOrientation, onOrientationSettled } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
 import { getPlayerName } from '../../../../../lib/progressStore';
 import { Capacitor } from '@capacitor/core';
@@ -957,12 +957,7 @@ export default function ReflexTrainingDrillClient() {
         runCountdown(3);
       }
     };
-    window.addEventListener('resize', onOrientationChange);
-    window.addEventListener('orientationchange', onOrientationChange);
-    return () => {
-      window.removeEventListener('resize', onOrientationChange);
-      window.removeEventListener('orientationchange', onOrientationChange);
-    };
+    return onOrientationSettled(onOrientationChange);
   }, [phase, runCountdown]);
 
   const shareResult = useCallback(async () => {

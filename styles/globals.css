@@ -139,7 +139,7 @@ h1, h2, h3, .display {
 .daily-card .k { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--a, var(--brand-3)); display: flex; align-items: center; gap: 6px; }
 .daily-card .t { position: relative; font-family: var(--font-space-grotesk), 'Space Grotesk', sans-serif; font-weight: 700; font-size: 1.4rem; margin-top: 8px; }
 .daily-card .d { position: relative; font-size: 12.5px; color: var(--text-dim); margin-top: 5px; }
-.daily-card .go { position: relative; margin-top: 16px; display: inline-flex; align-items: center; gap: 8px; background: var(--a, var(--brand-2)); color: var(--ink); font-weight: 700; font-size: 13px; padding: 11px 20px; border-radius: 11px; border: none; }
+.daily-card .go { position: relative; margin-top: 16px; display: inline-flex; align-items: center; gap: 8px; background: var(--a, var(--brand-2)); color: #ffffff; font-weight: 700; font-size: 13px; padding: 11px 20px; border-radius: 11px; border: none; }
 .daily-card.secondary { padding: 16px; }
 .daily-card.secondary .t { font-size: 1.02rem; }
 .daily-card.secondary .d { display: none; }

@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade, isValidReactionTime } from '../../../../../lib/scoringEngine';
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
-import { lockLandscape, unlockOrientation } from '../../../../../lib/orientation';
+import { lockLandscape, unlockOrientation, onOrientationSettled } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
 import { getPlayerName } from '../../../../../lib/progressStore';
 import { Capacitor } from '@capacitor/core';
@@ -778,13 +778,7 @@ export default function FingerSequencingClient() {
     };
 
     checkOrientation();
-    window.addEventListener('resize', checkOrientation);
-    window.addEventListener('orientationchange', checkOrientation);
-
-    return () => {
-      window.removeEventListener('resize', checkOrientation);
-      window.removeEventListener('orientationchange', checkOrientation);
-    };
+    return onOrientationSettled(checkOrientation);
   }, []);
 
   // Shared countdown runner — duels skip the visible 3-2-1 (n=0) and its
@@ -814,12 +808,7 @@ export default function FingerSequencingClient() {
         runCountdown(isChallenge ? 0 : 3);
       }
     };
-    window.addEventListener('resize', onOrientationChange);
-    window.addEventListener('orientationchange', onOrientationChange);
-    return () => {
-      window.removeEventListener('resize', onOrientationChange);
-      window.removeEventListener('orientationchange', onOrientationChange);
-    };
+    return onOrientationSettled(onOrientationChange);
   }, [phase, runCountdown, isChallenge]);
 
   // Input listener registration

@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade } from '../../../../../lib/scoringEngine';
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
-import { lockLandscape, unlockOrientation } from '../../../../../lib/orientation';
+import { lockLandscape, unlockOrientation, onOrientationSettled } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
 import { getPlayerName } from '../../../../../lib/progressStore';
 import { Capacitor } from '@capacitor/core';
@@ -305,12 +305,7 @@ export default function MultiTaskingClient() {
   useEffect(() => {
     if (phase !== 'rotate-hint') return;
     const check = () => { if (!isPortraitNow()) runCountdownRef.current?.(isChallenge ? 0 : 3); };
-    window.addEventListener('resize', check);
-    window.addEventListener('orientationchange', check);
-    return () => {
-      window.removeEventListener('resize', check);
-      window.removeEventListener('orientationchange', check);
-    };
+    return onOrientationSettled(check);
   }, [phase]);
 
 

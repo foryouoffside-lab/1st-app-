@@ -12,6 +12,15 @@ import {
   tierForEiq, DUEL_DRILLS, getServerClockOffset,
 } from '../../lib/challengeEngine';
 import { collection, query, where, onSnapshot, orderBy, limit, getDocs } from 'firebase/firestore';
+
+// Leaderboard results survive tab switches and remounts for a minute. Opening
+// the tab used to mean sitting on a spinner through a full network round trip
+// every single time, for a Top 50 that barely moves minute to minute — and
+// each user doc carries its own avatar inline (photoURL is a base64 data URI,
+// capped at 300KB by firestore.rules), so that round trip is far heavier than
+// 50 rows of text should be.
+let leaderboardCache = { users: null, at: 0 };
+const LEADERBOARD_TTL_MS = 60000;
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { ARENA_ENABLED } from '../../lib/featureFlags';
@@ -262,12 +271,21 @@ export default function ChallengeArenaClient() {
   useEffect(() => {
     if (!ARENA_ENABLED || !db || activeTab !== 'leaderboard') return;
     let cancelled = false;
+
+    // Paint the last result instantly, then only go to the network if it has
+    // gone stale. A re-open inside the TTL costs nothing and shows no spinner.
+    if (leaderboardCache.users) {
+      setLeaderboardUsers(leaderboardCache.users);
+      if (Date.now() - leaderboardCache.at < LEADERBOARD_TTL_MS) return;
+    }
+
     (async () => {
       try {
         const snap = await getDocs(query(collection(db, 'users'), orderBy('eiq', 'desc'), limit(50)));
         if (cancelled) return;
         const users = [];
         snap.forEach((doc) => users.push(doc.data()));
+        leaderboardCache = { users, at: Date.now() };
         setLeaderboardUsers(users);
       } catch (error) {
         console.error('Leaderboard fetch error:', error);
