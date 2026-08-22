@@ -13,9 +13,11 @@ your copy-paste reference for the day you deploy.
 2. Create the app in Play Console.
 3. Fill in App content (Data Safety, content rating, target audience — all below).
 4. Fill in Store listing (description, screenshots, icon, feature graphic — below).
-5. Build the signed `.aab` and upload it to a **Closed testing** track first.
-6. Recruit 12 opt-in testers, wait 14 continuous active days (new-account requirement).
-7. Once that's satisfied, promote to Production.
+5. Set the OAuth consent screen App name in Google Cloud Console (section 1) —
+   independent of Play, but do it before testers sign in on the web.
+6. Build the signed `.aab` and upload it to a **Closed testing** track first.
+7. Recruit 12 opt-in testers, wait 14 continuous active days (new-account requirement).
+8. Once that's satisfied, promote to Production.
 
 ---
 
@@ -28,6 +30,36 @@ your copy-paste reference for the day you deploy.
 - **Contains ads:** No
 - **In-app purchases:** No
 - **Price:** Free
+
+### Google sign-in consent screen — needs a Console visit
+
+The Google sign-in consent screen currently reads **"Sign in to
+skilldrills-42ddc.firebaseapp.com"**, because Firebase auto-created the OAuth
+consent screen and no App name was ever set, so Google falls back to showing
+the raw auth domain.
+
+This does **not** affect the Play Store build: on native, sign-in goes through
+`FirebaseAuthentication.signInWithGoogle()` (see `contexts/AuthContext.js`,
+the `Capacitor.isNativePlatform()` branch), which shows Android's own account
+picker with the app name and no domain. Only the website's `signInWithPopup`
+path shows this screen.
+
+**To fix (Console only — there is no CLI or API for this, so it cannot be
+scripted):** Google Cloud Console -> project `skilldrills-42ddc` -> **Google
+Auth Platform -> Branding** (older UI: APIs & Services -> OAuth consent
+screen). Set App name to `SkillDrills`, add the app logo, and fill in the
+support email and developer contact. The screen then reads "Sign in to
+SkillDrills".
+
+Worth doing before opening sign-ups to the public regardless: Google requires
+OAuth consent screen verification for published apps, and this same Branding
+page is where that process starts.
+
+**Optional, larger:** the popup's URL bar still shows `firebaseapp.com` even
+once the name is set. Removing that needs a custom auth domain — attach a
+domain to Firebase Hosting (only the default `skilldrills-42ddc.web.app`
+exists today), add the DNS records, then change `authDomain` in
+`lib/firebase.js` to match. Website-only polish; not needed for the app.
 
 ---
 
