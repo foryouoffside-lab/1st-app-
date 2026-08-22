@@ -1,6 +1,6 @@
 import Link from 'next/link';
 
-const LAST_UPDATED = 'July 17, 2026';
+const LAST_UPDATED = 'August 22, 2026';
 
 function Section({ title, children }) {
   return (
