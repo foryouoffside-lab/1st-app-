@@ -1,13 +1,6 @@
 'use client';
-
-// components/AppShellClient.js
-// SkillDrills Pro — Central App Shell Controller
-// Standardizes global audio muting, screen orientation, safe areas, 
-// and floating controls for gameplay.
-
 import { useEffect, useState, Suspense } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { X } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
 import { lockPortrait, unlockOrientation } from '../lib/orientation';
@@ -29,22 +22,6 @@ export default function AppShellClient({ children }) {
   const { user } = useAuth();
 
   const [isDrill, setIsDrill] = useState(false);
-  const [parentPath, setParentPath] = useState('/drills');
-  const [hideControls, setHideControls] = useState(false);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const updateStatus = () => {
-      setHideControls(
-        document.body.classList.contains('hide-drill-controls') || 
-        document.body.classList.contains('game-active')
-      );
-    };
-    updateStatus();
-    const observer = new MutationObserver(updateStatus);
-    observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
-    return () => observer.disconnect();
-  }, []);
 
   // Android hardware/gesture back button — by default Capacitor just exits
   // the app instead of navigating the SPA's history, so wire it up: go back
@@ -120,7 +97,6 @@ export default function AppShellClient({ children }) {
 
     // Set parent category path (e.g. /drills/fps)
     if (isDrillRoute) {
-      setParentPath('/' + segments.slice(0, 2).join('/'));
       // Append className to body for global CSS targets
       document.body.classList.add('is-drill-page');
     } else {
@@ -239,10 +215,7 @@ export default function AppShellClient({ children }) {
     }
   }, []);
 
-  // ─── Touch-To-Mouse Event Converter for Mobile ────────────────────────────
-  // Converts mobile touch drags and taps on the gameplay canvas into simulated
-  // mouse movements (with movementX/Y deltas) and mousedown events so pointer-lock 
-  // and click-to-shoot aim trainers work smoothly on touchscreens.
+
   useEffect(() => {
     if (typeof window === 'undefined' || !isDrill) return;
 
@@ -348,11 +321,6 @@ export default function AppShellClient({ children }) {
     };
   }, [isDrill]);
 
-  const handleExit = async () => {
-    await lockPortrait().catch(() => {});
-    router.push(parentPath);
-  };
-
   return (
     <ChallengeProvider>
       {/* Suppressed on drill routes — a duel invite banner (with sound), a
@@ -378,24 +346,11 @@ export default function AppShellClient({ children }) {
         </Suspense>
       )}
 
-      {/* Floating Gameplay HUD Controls (Exit) overlay on drills */}
-      {isDrill && !hideControls && (
-        <div className="fixed top-4 right-4 z-[999] flex items-center gap-2 pointer-events-auto">
-          {/* Close/Exit Button */}
-          <button
-            onClick={handleExit}
-            className="w-10 h-10 rounded-full flex items-center justify-center backdrop-blur-md active:scale-90 transition-transform shadow-lg border"
-            style={{ 
-              background: 'rgba(5, 5, 8, 0.75)', 
-              borderColor: 'rgba(255, 255, 255, 0.1)',
-              color: '#f87171' // soft red
-            }}
-            title="Exit Drill"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-      )}
+      {/* No floating exit control on drills. There used to be a fixed
+          top-right X at z-[999] sitting over the play field of all 24 drills;
+          it was redundant (Android's back gesture already exits — see the
+          backButton listener above, which calls window.history.back()) and it
+          put a one-tap quit directly on top of live gameplay. */}
     </ChallengeProvider>
   );
 }

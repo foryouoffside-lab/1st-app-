@@ -92,8 +92,7 @@ export default function DailyClient() {
         </div>
 
         {/* Progress Tracker Card */}
-        <div className="rounded-3xl border border-neutral-800 bg-[#12131c] p-5 shadow-2xl relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-24 h-24 bg-violet-600/5 rounded-full blur-xl pointer-events-none" />
+        <div className="rounded-3xl border border-neutral-800 bg-[#12131c] p-5 relative overflow-hidden">
           <div className="flex justify-between items-center mb-3">
             <div>
               <span className="text-xs text-neutral-400 font-bold uppercase tracking-wider block">Today's Progress</span>
@@ -107,8 +106,8 @@ export default function DailyClient() {
             </div>
           </div>
           <div className="h-2 rounded-full overflow-hidden bg-neutral-900">
-            <div 
-              className="h-full rounded-full bg-gradient-to-r from-violet-500 via-indigo-500 to-cyan-400 transition-all duration-500"
+            <div
+              className="h-full rounded-full bg-violet-500 transition-all duration-500"
               style={{ width: `${progressPercent}%` }}
             />
           </div>
@@ -178,9 +177,9 @@ export default function DailyClient() {
 
                 {/* Bottom CTA */}
                 {!completed && (
-                  <Link 
-                    href={drill.path || '/drills'} 
-                    className="mt-4 flex items-center justify-center gap-2 w-full py-3 rounded-2xl text-xs font-black bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white shadow-lg shadow-violet-950/20 transition active:scale-[.98] cursor-pointer"
+                  <Link
+                    href={drill.path || '/drills'}
+                    className="mt-4 flex items-center justify-center gap-2 w-full py-3 rounded-2xl text-xs font-black bg-violet-600 hover:bg-violet-500 text-white shadow-md transition active:scale-[.98] cursor-pointer"
                   >
                     Start Challenge {index + 1}
                     <ArrowRight className="w-3.5 h-3.5" />

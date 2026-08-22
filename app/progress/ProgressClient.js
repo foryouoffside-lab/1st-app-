@@ -226,11 +226,31 @@ export default function ProgressClient() {
   // Firebase Storage needs the (paid, card-on-file) Blaze plan, which this
   // project isn't on — so the photo is stored inline as a compressed base64
   // data URL directly on the Firestore user doc instead. Firestore's
-  // document limit is 1MB; a 128x128 JPEG is nowhere close (typically
-  // 10-25KB as base64), and firestore.rules independently caps this field
-  // at 300KB as a backstop, since every other player's leaderboard/online
-  // list read pulls this field along with the rest of the profile.
+  // document limit is 1MB; a 128x128 JPEG is nowhere close, and
+  // firestore.rules independently caps this field at 300KB as a backstop.
   const DATA_URL_SAFETY_LIMIT = 280000; // stay under the 300KB rule cap
+
+  // ...but that 300KB rule cap is only a backstop against absurd values, and
+  // it is FAR too loose to be what actually governs the stored size, because
+  // this field is not read one profile at a time. It rides along with every
+  // bulk profile read in the app: the Arena's online-players list (40 docs),
+  // the leaderboard (50 docs), and a copy is stamped into each challenge doc
+  // as fromPhoto/toPhoto (see sendChallenge in lib/challengeEngine.js), which
+  // the open-lobby list then reads 30 at a time. So one Arena visit can pull
+  // a hundred-plus copies of somebody's avatar, and the per-photo size is
+  // multiplied by all of them.
+  //
+  // A single quality setting can't bound that, since how many bytes a given
+  // quality produces depends entirely on how busy the photo is — a flat
+  // portrait and a detailed outdoor shot at the same setting differ several
+  // times over. So encode repeatedly, stepping quality down until the result
+  // actually fits a byte budget. Almost every photo lands on the first step;
+  // busy ones take one or two more and end up slightly softer instead of
+  // several times larger. Pixel dimensions are deliberately NOT reduced —
+  // 128px is already only just enough for the 58px profile avatar on a 3x
+  // display, so quality is the axis with headroom, not size.
+  const AVATAR_BYTE_BUDGET = 14000;
+  const AVATAR_QUALITY_STEPS = [0.72, 0.6, 0.48, 0.36, 0.26];
 
   const handleSavePhoto = async () => {
     if (!avatarEditorRef.current || !user || !db) return;
@@ -238,7 +258,15 @@ export default function ProgressClient() {
     setPhotoError('');
     try {
       const canvas = avatarEditorRef.current.getImageScaledToCanvas();
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+      let dataUrl = '';
+      for (const quality of AVATAR_QUALITY_STEPS) {
+        dataUrl = canvas.toDataURL('image/jpeg', quality);
+        if (dataUrl.length <= AVATAR_BYTE_BUDGET) break;
+      }
+      // Falling off the end of the loop keeps the smallest attempt rather than
+      // failing — at 128px even the lowest step is a couple of KB, so the hard
+      // limit below is now effectively unreachable and the "too complex to
+      // compress" message should no longer be something a real photo can hit.
       if (dataUrl.length > DATA_URL_SAFETY_LIMIT) {
         throw new Error('too-large');
       }
