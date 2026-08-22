@@ -75,8 +75,8 @@ WHY SKILLDRILLS
   (1024x500 exact, RGB/no alpha, matches Play's spec). Source is
   `store-assets/feature-graphic.html` if it ever needs edits — open it in a
   browser at 1024x500 or re-render with a headless browser screenshot.
-- **Screenshots:** already captured, sitting in the `New folder` at the repo
-  root (Processing Speed hub, Grid Memorization gameplay, etc.) — upload those
+- **Screenshots:** already captured, in `store-assets/screenshots/`
+  (Processing Speed hub, Grid Memorization gameplay, etc.) — upload those
   directly. Play requires at least 2; more (4-8) is better for the listing.
 
 ---
