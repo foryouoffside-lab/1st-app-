@@ -27,9 +27,23 @@ const MAX_LEVEL = 6;
 const MIN_LEVEL = 1;
 const COUNTDOWN_TICK_MS = 700;
 
-const DISK_COLORS = [
-  'bg-red-500', 'bg-orange-500', 'bg-yellow-400', 'bg-green-500',
-  'bg-cyan-400', 'bg-blue-500', 'bg-violet-500', 'bg-pink-500',
+// Disk skins, ordered so a full stack reads as one continuous spectrum from the
+// smallest disk upward instead of an arbitrary rainbow.
+//
+// Flat `fill` + a lighter `rim` of the same hue + a coloured glow — the same
+// idiom every other solid game piece in the catalog uses (see Memory Sequence's
+// lit cell: bg-indigo-500 / border-indigo-400 / shadow 0 0 12px). Deliberately
+// NO gradient, specular highlight or inset shading: glossy 3D pieces look
+// nothing like the rest of the app.
+const DISK_SKINS = [
+  { fill: '#8b5cf6', rim: '#a78bfa', glow: '139,92,246' }, // violet
+  { fill: '#6366f1', rim: '#818cf8', glow: '99,102,241' }, // indigo
+  { fill: '#3b82f6', rim: '#60a5fa', glow: '59,130,246' }, // blue
+  { fill: '#06b6d4', rim: '#22d3ee', glow: '6,182,212' },  // cyan
+  { fill: '#10b981', rim: '#34d399', glow: '16,185,129' }, // emerald
+  { fill: '#eab308', rim: '#facc15', glow: '234,179,8' },  // amber
+  { fill: '#f97316', rim: '#fb923c', glow: '249,115,22' }, // orange
+  { fill: '#f43f5e', rim: '#fb7185', glow: '244,63,94' },  // rose
 ];
 
 const disksForLevel = (lvl) => lvl + 2;
@@ -752,7 +766,6 @@ export default function TowerOfHanoiClient() {
     );
   }
 
-  const timePct = Math.max(0, Math.min(100, (timeRemaining / totalTime) * 100));
   const diskCount = disksForLevel(level);
   const showBoard = phase === 'playing' || phase === 'countdown';
 
@@ -795,7 +808,7 @@ export default function TowerOfHanoiClient() {
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-            className="absolute bottom-5 right-5 z-40 p-2 rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
+            className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
           >
             {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
           </button>
@@ -810,11 +823,12 @@ export default function TowerOfHanoiClient() {
                 <Compass className="w-[22px] h-[22px] text-white" />
               </div>
               <h1 className="text-[17px] font-bold tracking-tight">Tower of Hanoi</h1>
+              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45s per level</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
-                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Tap a peg to lift disk, tap another to place it</>} />
-                <HowToRow icon={<ZapIcon className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Disk count increases as you solve each level</>} />
-                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Never place a larger disk on a smaller disk</>} />
+                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Tap a peg to lift, tap to place</>} />
+                <HowToRow icon={<ZapIcon className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>One more disk every level</>} />
+                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Never stack big on small</>} />
               </div>
 
               <div className="grid grid-cols-3 gap-1.5 mt-3.5">
@@ -836,20 +850,6 @@ export default function TowerOfHanoiClient() {
         {/* ── PLAYING / COUNTDOWN BOARD ── */}
         {showBoard && (
           <>
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
-              {/* scaleX, not width — a width animation forces layout + paint on
-                  every clock tick for the whole match; a transform is composited.
-                  duration-1000, not 100 — the state driving this only updates
-                  once a second (see the throttle above), so a 100ms transition
-                  meant the bar snapped quickly then sat frozen for ~900ms
-                  instead of gliding the full second, matching DualTargetFlowClient's
-                  already-correct 1000ms pairing. */}
-              <div
-                className={`h-full w-full origin-left transition-transform duration-1000 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-violet-500'}`}
-                style={{ transform: `scaleX(${timePct / 100})` }}
-              />
-            </div>
-
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
               <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
               <div className="flex items-center gap-2 mt-1.5">
@@ -891,13 +891,11 @@ export default function TowerOfHanoiClient() {
                       />
                       <div className="flex flex-col-reverse items-center relative z-10 w-full" style={{ minHeight: `${diskCount * 30}px` }}>
                         {towers[ti].map((disk, di) => (
-                          <div
+                          <Disk
                             key={di}
-                            className={`${DISK_COLORS[(disk - 1) % DISK_COLORS.length]} rounded-lg mb-[3px] transition-all duration-300 shadow-[0_3px_8px_rgba(0,0,0,0.5)] border border-white/20 flex items-center justify-center`}
-                            style={{ width: getDiskWidth(disk, diskCount), height: '22px' }}
-                          >
-                            <div className="w-2/3 h-[3px] bg-white/30 rounded-full" />
-                          </div>
+                            width={getDiskWidth(disk, diskCount)}
+                            skin={DISK_SKINS[(disk - 1) % DISK_SKINS.length]}
+                          />
                         ))}
                       </div>
                     </div>
@@ -937,11 +935,26 @@ export default function TowerOfHanoiClient() {
 // ============================================================
 // Subcomponents
 // ============================================================
+function Disk({ width, skin }) {
+  return (
+    <div
+      className="rounded-lg mb-[3px] border transition-all duration-300"
+      style={{
+        width,
+        height: '22px',
+        background: skin.fill,
+        borderColor: skin.rim,
+        boxShadow: `0 0 12px rgba(${skin.glow},.5)`,
+      }}
+    />
+  );
+}
+
 function HowToRow({ icon, node }) {
   return (
     <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
       {icon}
-      <span className="text-[10.5px] text-slate-300 leading-tight">{node}</span>
+      <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">{node}</span>
     </div>
   );
 }

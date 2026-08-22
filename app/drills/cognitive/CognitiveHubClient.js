@@ -15,6 +15,8 @@ import { DRILL_INDEX } from '../../../lib/drillIndex';
 import { SUB_GROUPS, getGroupMeta, getDrillGroup, getGroupIcon } from '../../../lib/drillGroups';
 import { canvasDpr } from '../../../lib/canvasFx';
 
+const NO_TRAINING_SUFFIX = new Set(['processing-speed', 'problem-solving']);
+
 export default function CognitiveHubClient() {
   const searchParams = useSearchParams();
   const [searchQuery, setSearchQuery] = useState('');
@@ -190,14 +192,18 @@ export default function CognitiveHubClient() {
         
         {/* 1. Category Hero */}
         <div className="cat-hero">
-          <div className="glowspot" />
           <div className="cat-hero-top">
             <div className="cat-hero-icon">
               <HeroIcon className="w-7 h-7" />
             </div>
             <div>
               <h1 className="font-black tracking-tight text-white leading-tight">
-                {activeGroupMeta ? `${activeGroupMeta.name} Training` : 'Cognitive Sector'}
+                {activeGroupMeta
+                  // 'Processing Speed' and 'Problem Solving' are long enough that
+                  // appending 'Training' wraps the heading onto a second line, so
+                  // those two stand on their own.
+                  ? (NO_TRAINING_SUFFIX.has(activeGroupMeta.id) ? activeGroupMeta.name : `${activeGroupMeta.name} Training`)
+                  : 'Cognitive Sector'}
               </h1>
             </div>
           </div>
@@ -290,7 +296,6 @@ export default function CognitiveHubClient() {
 
             return (
               <div key={drill.id} className="drill-row" style={{ '--a': groupAccent }}>
-                <div className="glow" />
                 <div className="ic shrink-0">
                   <DrillIcon className="w-4.5 h-4.5" />
                 </div>

@@ -18,7 +18,7 @@ import { StatusBar } from '@capacitor/status-bar';
 import generateShareCard, { shareScoreCard } from '../../../../../components/ShareScoreCard';
 import DrillWrapper from '../../../../../components/DrillWrapper';
 import { useDuelMatchStart } from '../../../../../lib/challengeEngine';
-import { canvasDpr } from '../../../../../lib/canvasFx';
+import { motionDpr, createBackdropCache, createLayeredSpriteCache, drawSprite } from '../../../../../lib/canvasFx';
 
 // ============================================================
 // TUNING CONSTANTS
@@ -347,7 +347,7 @@ export default function BatchProcessingClient() {
     const cvs = canvasRef.current;
     if (!cvs) return;
     const rect = cvs.getBoundingClientRect();
-    const dpr = canvasDpr();
+    const dpr = motionDpr();
     cvs.width = rect.width * dpr;
     cvs.height = rect.height * dpr;
     canvasSizeRef.current = { width: rect.width, height: rect.height };
@@ -855,12 +855,42 @@ export default function BatchProcessingClient() {
       return;
     }
 
-    // ~60fps cap. Movement below is per-frame (it.x += it.vx), so without
-    // this a 120Hz phone both paid double the draw cost AND ran the balls
-    // at double speed vs a 60Hz laptop. frameScale keeps ball speed pinned
-    // to the 60fps baseline even when the real frame gap isn't exactly
-    // 16.7ms (90Hz phones, or a device throttling under load).
+    // 60fps cap (14ms, not 32ms). Movement below is per-frame
+    // (it.x += it.vx), so without a cap a 120Hz phone both paid double the
+    // draw cost AND ran the balls at double speed vs a 60Hz laptop.
+    // frameScale keeps ball speed pinned to the 60fps baseline even when the
+    // real frame gap isn't exactly 16.7ms (90Hz phones, or a device
+    // throttling under load).
+    //
+    // The threshold was 32ms — a ~30fps cap — from a blanket CPU pass. That's
+    // the wrong call here: these balls drift continuously, so halving the
+    // frame rate doubled the distance each one jumps between frames and read
+    // as stutter. 14, not 16, because a genuine 60Hz frame arrives every
+    // ~16.7ms but jitters, and a 16ms threshold would occasionally skip one
+    // and drop a frame; 14 passes every 60Hz frame while still halving a
+    // 120Hz phone to 60.
     let lastDrawTs = 0;
+
+    // Ball sprite cache — see the draw pass below. Four colours at one fixed
+    // radius, so this is fully populated within the first frame.
+    const sprites = createLayeredSpriteCache();
+
+    // Static play-field backdrop (flat fill + grid), rendered once per size.
+    // This grid used to be rebuilt every frame: ~30 full-length line segments
+    // stroked across the canvas 60x/sec to reproduce an image that never
+    // changes. It was already batched into a single stroke() call, but one
+    // drawImage of a cached bitmap is cheaper again.
+    const backdrop = createBackdropCache((c, w, h) => {
+      c.fillStyle = '#050505';
+      c.fillRect(0, 0, w, h);
+      c.strokeStyle = 'rgba(255,255,255,0.015)';
+      c.lineWidth = 1;
+      c.beginPath();
+      for (let x = 0; x < w; x += 40) { c.moveTo(x, 0); c.lineTo(x, h); }
+      for (let y = 0; y < h; y += 40) { c.moveTo(0, y); c.lineTo(w, y); }
+      c.stroke();
+    });
+
     const draw = (timestamp) => {
       const cvs = canvasRef.current;
       if (!cvs) {
@@ -868,13 +898,16 @@ export default function BatchProcessingClient() {
         return;
       }
 
-      const ctx = cvs.getContext('2d');
+      // alpha: false — this canvas repaints its whole area every frame and
+      // has nothing behind it that should show through. Without it the
+      // compositor alpha-blends a full-screen layer on every frame.
+      const ctx = cvs.getContext('2d', { alpha: false });
       if (!ctx) {
         animationRef.current = requestAnimationFrame(draw);
         return;
       }
 
-      if (timestamp - lastDrawTs < 32) {
+      if (timestamp - lastDrawTs < 14) {
         animationRef.current = requestAnimationFrame(draw);
         return;
       }
@@ -883,27 +916,22 @@ export default function BatchProcessingClient() {
 
       const w = canvasSizeRef.current.width;
       const h = canvasSizeRef.current.height;
-      const dpr = canvasDpr();
+      const dpr = motionDpr();
 
       ctx.save();
       ctx.scale(dpr, dpr);
 
-      ctx.fillStyle = '#050505';
-      ctx.fillRect(0, 0, w, h);
+      if (backdrop.ensure(w, h, dpr)) {
+        ctx.drawImage(backdrop.canvas, 0, 0, w, h);
+      } else {
+        ctx.fillStyle = '#050505';
+        ctx.fillRect(0, 0, w, h);
+      }
 
       const time = performance.now() * 0.001;
       const topHUD = h < 400 ? 55 : 95;
 
       if (phase === 'playing' && currentBatchRef.current) {
-        // Single batched path + one stroke() call instead of one stroke()
-        // per line — real CPU savings per frame on low-power devices.
-        ctx.strokeStyle = 'rgba(255,255,255,0.015)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        for (let x = 0; x < w; x += 40) { ctx.moveTo(x, 0); ctx.lineTo(x, h); }
-        for (let y = 0; y < h; y += 40) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
-        ctx.stroke();
-
         const c = COLOR_HEX[currentBatchRef.current] || COLOR_HEX["BLUE"];
         ctx.textAlign = "center";
         ctx.fillStyle = c.main;
@@ -966,50 +994,19 @@ export default function BatchProcessingClient() {
           }
         }
 
-        // Pass 3: draw — layered-circle style matching
-        // ConflictReflexClient.js's drawLayeredCircle (flat fills only, no
-        // gradient/shadowBlur; that combination is a known Android WebView
-        // rendering bug, see DividedAttentionClient.js's notes).
-        // No save()/restore() per item — only globalAlpha/strokeStyle/
-        // fillStyle/lineWidth change here, all of which are explicitly
-        // overwritten on every draw call, so the push/pop of the full
-        // canvas state (transform, clip, etc.) 18x/frame was pure overhead.
+        // Pass 3: draw — ONE drawImage per ball, blitted from the sprite
+        // cache, instead of the five arc() paths each ball used to cost.
+        // With up to 18 balls on screen that is ~90 path rasterisations a
+        // frame (~5,400 a second) collapsed into 18 bitmap blits of shapes
+        // that never change. This was the biggest per-frame cost in the drill.
+        //
+        // The sprite itself keeps the same layered-circle style as
+        // ConflictReflexClient.js's drawLayeredCircle — flat fills only, no
+        // gradient/shadowBlur, since that combination is a known Android
+        // WebView rendering bug (see DividedAttentionClient.js's notes).
         items.forEach((it) => {
           const sphereColor = COLOR_HEX[it.type] || COLOR_HEX["BLUE"];
-          const colorHex = sphereColor.main;
-          const r = it.r;
-
-          ctx.globalAlpha = 0.2;
-          ctx.strokeStyle = colorHex;
-          ctx.lineWidth = 1.0;
-          ctx.beginPath();
-          ctx.arc(it.x, it.y, r + 5, 0, Math.PI * 2);
-          ctx.stroke();
-
-          ctx.globalAlpha = 0.55;
-          ctx.strokeStyle = colorHex;
-          ctx.lineWidth = 1.8;
-          ctx.beginPath();
-          ctx.arc(it.x, it.y, r, 0, Math.PI * 2);
-          ctx.stroke();
-
-          ctx.globalAlpha = 0.88;
-          ctx.fillStyle = colorHex;
-          ctx.beginPath();
-          ctx.arc(it.x, it.y, r * 0.82, 0, Math.PI * 2);
-          ctx.fill();
-
-          ctx.globalAlpha = 0.3;
-          ctx.fillStyle = '#ffffff';
-          ctx.beginPath();
-          ctx.arc(it.x - r * 0.2, it.y - r * 0.2, r * 0.28, 0, Math.PI * 2);
-          ctx.fill();
-
-          ctx.globalAlpha = 1.0;
-          ctx.fillStyle = '#ffffff';
-          ctx.beginPath();
-          ctx.arc(it.x, it.y, r * 0.18, 0, Math.PI * 2);
-          ctx.fill();
+          drawSprite(ctx, sprites.get(sphereColor.main, it.r, dpr), it.x, it.y);
         });
 
         for (let i = particlesRef.current.length - 1; i >= 0; i--) {
@@ -1281,8 +1278,6 @@ export default function BatchProcessingClient() {
     );
   }
 
-  const timePct = Math.max(0, Math.min(100, (timeRemaining / totalTime) * 100));
-
   return (
     <DrillWrapper
       drillName="Batch Processing"
@@ -1316,7 +1311,7 @@ export default function BatchProcessingClient() {
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => !v); }}
-            className="absolute bottom-5 right-5 z-40 p-2 rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform"
+            className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform"
           >
             {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
           </button>
@@ -1326,17 +1321,18 @@ export default function BatchProcessingClient() {
         {phase === 'start' && !isChallenge && (
           <div className="relative h-full flex items-center justify-center p-5 overflow-y-auto bg-[#050505] text-white">
             {/* Start game card ONLY - no extra header, breadcrumbs or instructions outside the card */}
-            <div className="relative w-full max-w-[280px] mx-auto rounded-[20px] border border-white/5 bg-[#0c0c16]/90 backdrop-blur-lg px-5 pt-5 pb-[18px] text-center shadow-[0_16px_40px_rgba(0,0,0,.5)] my-6">
+            <div className="relative w-full max-w-[290px] mx-auto rounded-[20px] border border-white/5 bg-[#0c0c16]/90 backdrop-blur-lg px-5 pt-5 pb-[18px] text-center shadow-[0_16px_40px_rgba(0,0,0,.5)] my-6">
               <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(59,130,246,.12), transparent 70%)' }} />
               <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(59,130,246,.3)]">
                 <Layers className="w-[22px] h-[22px] text-white" />
               </div>
               <h2 className="text-[17px] font-bold tracking-tight">Batch Processing</h2>
+              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45-second run</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
-                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Tap the sphere matching the target color prompt shown at the top</>} />
-                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Distractors match other colors — don't tap those</>} />
-                <HowToRow icon={<ZapIcon className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Faster taps score more — you have 5 lives total</>} />
+                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Tap the sphere matching the prompt</>} />
+                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Ignore every other color</>} />
+                <HowToRow icon={<ZapIcon className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Faster taps score more · 5 lives</>} />
               </div>
 
               <div className="grid grid-cols-3 gap-1.5 mt-3.5">
@@ -1361,9 +1357,6 @@ export default function BatchProcessingClient() {
             {/* Own HUD — shown in BOTH modes: a duel plays exactly like solo
                 (DrillWrapper renders no duel chrome mid-match anymore).
                 Hearts are solo-only — duels have no lives. */}
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
-              <div className={`h-full transition-all duration-100 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-blue-500'}`} style={{ width: `${timePct}%` }} />
-            </div>
 
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none">
               <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
@@ -1427,7 +1420,7 @@ function HowToRow({ icon, node }) {
   return (
     <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
       {icon}
-      <span className="text-[10.5px] text-slate-300 leading-tight">{node}</span>
+      <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">{node}</span>
     </div>
   );
 }

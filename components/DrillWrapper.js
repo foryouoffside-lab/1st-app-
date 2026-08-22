@@ -28,6 +28,24 @@ import {
   Repeat
 } from 'lucide-react';
 
+// How often a live duel pushes this player's running score to the challenge
+// doc (effect 5 below).
+//
+// This was 800ms, which made it by far the most expensive thing in the app:
+// ~37 writes per player over a 30s match, ~75 per match, each one also
+// delivered to the opponent as a read. That single number set the ceiling on
+// how many duels a day the whole app could support.
+//
+// It bought nothing at that rate. The mid-match score is NOT displayed
+// anywhere — the snapshot listener (effect 3) deliberately swallows
+// playing→playing updates, and the result screen uses the final scores
+// submitted separately by submitScore at match end. The only thing that ever
+// reads this running value is resolveAbandonedMatch, settling a match whose
+// opponent vanished; a few seconds of staleness there just means an abandoned
+// match's history row shows the score from moments before they left, which is
+// as truthful as the value it replaced.
+const SCORE_SYNC_INTERVAL_MS = 5000;
+
 // How long to wait for an opponent's final score before settling the match
 // without them (see effect 6b). Both duelists' clocks start at the same shared
 // matchStartAt and run a fixed 30s, so a connected opponent's submit lands
@@ -267,8 +285,16 @@ export default function DrillWrapper({
         if (!challengeSnap.exists()) return;
         
         const challengeData = challengeSnap.data();
+        // Never re-ready into a match that's already over. matchStartAt lives
+        // on the doc forever, so opening a finished duel's URL again lands
+        // here; useDuelMatchStart already refuses to restart the game in that
+        // case, but this write would still fire — and firestore.rules now
+        // rejects any write to a completed challenge, making it a guaranteed
+        // console error. 'declined' is included for the same reason: there's
+        // nothing left to ready up for.
+        if (challengeData.status === 'completed' || challengeData.status === 'declined') return;
         const isHost = challengeData.fromUid === user.uid;
-        
+
         const readyUpdates = {};
         if (isHost && !challengeData.fromReady) {
           readyUpdates.fromReady = true;
@@ -404,6 +430,18 @@ export default function DrillWrapper({
     if (score === lastUploadedScoreRef.current) return;
 
     const pushScore = () => {
+      // A completed match is final — never write a score into it. The effect
+      // cleanup below cancels the pending trailing write when challengeStatus
+      // changes, but that only fires once the snapshot carrying the new status
+      // arrives; the match can already be completed (by this client's own
+      // submitScore transaction, or by the opponent's) a network round trip
+      // before that. Writing in that window would overwrite a settled match's
+      // final score with a mid-game value — and firestore.rules now rejects it
+      // outright (challenges are immutable once completed), so without this
+      // guard it's also a guaranteed permission error in the console every
+      // time it happens. lastChallengeStatusRef is updated by the snapshot
+      // listener and covers both who-completed-it cases.
+      if (lastChallengeStatusRef.current === 'completed') return;
       lastUploadedScoreRef.current = score;
       lastUploadTimeRef.current = Date.now();
       const updates = isHost ? { fromScore: score } : { toScore: score };
@@ -411,12 +449,12 @@ export default function DrillWrapper({
     };
 
     const sinceLastUpload = Date.now() - lastUploadTimeRef.current;
-    if (sinceLastUpload >= 800) {
+    if (sinceLastUpload >= SCORE_SYNC_INTERVAL_MS) {
       pushScore();
       return;
     }
 
-    const t = setTimeout(pushScore, 800 - sinceLastUpload);
+    const t = setTimeout(pushScore, SCORE_SYNC_INTERVAL_MS - sinceLastUpload);
     return () => clearTimeout(t);
   }, [score, isChallengeMode, challengeStatus, db, challengeId, isHost]);
 
@@ -677,7 +715,7 @@ export default function DrillWrapper({
           ) : (
             <Link
               href={backHref}
-              className="flex items-center justify-center w-9 h-9 rounded-xl active:scale-90 transition-transform duration-100"
+              className="relative flex items-center justify-center w-9 h-9 rounded-xl active:scale-90 transition-transform duration-100 before:absolute before:-inset-1 before:content-['']"
               style={{ background: 'rgba(255,255,255,0.06)' }}
               aria-label="Back to drills"
             >
@@ -716,7 +754,7 @@ export default function DrillWrapper({
             ) : (
               <button
                 onClick={onSoundToggle}
-                className="flex items-center justify-center w-9 h-9 rounded-xl active:scale-90 transition-transform duration-100"
+                className="relative flex items-center justify-center w-9 h-9 rounded-xl active:scale-90 transition-transform duration-100 before:absolute before:-inset-1 before:content-['']"
                 style={{ background: 'rgba(255,255,255,0.06)' }}
                 aria-label={soundEnabled ? 'Mute sound' : 'Unmute sound'}
               >

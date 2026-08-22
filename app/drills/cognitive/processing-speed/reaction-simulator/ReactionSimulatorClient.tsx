@@ -8,7 +8,7 @@ import {
   RotateCcw, Share2, Eye, Zap as ZapIcon, Heart
 } from 'lucide-react';
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade } from '../../../../../lib/scoringEngine';
-import { canvasDpr, createBackdropCache } from '../../../../../lib/canvasFx';
+import { motionDpr, createBackdropCache, createLayeredSpriteCache, drawSprite } from '../../../../../lib/canvasFx';
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { lockLandscape, unlockOrientation } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
@@ -741,7 +741,7 @@ export default function ReactionSimulatorClient() {
       const ct = containerRef.current;
       if (!ct) return;
       const rect = ct.getBoundingClientRect();
-      const dpr = canvasDpr();
+      const dpr = motionDpr();
       cvs.width = rect.width * dpr;
       cvs.height = rect.height * dpr;
       cvs.style.width = rect.width + 'px';
@@ -757,6 +757,9 @@ export default function ReactionSimulatorClient() {
     trackingState.current.lastTime = 0;
 
     let lastDrawTsRef = 0;
+
+    // Target sprite cache — see the draw pass in mainLoop below.
+    const sprites = createLayeredSpriteCache();
 
     // Static play-field backdrop, rendered once per size instead of per frame.
     const backdrop = createBackdropCache((c: CanvasRenderingContext2D, w: number, h: number) => {
@@ -790,11 +793,17 @@ export default function ReactionSimulatorClient() {
 
     const mainLoop = (timestamp: number) => {
       if (phaseRef.current !== 'playing') return;
-      // ~60fps cap. This loop was uncapped, so on a 90Hz or 120Hz phone it ran
-      // 1.5-2x more frames than the game needs for an identical result — pure
-      // heat. Frame-skipping happens BEFORE lastTime is touched, so the physics
+      // 60fps cap (14ms, not 32ms). The 32ms value was a ~30fps cap from a
+      // blanket CPU pass; wrong here because the targets fall continuously
+      // (t.y += t.vy * dt), so halving the frame rate doubled the distance
+      // each one jumps between frames and read as stutter. 14, not 16: a real
+      // 60Hz frame arrives every ~16.7ms but jitters, and a 16ms threshold
+      // would occasionally skip one and drop a frame; 14 passes every 60Hz
+      // frame while still halving a 120Hz phone to 60.
+      //
+      // Frame-skipping happens BEFORE lastTime is touched, so the physics
       // delta below still measures real elapsed time between drawn frames.
-      if (timestamp - lastDrawTsRef < 32) {
+      if (timestamp - lastDrawTsRef < 14) {
         rafRef.current = requestAnimationFrame(mainLoop);
         return;
       }
@@ -804,7 +813,7 @@ export default function ReactionSimulatorClient() {
       if (dt > 0.15) dt = 0.016;
       trackingState.current.lastTime = timestamp;
 
-      const dpr = canvasDpr();
+      const dpr = motionDpr();
       const W = cvs.width / dpr;
       const H = cvs.height / dpr;
 
@@ -906,43 +915,14 @@ export default function ReactionSimulatorClient() {
         }
       }
 
+      // One drawImage per falling target instead of five arc() paths each.
+      // Only two radii and two colours are ever in play, so the cache is fully
+      // populated within the first frame and never grows after that.
       for (const t of targets) {
         const visualRad = t.isMicro ? microRadius : baseRadius;
         const col = t.isSpeedBurst ? '#f59e0b' : targetColor;
 
-        ctx.save();
-        ctx.globalAlpha = 0.2;
-        ctx.strokeStyle = col;
-        ctx.lineWidth = 1.0;
-        ctx.beginPath();
-        ctx.arc(t.x, t.y, visualRad + 5, 0, Math.PI * 2);
-        ctx.stroke();
-
-        ctx.globalAlpha = 0.55;
-        ctx.strokeStyle = col;
-        ctx.lineWidth = 1.8;
-        ctx.beginPath();
-        ctx.arc(t.x, t.y, visualRad, 0, Math.PI * 2);
-        ctx.stroke();
-
-        ctx.globalAlpha = 0.88;
-        ctx.fillStyle = col;
-        ctx.beginPath();
-        ctx.arc(t.x, t.y, visualRad * 0.82, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.globalAlpha = 0.3;
-        ctx.fillStyle = '#ffffff';
-        ctx.beginPath();
-        ctx.arc(t.x - visualRad * 0.2, t.y - visualRad * 0.2, visualRad * 0.28, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.globalAlpha = 1.0;
-        ctx.fillStyle = '#ffffff';
-        ctx.beginPath();
-        ctx.arc(t.x, t.y, visualRad * 0.18, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
+        drawSprite(ctx, sprites.get(col, visualRad, dpr), t.x, t.y);
 
         if (t.isSpeedBurst) {
           ctx.save();
@@ -1148,25 +1128,26 @@ export default function ReactionSimulatorClient() {
         {phase === 'start' && (
           <div className="relative h-full flex items-center justify-center p-5 overflow-y-auto z-40">
             <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(239,68,68,.12), transparent 70%)' }} />
-            <div className="relative w-full max-w-[280px] rounded-[20px] border border-white/5 bg-[#0c0c16]/90 backdrop-blur-lg px-5 pt-5 pb-[18px] text-center shadow-[0_16px_40px_rgba(0,0,0,.5)] my-6">
+            <div className="relative w-full max-w-[290px] rounded-[20px] border border-white/5 bg-[#0c0c16]/90 backdrop-blur-lg px-5 pt-5 pb-[18px] text-center shadow-[0_16px_40px_rgba(0,0,0,.5)] my-6">
               <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-red-500 to-orange-500 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(239,68,68,.35)]">
                 <Target className="w-[22px] h-[22px] text-white" />
               </div>
               <h1 className="text-[17px] font-bold tracking-tight">Reaction Simulator</h1>
+              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45-second run</p>
               <p className="text-[10px] text-slate-500 uppercase tracking-widest mt-1">Multi-Target Vertical Intercept</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
                 <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
                   <Eye className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
-                  <span className="text-[10.5px] text-slate-300 leading-tight">Intercept falling targets before they escape</span>
+                  <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">Hit the targets before they fall</span>
                 </div>
                 <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
                   <ZapIcon className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" />
-                  <span className="text-[10.5px] text-slate-300 leading-tight">Micro (0.6x) and Speed bursts are scored higher</span>
+                  <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">Micro and speed targets score more</span>
                 </div>
                 <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
                   <Target className="w-3.5 h-3.5 text-yellow-400 flex-shrink-0" />
-                  <span className="text-[10.5px] text-slate-300 leading-tight">5 lives — wrong clicks and escapes cost a life</span>
+                  <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">Misses cost a life · 5 lives</span>
                 </div>
               </div>
 
@@ -1178,7 +1159,7 @@ export default function ReactionSimulatorClient() {
 
               <button
                 onClick={enterDrill}
-                className="w-full mt-3.5 py-[11px] rounded-[13px] bg-gradient-to-r from-red-600 to-orange-500 font-bold text-[12.5px] tracking-wide active:scale-[0.97] transition-transform shadow-[0_0_20px_rgba(239,68,68,.3)] cursor-pointer"
+                className="w-full mt-3.5 py-[11px] rounded-[13px] bg-gradient-to-r from-red-500 to-orange-600 font-bold text-[12.5px] tracking-wide active:scale-[0.97] transition-transform shadow-[0_0_20px_rgba(239,68,68,.3)] cursor-pointer"
               >
                 START
               </button>
@@ -1186,7 +1167,7 @@ export default function ReactionSimulatorClient() {
 
             <button
               onClick={() => setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; })}
-              className="absolute bottom-3.5 right-4 w-[26px] h-[26px] rounded-full bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-slate-500 hover:text-white transition-colors cursor-pointer"
+              className="absolute bottom-3.5 right-4 w-[26px] h-[26px] before:absolute before:top-0 before:left-0 before:-right-[16px] before:-bottom-[14px] before:content-[''] rounded-full bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-slate-500 hover:text-white transition-colors cursor-pointer"
             >
               {soundEnabled ? <Volume2 className="w-3 h-3" /> : <VolumeX className="w-3 h-3" />}
             </button>
@@ -1202,21 +1183,12 @@ export default function ReactionSimulatorClient() {
                 {countdownValue > 0 ? countdownValue : 'GO'}
               </span>
             </div>
-            <span className="text-[10px] text-slate-500">Intercept falling targets before they escape</span>
+            <span className="text-[10px] text-slate-500">Targets drop at GO</span>
           </div>
         )}
 
         {(phase === 'playing' || phase === 'countdown') && (
           <>
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
-              <div 
-                className={`h-full transition-all duration-100 ease-linear ${
-                  timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-red-500'
-                }`} 
-                style={{ width: `${(timeRemaining / TOTAL_TIME) * 100}%` }} 
-              />
-            </div>
-
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none">
               <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
               {isChallenge ? (
@@ -1242,7 +1214,7 @@ export default function ReactionSimulatorClient() {
             {(phase === 'countdown' || phase === 'playing') && (
               <button
                 onClick={() => setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; })}
-                className="absolute bottom-5 right-5 z-45 p-2 rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform pointer-events-auto cursor-pointer"
+                className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform pointer-events-auto cursor-pointer"
               >
                 {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
               </button>
@@ -1271,7 +1243,7 @@ function ResultScreen({ summary, isNewBest, onPlayAgain, onShare }: any) {
   const gradeColor = summary.grade.grade === 'S+' || summary.grade.grade === 'S' ? '#fbbf24' : '#ef4444';
 
   return (
-    <div className="absolute inset-0 z-45 flex" style={{ background: 'rgba(5,5,8,0.97)' }}>
+    <div className="absolute inset-0 z-40 flex" style={{ background: 'rgba(5,5,8,0.97)' }}>
       <div className="w-[36%] flex flex-col items-center justify-center gap-1.5 border-r border-white/5" style={{ background: 'radial-gradient(ellipse 260px 200px at 50% 30%, rgba(239,68,68,.08), transparent 70%)' }}>
         {isNewBest && (
           <span className="text-[9.5px] font-bold text-yellow-400 bg-yellow-500/10 border border-yellow-500/25 px-2.5 py-0.5 rounded-full mb-1">NEW BEST</span>
@@ -1291,7 +1263,7 @@ function ResultScreen({ summary, isNewBest, onPlayAgain, onShare }: any) {
           <ResultStat label="XP" value={`+${summary.xpEarned}`} color="text-emerald-400" />
         </div>
         <div className="flex gap-2">
-          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-red-600 to-orange-500 text-white font-bold text-xs uppercase tracking-wide cursor-pointer">
+          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-red-500 to-orange-600 text-white font-bold text-xs uppercase tracking-wide cursor-pointer">
             Play Again
           </button>
           <button onClick={onShare} className="w-11 flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer">

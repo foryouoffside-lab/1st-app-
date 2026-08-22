@@ -17,7 +17,7 @@ import { StatusBar } from '@capacitor/status-bar';
 import generateShareCard, { shareScoreCard } from '../../../../../components/ShareScoreCard';
 import DrillWrapper from '../../../../../components/DrillWrapper';
 import { useDuelMatchStart } from '../../../../../lib/challengeEngine';
-import { canvasDpr, createBackdropCache } from '../../../../../lib/canvasFx';
+import { motionDpr, createBackdropCache } from '../../../../../lib/canvasFx';
 
 // ============================================================
 // TUNING
@@ -248,6 +248,7 @@ export default function QuickDodgeClient() {
   const heartbeatTimerRef = useRef(null);
   const heartbeatTempoRef = useRef(1100);
   const particlesRef = useRef([]);
+  const shockwavesRef = useRef([]);
 
   // Touch tracking
   const touchActiveRef = useRef(false);
@@ -352,6 +353,13 @@ export default function QuickDodgeClient() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Expanding hollow ring left at an impact point. Same visual language as the
+  // obstacles themselves (a ring rising out of a centre dot), so a hit reads as
+  // the hazard discharging rather than as a separate particle effect.
+  const spawnShockwave = useCallback((xPct, yPct, color) => {
+    shockwavesRef.current.push({ x: xPct, y: yPct, life: 1, color });
   }, []);
 
   const spawnBurst = useCallback((xPct, yPct, color, count = 12) => {
@@ -587,7 +595,8 @@ export default function QuickDodgeClient() {
         audioSynth?.playPenalty();
         triggerShake();
         triggerFlash('red');
-        spawnBurst(px, py, '#ef4444', 18);
+        spawnShockwave(px, py, '254,202,202');
+        spawnBurst(px, py, '#fecaca', 10);
 
         // Was 12 — the post-hit mercy clear was wiping out most of the
         // nearby board on every hit, which combined with the weak hitbox
@@ -633,7 +642,7 @@ export default function QuickDodgeClient() {
 
     lastTimeRef.current = performance.now();
     animationRef.current = requestAnimationFrame(loop);
-  }, [endGame, spawnObstacle, updateDifficulty, spawnBurst, totalTime, isChallenge]);
+  }, [endGame, spawnObstacle, updateDifficulty, spawnBurst, spawnShockwave, totalTime, isChallenge]);
 
   const runCountdown = useCallback((n) => {
     if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
@@ -658,6 +667,7 @@ export default function QuickDodgeClient() {
       e.spawnTimer = 0;
 
       particlesRef.current = [];
+    shockwavesRef.current = [];
       setScore(0); setCombo(0); setTimeRemaining(totalTime); setLevel(startLevel); setLives(MAX_LIVES);
 
       runGameLoop();
@@ -666,7 +676,7 @@ export default function QuickDodgeClient() {
     }
     setCountdownValue(n);
     if (!isChallenge) audioSynth?.playCountdownTick();
-    countdownTimerRef.current = setTimeout(() => runCountdown(n - 1), 750);
+    countdownTimerRef.current = setTimeout(() => runCountdown(n - 1), 700);
   }, [runGameLoop, scheduleHeartbeat, bestLevel, totalTime, isChallenge]);
 
   const enterDrill = useCallback(async () => {
@@ -753,7 +763,7 @@ export default function QuickDodgeClient() {
       const el = containerRef.current;
       if (!cvs || !el) return;
       const rect = el.getBoundingClientRect();
-      const dpr = canvasDpr();
+      const dpr = motionDpr();
       cvs.width = rect.width * dpr;
       cvs.height = rect.height * dpr;
       canvasSizeRef.current = { width: rect.width, height: rect.height };
@@ -822,14 +832,30 @@ export default function QuickDodgeClient() {
     let lastDrawTs = 0;
     const draw = (timestamp) => {
       const cvs = canvasRef.current;
-      const ctx = cvs?.getContext('2d');
+      // alpha: false — the backdrop blit below covers the full canvas every
+      // frame, so nothing behind it can show through anyway. Declaring it
+      // opaque stops the compositor alpha-blending a full-screen layer 60x/sec.
+      const ctx = cvs?.getContext('2d', { alpha: false });
       if (!ctx) { drawAnimRef.current = requestAnimationFrame(draw); return; }
 
-      // ~30fps cap on the actual canvas repaint. Physics (runGameLoop) stays
-      // on its own fixed-timestep accumulator so hit-detection precision is
-      // unaffected — only the paint work (the real CPU/heat cost, especially
-      // the per-obstacle glow/pulse layers below) is throttled.
-      if (timestamp - lastDrawTs < 32) {
+      // 60fps cap (14ms) on the canvas repaint. Physics (runGameLoop) stays on
+      // its own fixed-timestep accumulator, so difficulty and hit-detection
+      // precision are identical either way — this changes how smoothly the
+      // player SEES the field, nothing about how it plays out.
+      //
+      // Was 32ms (~30fps). That saved real work back when each obstacle drew
+      // its pulse ring as a live arc()+stroke() every frame, but those are
+      // pre-rendered sprites blitted with drawImage now, so a frame is far
+      // cheaper than it was when 30 was chosen. And 30fps is the worst place
+      // to economise in THIS drill specifically: it's a dodging game, so
+      // seeing an obstacle's approach smoothly is the core mechanic — at 30fps
+      // each one steps across the field in visible jumps, which reads as lag
+      // and makes close gaps genuinely harder to judge than intended.
+      //
+      // 14, not 16: a real 60Hz frame arrives every ~16.7ms but jitters, and a
+      // 16ms threshold would occasionally skip one and drop a frame; 14 passes
+      // every 60Hz frame while still halving a 120Hz phone to 60.
+      if (timestamp - lastDrawTs < 14) {
         drawAnimRef.current = requestAnimationFrame(draw);
         return;
       }
@@ -837,7 +863,7 @@ export default function QuickDodgeClient() {
 
       const w = canvasSizeRef.current.width;
       const h = canvasSizeRef.current.height;
-      const dpr = canvasDpr();
+      const dpr = motionDpr();
       const minDim = Math.min(w, h);
       const e = engine.current;
       const time = performance.now() * 0.001;
@@ -895,49 +921,102 @@ export default function QuickDodgeClient() {
         // exact point where lag was worst), every obstacle's shape for a
         // given layer goes into one shared path and gets drawn with a
         // single fill()/stroke() call for the whole batch.
-        const pts = e.obstacles.map((o) => ({
-          o,
-          ox: (o.x / 100) * w,
-          oy: (o.y / 100) * h,
-          or_: (o.r / 100) * minDim,
-        }));
+        // Obstacles are drawn HOLLOW: a bright core dot, an open middle, and a
+        // light outline sitting exactly on the collision radius, with a ring
+        // that rises out of the dot and expands to that outline. The old solid
+        // red disc hid the play field behind it and filled a large area every
+        // frame; an outline costs only its own perimeter, and the open middle
+        // lets the player see hazards overlapping each other.
+        //
+        // Batched by layer: every obstacle's shape for a given layer goes into
+        // ONE path and is drawn with a single fill()/stroke() for the whole
+        // batch, so obstacle count costs paths, not draw calls.
+        //
+        // Read straight off e.obstacles with an index loop — the previous
+        // version built a throwaway array of 42 fresh objects every frame
+        // purely to hold the scaled coordinates.
+        const obs = e.obstacles;
+        const CORE = 0.2;   // core dot, as a fraction of the collision radius
 
         if (showTrails) {
           ctx.beginPath();
-          pts.forEach(({ o, ox, oy }) => {
+          for (let i = 0; i < obs.length; i++) {
+            const o = obs[i];
+            const ox = (o.x / 100) * w;
+            const oy = (o.y / 100) * h;
             ctx.moveTo(ox, oy);
             ctx.lineTo(ox - (o.vx / 100) * w * 0.05, oy - (o.vy / 100) * h * 0.05);
-          });
+          }
           ctx.strokeStyle = 'rgba(239,68,68,0.5)';
           ctx.lineWidth = 4;
           ctx.stroke();
         }
 
+        // Faint wash inside the outline — just enough that the hazard reads as
+        // a body rather than a floating circle, while staying see-through.
         ctx.beginPath();
-        pts.forEach(({ ox, oy, or_ }) => { ctx.moveTo(ox + or_ * 1.5, oy); ctx.arc(ox, oy, or_ * 1.5, 0, Math.PI * 2); });
-        ctx.fillStyle = 'rgba(239,68,68,0.12)';
+        for (let i = 0; i < obs.length; i++) {
+          const o = obs[i];
+          const ox = (o.x / 100) * w;
+          const oy = (o.y / 100) * h;
+          const or_ = (o.r / 100) * minDim;
+          ctx.moveTo(ox + or_, oy);
+          ctx.arc(ox, oy, or_, 0, Math.PI * 2);
+        }
+        ctx.fillStyle = glowing ? 'rgba(239,68,68,0.16)' : 'rgba(239,68,68,0.10)';
         ctx.fill();
 
-        // Flat fill instead of a per-obstacle linear gradient — matches the
-        // "flat fills only, no gradient" approach the other cognitive
-        // drills already use for the same performance reason.
-        ctx.beginPath();
-        pts.forEach(({ ox, oy, or_ }) => { ctx.moveTo(ox + or_, oy); ctx.arc(ox, oy, or_, 0, Math.PI * 2); });
-        ctx.fillStyle = glowing ? '#dc2626' : '#b91c1c';
-        ctx.fill();
-        ctx.strokeStyle = glowing ? '#fecaca' : '#f87171';
-        ctx.lineWidth = glowing ? 2.2 : 1.6;
+        // The boundary, on the exact collision radius so what you see is what
+        // kills you.
+        ctx.strokeStyle = glowing ? '#fca5a5' : '#f87171';
+        ctx.lineWidth = glowing ? 2.4 : 1.8;
         ctx.stroke();
 
+        // Bright core dot — the point the ring rises out of.
         ctx.beginPath();
-        pts.forEach(({ ox, oy, or_ }) => { ctx.moveTo(ox + or_ * 0.4, oy); ctx.arc(ox, oy, or_ * 0.4, 0, Math.PI * 2); });
-        ctx.fillStyle = '#ef4444';
+        for (let i = 0; i < obs.length; i++) {
+          const o = obs[i];
+          const ox = (o.x / 100) * w;
+          const oy = (o.y / 100) * h;
+          const or_ = (o.r / 100) * minDim;
+          ctx.moveTo(ox + or_ * CORE, oy);
+          ctx.arc(ox, oy, or_ * CORE, 0, Math.PI * 2);
+        }
+        ctx.fillStyle = glowing ? '#ffffff' : '#fecaca';
         ctx.fill();
 
+        // The rising ring: expands from the core dot out to the boundary and
+        // fades, so each hazard reads as pulsing outward from its centre.
+        // maxScale is 1/CORE, which lands the ring exactly on the outline.
         const period = Math.max(0.55, 1.3 - levelProgress * 0.75);
-        pts.forEach(({ o, ox, oy, or_ }) => {
-          drawPulseRing(ctx, ox, oy, or_, glowing, time, o.id * 0.37, period, 2.0 + levelProgress * 0.6, 0.4);
-        });
+        const ringColor = glowing ? 'rgba(254,202,202,1)' : 'rgba(248,113,113,1)';
+        for (let i = 0; i < obs.length; i++) {
+          const o = obs[i];
+          const ox = (o.x / 100) * w;
+          const oy = (o.y / 100) * h;
+          const or_ = (o.r / 100) * minDim;
+          // NOTE: the 5th argument is the COLOUR. It used to be passed the
+          // boolean `glowing`, which Canvas silently ignores as a strokeStyle,
+          // so these rings inherited whatever colour was last set.
+          drawPulseRing(ctx, ox, oy, or_ * CORE, ringColor, time, o.id * 0.37, period, 1 / CORE, 0.45);
+        }
+      }
+
+      // Shockwaves: a ring that grows out of the impact point and fades. Drawn
+      // before the sparks so the sparks read as travelling over it.
+      for (let i = shockwavesRef.current.length - 1; i >= 0; i--) {
+        const sw = shockwavesRef.current[i];
+        sw.life -= 0.045;
+        if (sw.life <= 0) { shockwavesRef.current.splice(i, 1); continue; }
+        const t01 = 1 - sw.life;                 // 0 -> 1 over the ring's life
+        const sx = (sw.x / 100) * w;
+        const sy = (sw.y / 100) * h;
+        const rr = minDim * (0.012 + t01 * 0.13);
+        ctx.beginPath();
+        ctx.arc(sx, sy, rr, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(${sw.color},${(sw.life * 0.9).toFixed(3)})`;
+        ctx.lineWidth = 2.5 * sw.life + 0.5;
+        ctx.stroke();
       }
 
       for (let i = particlesRef.current.length - 1; i >= 0; i--) {
@@ -1007,8 +1086,6 @@ export default function QuickDodgeClient() {
     );
   }
 
-  const timePct = Math.max(0, Math.min(100, (timeRemaining / totalTime) * 100));
-
   return (
     <DrillWrapper
       drillName="Quick Dodge"
@@ -1044,7 +1121,7 @@ export default function QuickDodgeClient() {
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-            className="absolute bottom-5 right-5 z-40 p-2 rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
+            className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
           >
             {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
           </button>
@@ -1067,11 +1144,12 @@ export default function QuickDodgeClient() {
                 <Compass className="w-[22px] h-[22px] text-white" />
               </div>
               <h1 className="text-[17px] font-bold tracking-tight">Quick Dodge</h1>
+              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45-second run</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
-                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Drag to move your green dot to avoid threats</>} />
-                <HowToRow icon={<ZapIcon className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Red circles home in on you as level scales</>} />
-                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>5 lives — hits cost a life and reset combo</>} />
+                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Drag your green dot to safety</>} />
+                <HowToRow icon={<ZapIcon className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Red circles hunt you down</>} />
+                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Each hit costs a life · 5 lives</>} />
               </div>
 
               <div className="grid grid-cols-3 gap-1.5 mt-3.5">
@@ -1093,10 +1171,6 @@ export default function QuickDodgeClient() {
         {/* ── PLAYING / COUNTDOWN LAYER ── */}
         {(phase === 'playing' || phase === 'countdown') && (
           <>
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
-              <div className={`h-full transition-all duration-100 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-emerald-500'}`} style={{ width: `${timePct}%` }} />
-            </div>
-
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none">
               <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
               <div className="flex items-center gap-2 mt-1.5">
@@ -1159,7 +1233,7 @@ function HowToRow({ icon, node }) {
   return (
     <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
       {icon}
-      <span className="text-[10.5px] text-slate-300 leading-tight">{node}</span>
+      <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">{node}</span>
     </div>
   );
 }

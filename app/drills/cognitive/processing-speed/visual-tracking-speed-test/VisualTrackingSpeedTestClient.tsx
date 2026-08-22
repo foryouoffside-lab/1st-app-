@@ -8,7 +8,7 @@ import {
   RotateCcw, Share2, ArrowLeft, Eye, Zap as ZapIcon, Ban, Heart
 } from 'lucide-react';
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade } from '../../../../../lib/scoringEngine';
-import { canvasDpr } from '../../../../../lib/canvasFx';
+import { motionDpr, createLayeredSpriteCache, drawSprite } from '../../../../../lib/canvasFx';
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { lockLandscape, unlockOrientation } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
@@ -277,6 +277,7 @@ export default function VisualTrackingSpeedTestClient() {
     px: 0,
     py: 0,
     currentSpeed: 120,
+    targetSpeed: 120,
     dirX: 1,
     dirY: 1,
     isDashing: false,
@@ -540,7 +541,7 @@ export default function VisualTrackingSpeedTestClient() {
       const ct = containerRef.current;
       if (!ct) return;
       const rect = ct.getBoundingClientRect();
-      const dpr = canvasDpr();
+      const dpr = motionDpr();
       cvs.width = rect.width * dpr;
       cvs.height = rect.height * dpr;
       cvs.style.width = rect.width + 'px';
@@ -554,6 +555,7 @@ export default function VisualTrackingSpeedTestClient() {
       trackingState.current.px = radius + Math.random() * (W - radius * 2);
       trackingState.current.py = radius + Math.random() * (H - radius * 2);
       trackingState.current.currentSpeed = 120 + p * 330;
+      trackingState.current.targetSpeed = trackingState.current.currentSpeed;
       trackingState.current.dirX = Math.random() > 0.5 ? 1 : -1;
       trackingState.current.dirY = (Math.random() - 0.5) * 2;
       trackingState.current.isDashing = false;
@@ -570,6 +572,9 @@ export default function VisualTrackingSpeedTestClient() {
 
     trackingState.current.lastTime = 0;
     lastTargetSpawnTimeRef.current = Date.now();
+
+    // Target sprite cache — see the draw call in drawLoop below.
+    const sprites = createLayeredSpriteCache();
 
     // Static backdrop (flat fill + dot-matrix grid), rendered once and blitted
     // each frame rather than rebuilt dot by dot. Rebuilt only on resize.
@@ -598,42 +603,33 @@ export default function VisualTrackingSpeedTestClient() {
       return true;
     };
 
-    // CRT scanline overlay — static (scanlinesActive never changes), so it's
-    // cached exactly like the backdrop instead of redrawn with ~100-200
-    // fillRect calls every frame for the drill's whole runtime. Kept as a
-    // SEPARATE cache from the backdrop (rather than merged into it) because
-    // it has to paint on top of the target/trail each frame, not underneath.
-    const scanlineCanvas = document.createElement('canvas');
-    const scanlineCtx = scanlineCanvas.getContext('2d');
-    let scanlineW = 0;
-    let scanlineH = 0;
-
-    const ensureScanlines = (w: number, h: number, dpr: number) => {
-      if (!scanlineCtx || w <= 0 || h <= 0) return false;
-      if (scanlineW === w && scanlineH === h && scanlineCanvas.width > 0) return true;
-      scanlineW = w;
-      scanlineH = h;
-      scanlineCanvas.width = Math.round(w * dpr);
-      scanlineCanvas.height = Math.round(h * dpr);
-      scanlineCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      scanlineCtx.clearRect(0, 0, w, h);
-      scanlineCtx.fillStyle = 'rgba(255, 255, 255, 0.01)';
-      for (let y = 0; y < h; y += 4) {
-        scanlineCtx.fillRect(0, y, w, 1.5);
-      }
-      return true;
-    };
-
     let animId = 0;
-    // ~60fps cap. This loop was uncapped, so on a 90Hz or 120Hz phone it ran
-    // 1.5-2x more frames than the game needs for an identical result — pure
-    // heat. Frame-skipping happens BEFORE lastTime is touched, so the physics
-    // delta below still measures real elapsed time between drawn frames.
+    // 60fps cap (14ms, not 32ms). The 32ms value was a ~30fps cap from a
+    // blanket CPU pass; it is the wrong call for THIS drill specifically,
+    // whose entire task is visually tracking one continuously-moving target
+    // — and one that reaches ~2000px/sec mid-dash, so at 30fps it teleports
+    // ~67px between frames instead of gliding. That is unplayable for a
+    // tracking test, not just ugly.
+    //
+    // Affordable at 60 now: a frame is ONE cached-backdrop drawImage plus ONE
+    // sprite blit for the target. Everything that pass was chasing is gone —
+    // the dot-matrix grid is cached (ensureBackdrop below), the target is
+    // pre-rasterised (createLayeredSpriteCache above), and the full-screen
+    // scanline overlay that used to be blitted on top every frame is now
+    // handled by the CSS layer in the render block instead.
+    //
+    // 14, not 16: a real 60Hz frame arrives every ~16.7ms but jitters, and a
+    // 16ms threshold would occasionally skip one and drop a frame — the exact
+    // judder this is meant to avoid. 14 passes every 60Hz frame while still
+    // halving a 120Hz phone (8.3ms deltas) to 60.
+    //
+    // Frame-skipping happens BEFORE lastTime is touched, so the physics delta
+    // below still measures real elapsed time between drawn frames.
     let lastDrawTs = 0;
 
     const drawLoop = (ts: number) => {
       if (phaseRef.current !== 'playing') return;
-      if (ts - lastDrawTs < 32) { animId = requestAnimationFrame(drawLoop); return; }
+      if (ts - lastDrawTs < 14) { animId = requestAnimationFrame(drawLoop); return; }
       lastDrawTs = ts;
       if (!trackingState.current.lastTime) {
         trackingState.current.lastTime = ts;
@@ -642,7 +638,7 @@ export default function VisualTrackingSpeedTestClient() {
       if (dt > 0.15) dt = 0.016; 
       trackingState.current.lastTime = ts;
 
-      const dpr = canvasDpr();
+      const dpr = motionDpr();
       const W = cvs.width / dpr;
       const H = cvs.height / dpr;
       const currentLevel = levelRef.current;
@@ -662,7 +658,18 @@ export default function VisualTrackingSpeedTestClient() {
       }
 
       const cruiseSpeed = 120 + p * 330;
-      const dashSpeed = 700 + p * 1500;
+      // Dash speed is now a MULTIPLE of the current cruise speed rather than
+      // its own independent 700 -> 2200 ramp.
+      //
+      // The old formula made level 1 the harshest jump in the whole drill: the
+      // target cruised at 120px/s and then switched to 700px/s — an instant
+      // ~6x — which is what read as the drill "firing up" out of nowhere the
+      // moment you started playing. Anchoring the dash to cruise makes the
+      // burst 2.6x at level 1 and widens to ~4.6x by level 15, so the
+      // sharpness of the dash now *grows with the level* instead of arriving
+      // fully-formed on the first one. Top-end speed is essentially unchanged
+      // (~2070 vs 2200), so the drill is not made easier where it matters.
+      const dashSpeed = cruiseSpeed * 2.6 + p * 900;
       const radius = getTargetRadius(W, H);
 
       // Physics State transitions
@@ -674,7 +681,7 @@ export default function VisualTrackingSpeedTestClient() {
         }
         if (trackingState.current.timer > trackingState.current.cruiseLimit) {
           trackingState.current.isDashing = true;
-          trackingState.current.currentSpeed = dashSpeed;
+          trackingState.current.targetSpeed = dashSpeed;
           trackingState.current.timer = 0;
           trackingState.current.cruiseLimit = 0;
           trackingState.current.dashLimit = (250 + p * 150) * (0.7 + Math.random() * 0.6);
@@ -685,12 +692,22 @@ export default function VisualTrackingSpeedTestClient() {
         }
         if (trackingState.current.timer > trackingState.current.dashLimit) {
           trackingState.current.isDashing = false;
-          trackingState.current.currentSpeed = cruiseSpeed;
+          trackingState.current.targetSpeed = cruiseSpeed;
           trackingState.current.timer = 0;
           trackingState.current.dashLimit = 0;
           trackingState.current.dirY = (Math.random() - 0.5) * 2;
         }
       }
+
+      // Ease toward the target speed instead of jumping to it. Both the
+      // dash-in and the drop back to cruise used to be single-frame changes,
+      // so the target teleported into (and out of) its burst. An exponential
+      // approach at 14/sec covers ~95% of the gap in about 0.2s — fast enough
+      // to still feel like a burst, slow enough that the eye can follow the
+      // acceleration, which is the entire skill this drill tests.
+      if (!trackingState.current.targetSpeed) trackingState.current.targetSpeed = cruiseSpeed;
+      trackingState.current.currentSpeed +=
+        (trackingState.current.targetSpeed - trackingState.current.currentSpeed) * Math.min(1, 14 * dt);
 
       trackingState.current.px += trackingState.current.currentSpeed * trackingState.current.dirX * dt;
       trackingState.current.py += (trackingState.current.currentSpeed * 0.5) * trackingState.current.dirY * dt;
@@ -734,42 +751,11 @@ export default function VisualTrackingSpeedTestClient() {
       const cx = trackingState.current.px;
       const cy = trackingState.current.py;
 
-      // Draw target
-      const r = radius;
-      ctx.save();
-      // Ghost outer ring
-      ctx.globalAlpha = 0.2;
-      ctx.strokeStyle = targetColor;
-      ctx.lineWidth = 1.0;
-      ctx.beginPath();
-      ctx.arc(cx, cy, r + 5, 0, Math.PI * 2);
-      ctx.stroke();
-      // Tactical ring
-      ctx.globalAlpha = 0.55;
-      ctx.strokeStyle = targetColor;
-      ctx.lineWidth = 1.8;
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.stroke();
-      // Filled body
-      ctx.globalAlpha = 0.88;
-      ctx.fillStyle = targetColor;
-      ctx.beginPath();
-      ctx.arc(cx, cy, r * 0.82, 0, Math.PI * 2);
-      ctx.fill();
-      // Highlight sheen
-      ctx.globalAlpha = 0.3;
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.arc(cx - r * 0.2, cy - r * 0.2, r * 0.28, 0, Math.PI * 2);
-      ctx.fill();
-      // Bright center core
-      ctx.globalAlpha = 1.0;
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.arc(cx, cy, r * 0.18, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
+      // Draw target — one drawImage of a pre-rasterised sprite (ghost ring +
+      // tactical ring + filled body + sheen + core dot) rather than rebuilding
+      // those five arc() paths every frame. The shape is identical frame to
+      // frame; only cx/cy change.
+      drawSprite(ctx, sprites.get(targetColor, radius, dpr), cx, cy);
 
       // Render Trail Effect
       if (trailEffect) {
@@ -780,11 +766,12 @@ export default function VisualTrackingSpeedTestClient() {
         ctx.stroke();
       }
 
-      // CRT overlay scanlines — blit of the cached pattern from ensureScanlines
-      // above (see its comment); was ~100-200 fillRect calls rebuilt every frame.
-      if (scanlinesActive && ensureScanlines(W, H, dpr)) {
-        ctx.drawImage(scanlineCanvas, 0, 0, W, H);
-      }
+      // NOTE: the CRT scanline overlay is NOT drawn here any more. It was a
+      // second full-screen alpha-blended drawImage on every frame — and it was
+      // redundant, because the JSX already renders a `scanlinesActive` CSS
+      // scanline layer over this canvas (see the render block below). The
+      // compositor paints that one once and reuses it for free; this canvas
+      // copy was paying full per-frame cost to reproduce the same look.
 
       // Draw Hit Ring Bursts
       const rings = trackingState.current.rings;
@@ -866,7 +853,7 @@ export default function VisualTrackingSpeedTestClient() {
     const cy = trackingState.current.py;
     const dist = Math.hypot(x - cx, y - cy);
     
-    const dpr = canvasDpr();
+    const dpr = motionDpr();
     const W = cvs.width / dpr;
     const H = cvs.height / dpr;
     const radius = getTargetRadius(W, H);
@@ -1068,14 +1055,12 @@ export default function VisualTrackingSpeedTestClient() {
     return (
       <div className="min-h-[100dvh] flex items-center justify-center bg-[#050508]">
         <div className="text-center">
-          <div className="w-14 h-14 border-4 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto mb-4 shadow-[0_0_20px_rgba(245,158,11,0.5)]" />
+          <div className="w-14 h-14 border-4 border-red-500 border-t-transparent rounded-full animate-spin mx-auto mb-4 shadow-[0_0_20px_rgba(239,68,68,0.5)]" />
           <p className="text-slate-500 font-bold tracking-widest uppercase text-[10px] animate-pulse">Loading Ocular Aim Engine...</p>
         </div>
       </div>
     );
   }
-
-  const timePct = Math.max(0, Math.min(100, (timeRemaining / TOTAL_TIME) * 100));
 
   return (
     <DrillWrapper
@@ -1114,7 +1099,7 @@ export default function VisualTrackingSpeedTestClient() {
 
         {phase === 'rotate-hint' && (
           <div className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-black/95 text-center p-6">
-            <div className="animate-bounce mb-5 text-amber-500"><RotateCcw className="w-12 h-12 mx-auto" /></div>
+            <div className="animate-bounce mb-5 text-red-500"><RotateCcw className="w-12 h-12 mx-auto" /></div>
             <p className="text-sm font-bold text-white">Rotate your phone to play</p>
             <p className="text-xs text-slate-500 mt-1.5 max-w-[220px] mx-auto">Your browser can't rotate this for you — turn your device to landscape.</p>
             <button 
@@ -1133,7 +1118,7 @@ export default function VisualTrackingSpeedTestClient() {
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-            className="absolute bottom-5 right-5 z-40 p-2 rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
+            className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
           >
             {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
           </button>
@@ -1142,17 +1127,18 @@ export default function VisualTrackingSpeedTestClient() {
         {/* ── START SCREEN ── */}
         {phase === 'start' && (
           <div className="relative h-full flex items-center justify-center p-5 overflow-y-auto z-40">
-            <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(245,158,11,.15), transparent 70%)' }} />
+            <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(239,68,68,.15), transparent 70%)' }} />
             <div className="relative w-full max-w-[290px] rounded-[20px] border border-white/5 bg-[#0c0c16]/90 backdrop-blur-lg px-5 pt-5 pb-[18px] text-center shadow-[0_16px_40px_rgba(0,0,0,.5)] my-6">
-              <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(245,158,11,.35)]">
+              <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-red-500 to-orange-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(239,68,68,.35)]">
                 <Compass className="w-[22px] h-[22px] text-white" />
               </div>
               <h1 className="text-[17px] font-bold tracking-tight">Visual Tracking Speed Test</h1>
+              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45-second run</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
-                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Track the moving target smoothly with your eyes</>} />
-                <HowToRow icon={<ZapIcon className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Click/tap the target as it bounces and speeds up</>} />
-                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>5 lives — miss-clicks and timeouts cost points, combo, and a life</>} />
+                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Follow the red target closely</>} />
+                <HowToRow icon={<ZapIcon className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Tap it as it bounces and speeds up</>} />
+                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Misses cost a life · 5 lives</>} />
               </div>
 
               <div className="grid grid-cols-3 gap-1.5 mt-3.5">
@@ -1163,7 +1149,7 @@ export default function VisualTrackingSpeedTestClient() {
 
               <button
                 onClick={enterDrill}
-                className="w-full mt-3.5 py-[11px] rounded-[13px] bg-gradient-to-r from-amber-500 to-orange-600 font-bold text-[12.5px] tracking-wide active:scale-[0.97] transition-transform shadow-[0_0_20px_rgba(245,158,11,.3)] cursor-pointer"
+                className="w-full mt-3.5 py-[11px] rounded-[13px] bg-gradient-to-r from-red-500 to-orange-600 font-bold text-[12.5px] tracking-wide active:scale-[0.97] transition-transform shadow-[0_0_20px_rgba(239,68,68,.3)] cursor-pointer"
               >
                 START
               </button>
@@ -1174,15 +1160,11 @@ export default function VisualTrackingSpeedTestClient() {
         {/* ── PLAYING (and COUNTDOWN) ── */}
         {(phase === 'playing' || phase === 'countdown') && (
           <>
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
-              <div className={`h-full transition-all duration-100 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-amber-500'}`} style={{ width: `${timePct}%` }} />
-            </div>
-
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none">
               <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
               {isChallenge ? (
                 <div className="flex items-center gap-2 mt-1.5">
-                  <span className="text-[10px] font-black text-amber-300 bg-amber-500/15 border border-amber-500/25 px-1.5 py-0.5 rounded">Lv.{level}</span>
+                  <span className="text-[10px] font-black text-red-300 bg-red-500/15 border border-red-500/25 px-1.5 py-0.5 rounded">Lv.{level}</span>
                 </div>
               ) : (
                 <span className="flex items-center gap-0.5 mt-1.5">
@@ -1215,9 +1197,9 @@ export default function VisualTrackingSpeedTestClient() {
         {phase === 'countdown' && (
           <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/55 backdrop-blur-[2px]">
             <span className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">Get Ready</span>
-            <div className="relative w-28 h-28 rounded-full border-[3px] border-amber-500/20 flex items-center justify-center">
-              <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-amber-400 border-r-amber-400 animate-spin" style={{ animationDuration: '0.7s' }} />
-              <span key={countdownValue} className="fx-pop-in text-5xl font-black bg-gradient-to-b from-white to-amber-300 bg-clip-text text-transparent">
+            <div className="relative w-28 h-28 rounded-full border-[3px] border-red-500/20 flex items-center justify-center">
+              <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-red-400 border-r-red-400 animate-spin" style={{ animationDuration: '0.7s' }} />
+              <span key={countdownValue} className="fx-pop-in text-5xl font-black bg-gradient-to-b from-white to-red-300 bg-clip-text text-transparent">
                 {countdownValue > 0 ? countdownValue : 'GO'}
               </span>
             </div>
@@ -1241,7 +1223,7 @@ function HowToRow({ icon, node }: { icon: React.ReactNode; node: React.ReactNode
   return (
     <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
       {icon}
-      <span className="text-[10.5px] text-slate-300 leading-tight">{node}</span>
+      <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">{node}</span>
     </div>
   );
 }
@@ -1278,7 +1260,7 @@ function ResultScreen({ summary, onPlayAgain, onShare }: { summary: any; onPlayA
           <ResultStat label="XP" value={`+${summary.xpEarned}`} color="text-violet-400" />
         </div>
         <div className="flex gap-2">
-          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-amber-500 to-orange-600 text-white font-bold text-xs uppercase tracking-wide cursor-pointer">
+          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-red-500 to-orange-600 text-white font-bold text-xs uppercase tracking-wide cursor-pointer">
             Play Again
           </button>
           <button onClick={onShare} className="w-11 flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer">

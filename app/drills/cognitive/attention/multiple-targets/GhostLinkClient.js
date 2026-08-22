@@ -33,14 +33,14 @@ class GameErrorBoundary extends React.Component {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/95 rounded-xl z-50 border border-purple-500/30">
+        <div className="absolute inset-0 flex items-center justify-center bg-black/95 rounded-xl z-50 border border-emerald-500/30">
           <div className="text-center p-6 max-w-sm">
-            <Info className="w-12 h-12 text-purple-500 mx-auto mb-4 animate-pulse" />
+            <Info className="w-12 h-12 text-emerald-500 mx-auto mb-4 animate-pulse" />
             <h3 className="text-white text-lg font-bold mb-2">Memory Engine Desync</h3>
             <p className="text-gray-400 text-sm mb-4">The visual engine encountered a frame error. Let's reboot the runtime.</p>
             <button 
               onClick={() => { this.setState({ hasError: false }); window.location.reload(); }} 
-              className="w-full py-2.5 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-xl transition-colors shadow-[0_0_15px_rgba(168,85,247,0.4)]"
+              className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition-colors shadow-[0_0_15px_rgba(16,185,129,0.4)]"
             >
               Restart Sequence
             </button>
@@ -594,9 +594,9 @@ export default function GhostLinkClient() {
     confirmSprite.height = 50 + CONFIRM_PAD * 2;
     {
       const sctx = confirmSprite.getContext('2d');
-      sctx.fillStyle = "#a855f7";
+      sctx.fillStyle = "#10b981";
       sctx.shadowBlur = 20;
-      sctx.shadowColor = "#a855f7";
+      sctx.shadowColor = "#10b981";
       sctx.beginPath();
       sctx.roundRect(CONFIRM_PAD, CONFIRM_PAD, 160, 50, 12);
       sctx.fill();
@@ -963,7 +963,7 @@ export default function GhostLinkClient() {
     return (
       <div className="min-h-[100dvh] flex items-center justify-center bg-[#050508]">
         <div className="text-center">
-          <div className="w-14 h-14 border-4 border-purple-600 border-t-transparent rounded-full animate-spin mx-auto mb-4 shadow-[0_0_20px_rgba(139,92,246,0.5)]" />
+          <div className="w-14 h-14 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin mx-auto mb-4 shadow-[0_0_20px_rgba(16,185,129,0.5)]" />
           <p className="text-slate-500 font-bold tracking-widest uppercase text-[10px] animate-pulse">Loading Tracker Engine...</p>
         </div>
       </div>
@@ -996,7 +996,7 @@ export default function GhostLinkClient() {
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-            className="absolute bottom-5 right-5 z-40 p-2 rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
+            className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
           >
             {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
           </button>
@@ -1005,7 +1005,7 @@ export default function GhostLinkClient() {
         {/* ── ROTATE HINT ── */}
         {phase === 'rotate-hint' && (
           <div className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-black/95 text-center p-6">
-            <div className="animate-bounce mb-5 text-purple-400"><RotateCcw className="w-12 h-12 mx-auto" /></div>
+            <div className="animate-bounce mb-5 text-emerald-400"><RotateCcw className="w-12 h-12 mx-auto" /></div>
             <p className="text-sm font-bold text-white">Rotate your phone to play</p>
             <p className="text-xs text-slate-500 mt-1.5 max-w-[220px] mx-auto">Turn your device to landscape to begin tracking.</p>
           </div>
@@ -1014,30 +1014,31 @@ export default function GhostLinkClient() {
         {/* ── START SCREEN ── */}
         {phase === 'start' && (
           <div className="relative h-full flex items-center justify-center p-5 overflow-y-auto z-40 pointer-events-auto">
-            <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(168,85,247,.16), transparent 70%)' }} />
+            <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(16,185,129,.16), transparent 70%)' }} />
             <div className="relative w-full max-w-[290px] rounded-[20px] border border-white/5 bg-[#0c0c16]/90 backdrop-blur-lg px-5 pt-5 pb-[18px] text-center shadow-[0_16px_40px_rgba(0,0,0,.5)] my-6">
-              <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(168,85,247,.35)]">
+              <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-emerald-600 to-teal-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(16,185,129,.35)]">
                 <Compass className="w-[22px] h-[22px] text-white" />
               </div>
               <h1 className="text-[17px] font-bold tracking-tight text-white">Multiple Targets</h1>
+              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45-second run</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
-                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />} node={<>Memorize the 3 green targets shown</>} />
-                <HowToRow icon={<Activity className="w-3.5 h-3.5 text-pink-400 flex-shrink-0" />} node={<>Track them as they turn neutral and bounce</>} />
-                <HowToRow icon={<Target className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Identify all 3 original targets when they freeze</>} />
+                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />} node={<>Memorize the 3 green targets</>} />
+                <HowToRow icon={<Activity className="w-3.5 h-3.5 text-teal-400 flex-shrink-0" />} node={<>Track them once they turn grey</>} />
+                <HowToRow icon={<Target className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Tap all 3 when they freeze</>} />
               </div>
 
               <div className="flex flex-col gap-3 text-left mt-3.5 border-t border-white/5 pt-3.5">
                 <div className="flex flex-col gap-1">
                   <div className="flex justify-between items-center text-[9px] uppercase font-bold text-slate-500 tracking-wider">
-                    <span className="flex items-center gap-1"><Zap className="w-3 h-3 text-pink-400" /> Velocity</span>
-                    <span className="text-pink-400 font-mono font-bold">Lvl {ballSpeed}</span>
+                    <span className="flex items-center gap-1"><Zap className="w-3 h-3 text-teal-400" /> Velocity</span>
+                    <span className="text-teal-400 font-mono font-bold">Lvl {ballSpeed}</span>
                   </div>
                   <input
                     type="range" min="2" max="12" step="1"
                     value={ballSpeed}
                     onChange={(e) => setBallSpeed(parseInt(e.target.value))}
-                    className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-pink-500"
+                    className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-teal-500"
                   />
                 </div>
 
@@ -1067,7 +1068,7 @@ export default function GhostLinkClient() {
 
               <button
                 onClick={handleStartGame}
-                className="w-full mt-3.5 py-[11px] rounded-[13px] bg-gradient-to-r from-purple-600 to-pink-600 font-bold text-[12.5px] tracking-wide active:scale-[0.97] transition-transform shadow-[0_0_20px_rgba(168,85,247,.3)] cursor-pointer text-white"
+                className="w-full mt-3.5 py-[11px] rounded-[13px] bg-gradient-to-r from-emerald-600 to-teal-600 font-bold text-[12.5px] tracking-wide active:scale-[0.97] transition-transform shadow-[0_0_20px_rgba(16,185,129,.3)] cursor-pointer text-white"
               >
                 START
               </button>
@@ -1079,9 +1080,9 @@ export default function GhostLinkClient() {
         {phase === 'countdown' && (
           <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/60 backdrop-blur-[2px]">
             <span className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">Get Ready</span>
-            <div className="relative w-28 h-28 rounded-full border-[3px] border-purple-500/20 flex items-center justify-center">
-              <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-purple-400 border-r-purple-400 animate-spin" style={{ animationDuration: '0.7s' }} />
-              <span key={countdownValue} className="fx-pop-in text-5xl font-black bg-gradient-to-b from-white to-purple-300 bg-clip-text text-transparent">
+            <div className="relative w-28 h-28 rounded-full border-[3px] border-emerald-500/20 flex items-center justify-center">
+              <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-emerald-400 border-r-emerald-400 animate-spin" style={{ animationDuration: '0.7s' }} />
+              <span key={countdownValue} className="fx-pop-in text-5xl font-black bg-gradient-to-b from-white to-emerald-300 bg-clip-text text-transparent">
                 {countdownValue}
               </span>
             </div>
@@ -1096,18 +1097,12 @@ export default function GhostLinkClient() {
               <div className="fx-vignette" style={{ '--v-min': Math.max(0.05, dangerLevel * 0.25), '--v-max': Math.min(0.55, dangerLevel * 0.75), animationDuration: '900ms' }} />
             )}
 
-            {subPhase === 'TRACKING' && (
-              <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
-                <div className={`h-full transition-all duration-100 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-purple-500'}`} style={{ width: `${Math.min(100, (timeRemaining / DRILL_DURATION) * 100)}%` }} />
-              </div>
-            )}
-
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none text-white">
               {subPhase === 'IDENTIFY' && (
                 <span className="text-2xl font-black leading-none tabular-nums">{score}</span>
               )}
               <div className="flex items-center gap-2 mt-1.5">
-                <span className="text-[10px] font-black text-purple-300 bg-purple-500/15 border border-purple-500/25 px-1.5 py-0.5 rounded uppercase tracking-wider">{subPhase}</span>
+                <span className="text-[10px] font-black text-emerald-300 bg-emerald-500/15 border border-emerald-500/25 px-1.5 py-0.5 rounded uppercase tracking-wider">{subPhase}</span>
               </div>
             </div>
 
@@ -1146,7 +1141,7 @@ function HowToRow({ icon, node }) {
   return (
     <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
       {icon}
-      <span className="text-[10.5px] text-slate-300 leading-tight">{node}</span>
+      <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">{node}</span>
     </div>
   );
 }
@@ -1183,7 +1178,7 @@ function ResultScreen({ summary, onPlayAgain, onShare }) {
           <ResultStat label="XP" value={`+${summary.xpEarned}`} color="text-violet-400" />
         </div>
         <div className="flex gap-2">
-          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold text-xs uppercase tracking-wide cursor-pointer">
+          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-bold text-xs uppercase tracking-wide cursor-pointer">
             Play Again
           </button>
           <button onClick={onShare} className="w-11 flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer">

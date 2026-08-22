@@ -18,7 +18,7 @@ import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
 import DrillWrapper from '../../../../../components/DrillWrapper';
 import { useDuelMatchStart } from '../../../../../lib/challengeEngine';
-import { canvasDpr, createBackdropCache } from '../../../../../lib/canvasFx';
+import { motionDpr, createBackdropCache, createLayeredSpriteCache, drawSprite } from '../../../../../lib/canvasFx';
 
 // ============================================================
 // TUNING CONSTANTS
@@ -515,13 +515,16 @@ export default function KineticInterceptClient() {
     if (phase !== 'playing') return;
     const cvs = canvasRef.current;
     if (!cvs) return;
-    const ctx = cvs.getContext('2d');
+    // alpha: false — this canvas fills its whole area every frame and has
+    // nothing behind it that should show through. Without this the compositor
+    // alpha-blends a full-screen layer on every one of those frames.
+    const ctx = cvs.getContext('2d', { alpha: false });
 
     const updateDimensions = () => {
       const container = containerRef.current;
       if (!container) return;
       const rect = container.getBoundingClientRect();
-      const dpr = canvasDpr();
+      const dpr = motionDpr();
       cvs.width = rect.width * dpr;
       cvs.height = rect.height * dpr;
       canvasSizeRef.current = { width: rect.width, height: rect.height };
@@ -531,6 +534,9 @@ export default function KineticInterceptClient() {
     window.addEventListener('resize', updateDimensions);
 
     let lastTime = performance.now();
+
+    // Target sprite cache — see the draw call in renderLoop below.
+    const sprites = createLayeredSpriteCache();
 
     // Static play-field backdrop, rendered once per size instead of per frame.
     const backdrop = createBackdropCache((c, w, h) => {
@@ -546,11 +552,24 @@ export default function KineticInterceptClient() {
 
     const renderLoop = (time) => {
       if (!gameActiveRef.current) return;
-      // ~60fps cap — an uncapped loop makes 90-120Hz phones redraw more
-      // than needed for the same visual result. Movement below is scaled by
-      // frameScale (derived from real elapsed time), so capping here changes
-      // rendering cost only — not target speed — on any device.
-      if (time - lastTime < 32) {
+      // 60fps cap (14ms, not 32ms). 32ms is a ~30fps cap, and this drill's
+      // whole job is one target sliding smoothly across the screen — halving
+      // the frame rate doubled the distance it jumps between frames, which is
+      // exactly the stutter this drill was reported as having. The 32ms value
+      // came from a blanket CPU pass that was right for drills where nothing
+      // moves, and wrong here.
+      //
+      // Rendering at 60 is affordable now: a frame is one cached-backdrop
+      // drawImage plus ONE sprite blit for the target. The real costs that
+      // pass was chasing are both gone — the grid backdrop is cached
+      // (createBackdropCache below) and the target is pre-rasterised
+      // (createLayeredSpriteCache below).
+      //
+      // 14ms, not 16: a genuine 60Hz frame arrives every ~16.7ms but jitters,
+      // and a threshold at 16 would occasionally skip one and drop a frame —
+      // the judder this cap is meant to prevent. 14 passes every 60Hz frame
+      // while still halving a 120Hz phone (8.3ms deltas) to 60.
+      if (time - lastTime < 14) {
         animationRef.current = requestAnimationFrame(renderLoop);
         return;
       }
@@ -558,7 +577,7 @@ export default function KineticInterceptClient() {
       const frameScale = dt * 60;
       lastTime = time;
 
-      const dpr = canvasDpr();
+      const dpr = motionDpr();
       const W = canvasSizeRef.current.width;
       const H = canvasSizeRef.current.height;
 
@@ -594,42 +613,11 @@ export default function KineticInterceptClient() {
           // Layered-circle red target, matching the shared style used by
           // the other cognitive drills (e.g. reaction-time): ghost ring +
           // tactical ring + filled body + white sheen + white core dot.
-          const r = tr.r;
-          ctx.save();
-
-          ctx.globalAlpha = 0.2;
-          ctx.strokeStyle = '#ef4444';
-          ctx.lineWidth = 1.0;
-          ctx.beginPath();
-          ctx.arc(tr.x, tr.y, r + 5, 0, Math.PI * 2);
-          ctx.stroke();
-
-          ctx.globalAlpha = 0.55;
-          ctx.strokeStyle = '#ef4444';
-          ctx.lineWidth = 1.8;
-          ctx.beginPath();
-          ctx.arc(tr.x, tr.y, r, 0, Math.PI * 2);
-          ctx.stroke();
-
-          ctx.globalAlpha = 0.88;
-          ctx.fillStyle = '#ef4444';
-          ctx.beginPath();
-          ctx.arc(tr.x, tr.y, r * 0.82, 0, Math.PI * 2);
-          ctx.fill();
-
-          ctx.globalAlpha = 0.3;
-          ctx.fillStyle = '#ffffff';
-          ctx.beginPath();
-          ctx.arc(tr.x - r * 0.2, tr.y - r * 0.2, r * 0.28, 0, Math.PI * 2);
-          ctx.fill();
-
-          ctx.globalAlpha = 1.0;
-          ctx.fillStyle = '#ffffff';
-          ctx.beginPath();
-          ctx.arc(tr.x, tr.y, r * 0.18, 0, Math.PI * 2);
-          ctx.fill();
-
-          ctx.restore();
+          //
+          // Blitted from a pre-rasterised sprite instead of being rebuilt from
+          // five arc() paths every frame. The shape never changes — only its
+          // position does — so rasterising it 60x/sec was pure repeated work.
+          drawSprite(ctx, sprites.get('#ef4444', tr.r, dpr), tr.x, tr.y);
         }
       }
 
@@ -808,14 +796,12 @@ export default function KineticInterceptClient() {
     return (
       <div className="min-h-[100dvh] flex items-center justify-center bg-[#050508]">
         <div className="text-center">
-          <div className="w-14 h-14 border-4 border-orange-500 border-t-transparent rounded-full animate-spin mx-auto mb-4 shadow-[0_0_20px_rgba(249,115,22,0.5)]" />
+          <div className="w-14 h-14 border-4 border-red-500 border-t-transparent rounded-full animate-spin mx-auto mb-4 shadow-[0_0_20px_rgba(239,68,68,0.5)]" />
           <p className="text-slate-500 font-bold tracking-widest uppercase text-[10px] animate-pulse">Loading Kinetic Core...</p>
         </div>
       </div>
     );
   }
-
-  const timePct = Math.max(0, Math.min(100, (timeRemaining / totalTime) * 100));
 
   return (
     <DrillWrapper
@@ -846,7 +832,7 @@ export default function KineticInterceptClient() {
 
         {phase === 'rotate-hint' && !isChallenge && (
           <div className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-black/95 text-center p-6">
-            <div className="animate-bounce mb-5 text-orange-500"><RotateCcw className="w-12 h-12 mx-auto" /></div>
+            <div className="animate-bounce mb-5 text-red-500"><RotateCcw className="w-12 h-12 mx-auto" /></div>
             <p className="text-sm font-bold text-white">Rotate your phone to play</p>
             <p className="text-xs text-slate-500 mt-1.5 max-w-[220px] mx-auto">Turn your device to landscape to begin tracking moving targets.</p>
           </div>
@@ -856,7 +842,7 @@ export default function KineticInterceptClient() {
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-            className="absolute bottom-5 right-5 z-40 p-2 rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
+            className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
           >
             {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
           </button>
@@ -865,28 +851,29 @@ export default function KineticInterceptClient() {
         {/* ── START SCREEN ── */}
         {phase === 'start' && !isChallenge && (
           <div className="relative h-full flex items-center justify-center p-5 overflow-y-auto w-full z-40">
-            <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(249,115,22,.16), transparent 70%)' }} />
+            <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(239,68,68,.16), transparent 70%)' }} />
             <div className="relative w-full max-w-[290px] rounded-[20px] border border-white/5 bg-[#0c0c16]/90 backdrop-blur-lg px-5 pt-5 pb-[18px] text-center shadow-[0_16px_40px_rgba(0,0,0,.5)] my-6">
-              <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-orange-500 to-red-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(249,115,22,.35)]">
+              <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-red-500 to-orange-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(239,68,68,.35)]">
                 <Compass className="w-[22px] h-[22px] text-white" />
               </div>
               <h1 className="text-[17px] font-bold tracking-tight text-white">Kinetic Intercept</h1>
+              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45-second run</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
-                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Track the moving target orb across the field</>} />
-                <HowToRow icon={<Zap className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" />} node={<>Tap the orb before it escapes past the boundary</>} />
-                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>5 lives — misses and escaped targets cost points and a life</>} />
+                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Track the red orb as it moves</>} />
+                <HowToRow icon={<Zap className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Tap it before it escapes</>} />
+                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Misses cost a life · 5 lives</>} />
               </div>
 
               <div className="grid grid-cols-3 gap-1.5 mt-3.5">
                 <MiniStat label="Best" value={bestScore} color="text-yellow-400" />
                 <MiniStat label="Combo" value={`${bestCombo}x`} color="text-orange-400" />
-                <MiniStat label="Level" value={`Lv.${bestLevel}`} color="text-orange-500" />
+                <MiniStat label="Level" value={`Lv.${bestLevel}`} color="text-red-500" />
               </div>
 
               <button
                 onClick={enterDrill}
-                className="w-full mt-3.5 py-[11px] rounded-[13px] bg-gradient-to-r from-orange-500 to-red-600 font-bold text-[12.5px] tracking-wide active:scale-[0.97] transition-transform shadow-[0_0_20px_rgba(249,115,22,.3)] cursor-pointer text-white"
+                className="w-full mt-3.5 py-[11px] rounded-[13px] bg-gradient-to-r from-red-500 to-orange-600 font-bold text-[12.5px] tracking-wide active:scale-[0.97] transition-transform shadow-[0_0_20px_rgba(239,68,68,.3)] cursor-pointer text-white"
               >
                 START
               </button>
@@ -897,15 +884,11 @@ export default function KineticInterceptClient() {
         {/* ── PLAYING / COUNTDOWN SCREEN ── */}
         {(phase === 'playing' || phase === 'countdown') && (
           <>
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
-              <div className={`h-full transition-all duration-100 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-orange-500'}`} style={{ width: `${timePct}%` }} />
-            </div>
-
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
               <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
               <div className="flex items-center gap-2 mt-1.5">
                 {isChallenge ? (
-                  <span className="text-[10px] font-black text-orange-300 bg-orange-500/15 border border-orange-500/25 px-1.5 py-0.5 rounded">
+                  <span className="text-[10px] font-black text-red-300 bg-red-500/15 border border-red-500/25 px-1.5 py-0.5 rounded">
                     Lv.{level}
                   </span>
                 ) : (
@@ -942,9 +925,9 @@ export default function KineticInterceptClient() {
         {phase === 'countdown' && !isChallenge && (
           <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/55 backdrop-blur-[2px]">
             <span className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">Get Ready</span>
-            <div className="relative w-28 h-28 rounded-full border-[3px] border-orange-500/20 flex items-center justify-center">
-              <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-orange-400 border-r-orange-400 animate-spin" style={{ animationDuration: '0.7s' }} />
-              <span key={countdownValue} className="fx-pop-in text-5xl font-black bg-gradient-to-b from-white to-orange-300 bg-clip-text text-transparent">
+            <div className="relative w-28 h-28 rounded-full border-[3px] border-red-500/20 flex items-center justify-center">
+              <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-red-400 border-r-red-400 animate-spin" style={{ animationDuration: '0.7s' }} />
+              <span key={countdownValue} className="fx-pop-in text-5xl font-black bg-gradient-to-b from-white to-red-300 bg-clip-text text-transparent">
                 {countdownValue > 0 ? countdownValue : 'GO'}
               </span>
             </div>
@@ -968,7 +951,7 @@ function HowToRow({ icon, node }) {
   return (
     <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
       {icon}
-      <span className="text-[10.5px] text-slate-300 leading-tight">{node}</span>
+      <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">{node}</span>
     </div>
   );
 }
@@ -1005,7 +988,7 @@ function ResultScreen({ summary, onPlayAgain, onShare }) {
           <ResultStat label="XP" value={`+${summary.xpEarned}`} color="text-violet-400" />
         </div>
         <div className="flex gap-2">
-          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-orange-500 to-red-600 text-white font-bold text-xs uppercase tracking-wide cursor-pointer">
+          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-red-500 to-orange-600 text-white font-bold text-xs uppercase tracking-wide cursor-pointer">
             Play Again
           </button>
           <button onClick={onShare} className="w-11 flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer">

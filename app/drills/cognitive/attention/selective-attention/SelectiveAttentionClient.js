@@ -888,8 +888,6 @@ export default function SelectiveAttentionClient() {
     );
   }
 
-  const timePct = Math.max(0, Math.min(100, (timeRemaining / totalTime) * 100));
-
   return (
     <DrillWrapper
       drillName="Selective Attention"
@@ -931,7 +929,7 @@ export default function SelectiveAttentionClient() {
         <button
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-          className="absolute bottom-5 right-5 z-40 p-2 rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform"
+          className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform"
         >
           {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
         </button>
@@ -941,16 +939,17 @@ export default function SelectiveAttentionClient() {
       {phase === 'start' && !isChallenge && (
         <div className="relative h-full flex items-center justify-center p-5 overflow-y-auto">
           <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(142,97,246,.16), transparent 70%)' }} />
-          <div className="relative w-full max-w-[280px] rounded-[20px] border border-white/5 bg-[#0c0c16]/90 backdrop-blur-lg px-5 pt-5 pb-[18px] text-center shadow-[0_16px_40px_rgba(0,0,0,.5)] my-6">
+          <div className="relative w-full max-w-[290px] rounded-[20px] border border-white/5 bg-[#0c0c16]/90 backdrop-blur-lg px-5 pt-5 pb-[18px] text-center shadow-[0_16px_40px_rgba(0,0,0,.5)] my-6">
             <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(139,92,246,.35)]">
               <Layers className="w-[22px] h-[22px] text-white" />
             </div>
             <h1 className="text-[17px] font-bold tracking-tight">Selective Attention</h1>
+            <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45-second run</p>
 
             <div className="flex flex-col gap-1.5 text-left mt-3.5">
-              <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Tap the item matching <b className="text-white">both</b> the color and shape shown</>} />
-              <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Distractors match <b className="text-white">only one</b> — don't tap those</>} />
-              <HowToRow icon={<ZapIcon className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Faster taps score more — the window <b className="text-white">shrinks</b> each level</>} />
+              <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Tap the item matching <b className="text-white">both</b> cues</>} />
+              <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Distractors match <b className="text-white">only one</b></>} />
+              <HowToRow icon={<ZapIcon className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Tap window <b className="text-white">shrinks</b> each level</>} />
             </div>
 
             <div className="grid grid-cols-3 gap-1.5 mt-3.5">
@@ -975,9 +974,6 @@ export default function SelectiveAttentionClient() {
           {/* Own HUD — shown in BOTH modes: a duel plays exactly like solo
               (DrillWrapper renders no duel chrome mid-match anymore).
               Hearts are solo-only — duels have no lives. */}
-          <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
-            <div className={`h-full transition-all duration-100 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-violet-500'}`} style={{ width: `${timePct}%` }} />
-          </div>
 
           <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none">
             <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
@@ -1050,7 +1046,7 @@ function HowToRow({ icon, node }) {
   return (
     <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
       {icon}
-      <span className="text-[10.5px] text-slate-300 leading-tight">{node}</span>
+      <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">{node}</span>
     </div>
   );
 }

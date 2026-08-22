@@ -339,7 +339,8 @@ export default function SudokuClient() {
   const syncToUI = useCallback(() => {
     setScore(scoreRef.current);
     setStats({ ...statsRef.current });
-    setGridSize(gridSizeRef.current);
+    // NOT setGridSize — generateSudoku owns that, so the board size can only
+    // change together with the cells. syncToUI runs mid-round.
 
     if (statsRef.current.totalAttempts > 0) {
       setAccuracy(Math.round((statsRef.current.totalCorrect / statsRef.current.totalAttempts) * 100));
@@ -690,6 +691,10 @@ export default function SudokuClient() {
 
     setRegionsArray(regions);
     setSolution(solved);
+    // Committed in the same render as the puzzle itself — the board's column
+    // count and its cells must never disagree, or the grid renders a partial
+    // bottom row (see this function's callers).
+    setGridSize(size);
     setGrid(puzzle);
     setInitialIndices(initial);
     setSelectedCell(null);
@@ -818,7 +823,8 @@ export default function SudokuClient() {
       
       if (gridSizeRef.current < MAX_GRID_SIZE) {
         gridSizeRef.current += 1;
-        setGridSize(gridSizeRef.current);
+        // The STATE deliberately lags here: generateSudoku sets it below, once
+        // the bigger puzzle actually exists.
         peakGridSizeRef.current = Math.max(peakGridSizeRef.current, gridSizeRef.current);
       }
 
@@ -1031,11 +1037,12 @@ export default function SudokuClient() {
                 <Compass className="w-[22px] h-[22px] text-white" />
               </div>
               <h1 className="text-[17px] font-bold tracking-tight text-white">Sudoku Speed-Logic</h1>
+              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45-second run</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
-                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Solve Sudoku constraints under time pressure</>} />
-                <HowToRow icon={<ZapIcon className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />} node={<>Clears expand board size (4x4 → 5x5 → 6x6 → 7x7)</>} />
-                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>5 lives — wrong guesses and timeouts cost a life</>} />
+                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Solve the grid before time ends</>} />
+                <HowToRow icon={<ZapIcon className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />} node={<>Board grows: 4x4 up to 7x7</>} />
+                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Bad guesses cost a life · 5 lives</>} />
               </div>
 
               <div className="grid grid-cols-3 gap-1.5 mt-3.5">
@@ -1071,13 +1078,6 @@ export default function SudokuClient() {
         {/* ── PLAYING ── */}
         {gameState === 'playing' && (
           <>
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
-              <div 
-                className={`h-full transition-all duration-100 ease-linear ${localTimeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-indigo-500'}`} 
-                style={{ width: `${(localTimeRemaining / TOTAL_TIME) * 100}%` }}
-              />
-            </div>
-
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
               <span className="text-3xl font-black text-white leading-none tabular-nums">{score}</span>
               <div className="flex items-center gap-2 mt-2">
@@ -1101,71 +1101,62 @@ export default function SudokuClient() {
               <div className="h-4 mb-2" />
 
               {/* Main Outer Board Box */}
-              <div className="p-2 bg-[#0a0a16] rounded-2xl border-2 border-indigo-500/40 shadow-[0_0_30px_rgba(99,102,241,0.2)]">
+              <div className="p-2 bg-[#0a0a16] rounded-2xl border border-indigo-400/25 shadow-[0_0_24px_rgba(99,102,241,0.16)]">
                 <div 
                   className="grid mx-auto gap-1.5"
                   style={{ 
                     gridTemplateColumns: `repeat(${gridSize}, 1fr)`,
+                    // Explicit rows: without this, rows auto-size to content and
+                    // a row containing digits renders taller than a row of empty
+                    // cells, so the board comes out visibly uneven.
+                    gridTemplateRows: `repeat(${gridSize}, 1fr)`,
                     width: 'min(78vw, 40vh)',
                     aspectRatio: '1/1'
                   }}
                 >
-                  {grid.map((val, i) => {
+                  {(() => {
+                  const BORDER = 'rgba(255,255,255,0.07)';
+                  // The cells whose row or column the selected cell shares.
+                  // Regions are intentionally not part of this (see isPeer).
+                  const selectedRow = selectedCell === null ? null : Math.floor(selectedCell / gridSize);
+                  const selectedCol = selectedCell === null ? null : selectedCell % gridSize;
+                  return grid.map((val, i) => {
                     const isInitial = initialIndices.has(i);
                     const isSelected = selectedCell === i;
-                    
-                    // High-contrast Region Tints & Cell Styling
-                    let regionTint = "bg-[#121224] border border-white/10";
-                    
-                    if (gridSize === 4) {
-                      const br = Math.floor(Math.floor(i / 4) / 2);
-                      const bc = Math.floor((i % 4) / 2);
-                      const boxIdx = br * 2 + bc;
-                      const tints = [
-                        "bg-indigo-950/70 border-indigo-500/30",
-                        "bg-purple-950/70 border-purple-500/30",
-                        "bg-rose-950/70 border-rose-500/30",
-                        "bg-amber-950/70 border-amber-500/30",
-                      ];
-                      regionTint = tints[boxIdx];
-                    } else if (gridSize === 6) {
-                      const br = Math.floor(Math.floor(i / 6) / 2);
-                      const bc = Math.floor((i % 6) / 3);
-                      const boxIdx = br * 2 + bc;
-                      const tints = [
-                        "bg-indigo-950/70 border-indigo-500/30",
-                        "bg-purple-950/70 border-purple-500/30",
-                        "bg-rose-950/70 border-rose-500/30",
-                        "bg-amber-950/70 border-amber-500/30",
-                        "bg-cyan-950/70 border-cyan-500/30",
-                        "bg-emerald-950/70 border-emerald-500/30",
-                      ];
-                      regionTint = tints[boxIdx];
-                    } else if ((gridSize === 5 || gridSize === 7) && regionsArray) {
-                      const rIdx = regionsArray[i];
-                      const tints = [
-                        "bg-indigo-950/70 border-indigo-500/30",
-                        "bg-purple-950/70 border-purple-500/30",
-                        "bg-rose-950/70 border-rose-500/30",
-                        "bg-amber-950/70 border-amber-500/30",
-                        "bg-cyan-950/70 border-cyan-500/30",
-                        "bg-emerald-950/70 border-emerald-500/30",
-                        "bg-violet-950/70 border-violet-500/30",
-                      ];
-                      regionTint = tints[rIdx % tints.length];
-                    }
 
-                    let cellStyle = regionTint;
+                    // Uniform border on every side of every cell — drawing the
+                    // region boundaries chopped the board into visible blocks.
+                    // Constraint membership is surfaced on tap instead (below).
+                    // Row and column only. The region deliberately does NOT
+                    // light up: it pulled in cells that look unrelated to the
+                    // player (a 2x2 box mate sitting diagonally away from the
+                    // selection), which read as a stray highlight.
+                    const isPeer = selectedCell !== null && (
+                      Math.floor(i / gridSize) === selectedRow ||
+                      i % gridSize === selectedCol
+                    );
+                    
+
+                    // Every resting cell — empty, given, or answered — shares
+                    // ONE surface. What differs is the text: grey for a given
+                    // clue, emerald for an answer you placed. An empty cell is
+                    // simply that same surface with nothing in it.
+                    // One surface for every resting cell. The only lift is the
+                    // row/column/region cross through the selected cell — a fill
+                    // change only, no lines and no glow.
+                    const surface = isPeer ? "bg-white/[0.085]" : "bg-white/[0.045]";
+                    let cellStyle = `${surface} text-white cursor-pointer active:scale-95 transition-all`;
                     if (isInitial) {
-                      cellStyle = "bg-[#18182b] border border-slate-600/60 text-slate-200 font-bold cursor-default shadow-inner";
+                      cellStyle = `${surface} text-slate-300 font-bold cursor-default`;
                     } else if (val !== null) {
-                      cellStyle = "bg-emerald-950/80 text-emerald-300 border-2 border-emerald-400/80 font-black shadow-[0_0_10px_rgba(16,185,129,0.3)] cursor-default";
-                    } else {
-                      cellStyle = `${regionTint} border border-white/15 hover:border-white/40 text-white cursor-pointer active:scale-95 transition-all`;
+                      cellStyle = `${surface} text-emerald-300 font-black cursor-default`;
                     }
 
                     if (isSelected) {
-                      cellStyle = "bg-indigo-600/50 text-white border-2 border-indigo-300 ring-4 ring-indigo-500/50 transform scale-105 z-20 shadow-[0_0_20px_rgba(99,102,241,0.8)]";
+                      // Was ring-4 + scale-105, which made the whole board jump
+                      // on every tap. Same glow language as every other drill's
+                      // active piece instead.
+                      cellStyle = "bg-indigo-500/25 text-white shadow-[0_0_12px_rgba(99,102,241,0.55)] z-20";
                     }
 
                     return (
@@ -1173,7 +1164,8 @@ export default function SudokuClient() {
                         key={i}
                         onPointerDown={(e) => handleCellClick(i, e)}
                         disabled={isInitial || val !== null}
-                        className={`w-full h-full rounded-xl font-black text-center flex items-center justify-center relative touch-none select-none text-xl md:text-2xl lg:text-3xl focus:outline-none ${cellStyle}`}
+                        className={`w-full h-full rounded-[10px] border font-black text-center flex items-center justify-center relative touch-none select-none text-xl md:text-2xl lg:text-3xl focus:outline-none ${cellStyle}`}
+                        style={{ borderColor: BORDER }}
                       >
                         {val}
                         {isSelected && !val && (
@@ -1183,7 +1175,8 @@ export default function SudokuClient() {
                         )}
                       </button>
                     );
-                  })}
+                  });
+                  })()}
                 </div>
               </div>
 
@@ -1230,7 +1223,7 @@ function HowToRow({ icon, node }) {
   return (
     <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
       {icon}
-      <span className="text-[10.5px] text-slate-300 leading-tight">{node}</span>
+      <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">{node}</span>
     </div>
   );
 }

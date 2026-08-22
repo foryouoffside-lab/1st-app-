@@ -746,8 +746,6 @@ export default function GridMemorizationClient() {
     );
   }
 
-  const timePct = Math.max(0, Math.min(100, (localTimeRemaining / totalTime) * 100));
-
   return (
     <DrillWrapper
       drillName="Grid Memorization"
@@ -805,7 +803,7 @@ export default function GridMemorizationClient() {
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-            className="absolute bottom-5 right-5 z-40 p-2 rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
+            className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
           >
             {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
           </button>
@@ -820,11 +818,12 @@ export default function GridMemorizationClient() {
                 <Compass className="w-[22px] h-[22px] text-white" />
               </div>
               <h1 className="text-[17px] font-bold tracking-tight text-white">Grid Memorization</h1>
+              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45-second run</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
-                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Memorize the highlighted cell pattern before it disappears</>} />
-                <HowToRow icon={<Zap className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Grid size and target count scale as you complete rounds</>} />
-                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>5 lives — wrong clicks cost points, combo, and a life</>} />
+                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Memorize the lit cells</>} />
+                <HowToRow icon={<Zap className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Grid grows every round</>} />
+                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Wrong taps cost a life · 5 lives</>} />
               </div>
 
               <div className="grid grid-cols-3 gap-1.5 mt-3.5">
@@ -860,20 +859,6 @@ export default function GridMemorizationClient() {
         {/* ── PLAYING ── */}
         {gameState === 'playing' && (
           <>
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
-              {/* scaleX, not width — a width animation forces layout + paint on
-                  every clock tick for the whole match; a transform is composited.
-                  duration-1000, not 100 — the state driving this only updates
-                  once a second (see the throttle above), so a 100ms transition
-                  meant the bar snapped quickly then sat frozen for ~900ms
-                  instead of gliding the full second, matching DualTargetFlowClient's
-                  already-correct 1000ms pairing. */}
-              <div
-                className={`h-full w-full origin-left transition-transform duration-1000 ease-linear ${localTimeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-indigo-500'}`}
-                style={{ transform: `scaleX(${timePct / 100})` }}
-              />
-            </div>
-
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
               <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
               <div className="flex items-center gap-2 mt-1.5">
@@ -969,7 +954,7 @@ function HowToRow({ icon, node }) {
   return (
     <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
       {icon}
-      <span className="text-[10.5px] text-slate-300 leading-tight">{node}</span>
+      <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">{node}</span>
     </div>
   );
 }

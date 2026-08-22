@@ -205,6 +205,9 @@ export default function CardMatchingClient() {
   // Gameplay visual states
   const [cards, setCards] = useState([]);
   const [gridCols, setGridCols] = useState(3);
+  // Row count is implied by how many cards the level deals; the board's aspect
+  // ratio depends on it, so it has to be derived rather than assumed square.
+  const gridRows = Math.max(1, Math.ceil(cards.length / Math.max(1, gridCols)));
   const [flippedIndices, setFlippedIndices] = useState([]);
   const [matchedIndices, setMatchedIndices] = useState([]);
 
@@ -700,8 +703,6 @@ export default function CardMatchingClient() {
     );
   }
 
-  const timePct = Math.max(0, Math.min(100, (timeRemaining / TOTAL_TIME) * 100));
-
   return (
     <DrillWrapper
       drillName="Card Matching"
@@ -772,7 +773,7 @@ export default function CardMatchingClient() {
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-            className="absolute bottom-5 right-5 z-40 p-2 rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
+            className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
           >
             {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
           </button>
@@ -787,11 +788,12 @@ export default function CardMatchingClient() {
                 <Compass className="w-[22px] h-[22px] text-white" />
               </div>
               <h1 className="text-[17px] font-bold tracking-tight text-white">Card Matching</h1>
+              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45-second run</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
-                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Memorize card positions and match identical pairs</>} />
-                <HowToRow icon={<Zap className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Grid expands with more pairs as you clear each level</>} />
-                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Mismatches reset your combo streak</>} />
+                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Flip cards and match the pairs</>} />
+                <HowToRow icon={<Zap className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>More pairs each level you clear</>} />
+                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>A mismatch resets your combo</>} />
               </div>
 
               <div className="grid grid-cols-3 gap-1.5 mt-3.5">
@@ -813,10 +815,6 @@ export default function CardMatchingClient() {
         {/* ── PLAYING ── */}
         {(phase === 'playing' || phase === 'countdown') && (
           <>
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
-              <div className={`h-full transition-all duration-100 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-pink-500'}`} style={{ width: `${timePct}%` }} />
-            </div>
-
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
               <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
             </div>
@@ -832,12 +830,31 @@ export default function CardMatchingClient() {
             {/* Grid cells */}
             <div className="relative w-full h-[100dvh] flex flex-col items-center justify-center p-4">
               <div
-                className="grid mx-auto max-h-full max-w-full relative transition-all duration-300"
-                style={{
-                  gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`,
-                  width: 'min(62vw, 38vh)',
-                  gap: cards.length >= 24 ? '4px' : '6px'
-                }}
+                className="grid mx-auto relative transition-all duration-300"
+                style={(() => {
+                  // Cards are square BY CONSTRUCTION: one cell edge is computed
+                  // once and used for both the column and the row tracks, so
+                  // neither axis is left to be inferred.
+                  //
+                  // Everything softer than this failed. `aspect-square` on the
+                  // card lost to the grid's old `max-h-full`, which squeezed the
+                  // rows; `aspectRatio` on the grid never resolved at all,
+                  // because the grid is a flex item inside a
+                  // `flex flex-col items-center justify-center` parent and so
+                  // took its height from content regardless.
+                  // Tight gaps so the board reads as one grid rather than
+                  // scattered tiles.
+                  const gapPx = cards.length >= 24 ? 2 : 3;
+                  // Board width is capped on BOTH axes so taller layouts (more
+                  // rows than columns) still fit on screen without compression.
+                  const boardW = `min(78vw, ${(70 * gridCols / gridRows).toFixed(2)}vh)`;
+                  const cell = `calc((${boardW} - ${(gridCols - 1) * gapPx}px) / ${gridCols})`;
+                  return {
+                    gridTemplateColumns: `repeat(${gridCols}, ${cell})`,
+                    gridTemplateRows: `repeat(${gridRows}, ${cell})`,
+                    gap: `${gapPx}px`,
+                  };
+                })()}
               >
                 {cards.map((card, index) => {
                   const isFlipped = flippedIndices.includes(index);
@@ -850,14 +867,17 @@ export default function CardMatchingClient() {
                       onPointerDown={(e) => handleCardClick(index, e)}
                       disabled={isMatched || isFlipped || phase === 'countdown'}
                       className={`
-                        aspect-square w-full h-full rounded-xl transition-all duration-300 flex items-center justify-center focus:outline-none touch-none relative overflow-hidden
+                        w-full h-full rounded-xl transition-all duration-300 flex items-center justify-center focus:outline-none touch-none relative overflow-hidden
                         ${isMatched ? 'opacity-0 pointer-events-none scale-50' : ''}
                         ${isFlipped ? 'bg-slate-800 border border-slate-600 scale-95 shadow-inner' : 'bg-gradient-to-br from-pink-500 to-rose-600 border border-pink-400 hover:scale-[1.03] active:scale-95 shadow-md cursor-pointer'}
                       `}
-                      style={{
-                        minHeight: '26px',
-                        maxHeight: '74px'
-                      }}
+                      // No inline height clamp here. A maxHeight of 74px used to
+                      // sit on this button and was the reason the cards could
+                      // never be square: an inline style beats both the utility
+                      // classes and the grid track, so the height stayed pinned
+                      // at 74px no matter what the grid asked for. The row track
+                      // is already the same length as the column track, so
+                      // w-full/h-full is all that is needed.
                       aria-label="Card"
                     >
                       {isFlipped && (
@@ -908,7 +928,7 @@ function HowToRow({ icon, node }) {
   return (
     <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
       {icon}
-      <span className="text-[10.5px] text-slate-300 leading-tight">{node}</span>
+      <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">{node}</span>
     </div>
   );
 }

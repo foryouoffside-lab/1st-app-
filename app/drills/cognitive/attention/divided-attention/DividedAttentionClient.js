@@ -1003,14 +1003,13 @@ export default function DividedAttentionClient() {
     return (
       <div className="min-h-[100dvh] flex items-center justify-center bg-[#050508]">
         <div className="text-center">
-          <div className="w-14 h-14 border-4 border-violet-600 border-t-transparent rounded-full animate-spin mx-auto mb-4 shadow-[0_0_20px_rgba(139,92,246,0.5)]" />
+          <div className="w-14 h-14 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4 shadow-[0_0_20px_rgba(59,130,246,0.5)]" />
           <p className="text-slate-500 font-bold tracking-widest uppercase text-[10px] animate-pulse">Loading...</p>
         </div>
       </div>
     );
   }
 
-  const timePct = Math.max(0, Math.min(100, (timeRemaining / totalTime) * 100));
   const showBoard = phase === 'playing' || phase === 'countdown';
 
   return (
@@ -1048,7 +1047,7 @@ export default function DividedAttentionClient() {
       {/* ── ROTATE HINT (only if programmatic lock genuinely failed — mainly iOS) ── */}
       {phase === 'rotate-hint' && !isChallenge && (
         <div className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-black/95 text-center p-6 backdrop-blur-sm">
-          <div className="animate-bounce mb-5 text-violet-500"><RotateCcw className="w-14 h-14 mx-auto" /></div>
+          <div className="animate-bounce mb-5 text-blue-500"><RotateCcw className="w-14 h-14 mx-auto" /></div>
           <h3 className="text-lg font-bold text-white mb-2">Rotate to play</h3>
           <p className="text-xs text-gray-400 max-w-xs mx-auto">This drill runs in landscape. Turn your device — it'll continue on its own.</p>
         </div>
@@ -1057,25 +1056,26 @@ export default function DividedAttentionClient() {
       {/* ── START SCREEN ── */}
       {phase === 'start' && !isChallenge && (
         <div className="relative h-full flex items-center justify-center p-5 overflow-y-auto">
-          <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(142,97,246,.16), transparent 70%)' }} />
-          <div className="relative w-full max-w-[280px] rounded-[20px] border border-white/5 bg-[#0c0c16]/90 backdrop-blur-lg px-5 pt-5 pb-[18px] text-center shadow-[0_16px_40px_rgba(0,0,0,.5)] my-6">
-            <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(139,92,246,.35)]">
+          <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(59,130,246,.16), transparent 70%)' }} />
+          <div className="relative w-full max-w-[290px] rounded-[20px] border border-white/5 bg-[#0c0c16]/90 backdrop-blur-lg px-5 pt-5 pb-[18px] text-center shadow-[0_16px_40px_rgba(0,0,0,.5)] my-6">
+            <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(59,130,246,.35)]">
               <Layers className="w-[22px] h-[22px] text-white" />
             </div>
             <h1 className="text-[17px] font-bold tracking-tight">Divided Attention</h1>
+            <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45-second run</p>
 
             <div className="flex flex-col gap-1.5 text-left mt-3.5">
               <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
                 <Target className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />
-                <span className="text-[10.5px] text-slate-300 leading-tight">Tap <b className="text-white">pulse</b> targets the instant they appear</span>
+                <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">Tap <b className="text-white">pulse</b> targets instantly</span>
               </div>
               <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
                 <AlertTriangle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
-                <span className="text-[10.5px] text-slate-300 leading-tight"><b className="text-white">Avoid</b> red hazards — let them expire</span>
+                <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">Never tap the <b className="text-white">red</b> hazards</span>
               </div>
               <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
                 <Hash className="w-3.5 h-3.5 text-violet-400 flex-shrink-0" />
-                <span className="text-[10.5px] text-slate-300 leading-tight">Match only when the number is <b className="text-white">even</b></span>
+                <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">Match only on <b className="text-white">even</b> numbers</span>
               </div>
             </div>
 
@@ -1087,7 +1087,7 @@ export default function DividedAttentionClient() {
 
             <button
               onClick={enterDrill}
-              className="w-full mt-3.5 py-[11px] rounded-[13px] bg-gradient-to-r from-violet-600 to-indigo-600 font-bold text-[12.5px] tracking-wide active:scale-[0.97] transition-transform shadow-[0_0_20px_rgba(139,92,246,.3)] cursor-pointer"
+              className="w-full mt-3.5 py-[11px] rounded-[13px] bg-gradient-to-r from-blue-600 to-indigo-600 font-bold text-[12.5px] tracking-wide active:scale-[0.97] transition-transform shadow-[0_0_20px_rgba(59,130,246,.3)] cursor-pointer"
             >
               START
             </button>
@@ -1095,7 +1095,7 @@ export default function DividedAttentionClient() {
 
           <button
             onClick={() => setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; })}
-            className="absolute bottom-3.5 right-4 w-[26px] h-[26px] rounded-full bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-slate-500 hover:text-white transition-colors cursor-pointer"
+            className="absolute bottom-3.5 right-4 w-[26px] h-[26px] before:absolute before:top-0 before:left-0 before:-right-[16px] before:-bottom-[14px] before:content-[''] rounded-full bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-slate-500 hover:text-white transition-colors cursor-pointer"
           >
             {soundEnabled ? <Volume2 className="w-3 h-3" /> : <VolumeX className="w-3 h-3" />}
           </button>
@@ -1106,9 +1106,9 @@ export default function DividedAttentionClient() {
       {phase === 'countdown' && !isChallenge && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/60 backdrop-blur-[2px]">
           <span className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">Get Ready</span>
-          <div className="relative w-28 h-28 rounded-full border-[3px] border-violet-500/20 flex items-center justify-center">
-            <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-violet-400 border-r-violet-400 animate-spin" style={{ animationDuration: '0.7s' }} />
-            <span key={countdownValue} className="fx-pop-in text-5xl font-black bg-gradient-to-b from-white to-violet-300 bg-clip-text text-transparent">
+          <div className="relative w-28 h-28 rounded-full border-[3px] border-blue-500/20 flex items-center justify-center">
+            <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-blue-400 border-r-blue-400 animate-spin" style={{ animationDuration: '0.7s' }} />
+            <span key={countdownValue} className="fx-pop-in text-5xl font-black bg-gradient-to-b from-white to-blue-300 bg-clip-text text-transparent">
               {countdownValue}
             </span>
           </div>
@@ -1121,17 +1121,12 @@ export default function DividedAttentionClient() {
         <>
           {!isChallenge && (
           <>
-          {/* top time bar */}
-          <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
-            <div className={`h-full transition-all duration-200 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-violet-500'}`} style={{ width: `${timePct}%` }} />
-          </div>
-
           {/* Single consolidated HUD cluster — score, level, lives, timer all in one block */}
           <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
             <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
             <div className="flex items-center gap-2 mt-1.5">
               {isChallenge ? (
-                <span className="text-[10px] font-black text-violet-300 bg-violet-500/10 border border-violet-500/20 px-1.5 py-0.5 rounded font-mono">Lv.{level}</span>
+                <span className="text-[10px] font-black text-blue-300 bg-blue-500/10 border border-blue-500/20 px-1.5 py-0.5 rounded font-mono">Lv.{level}</span>
               ) : (
                 <span className="flex items-center gap-0.5">
                   {Array.from({ length: MAX_LIVES }).map((_, i) => (
@@ -1173,7 +1168,7 @@ export default function DividedAttentionClient() {
               <button
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-                className="absolute bottom-4 right-4 z-40 p-2 rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform"
+                className="absolute bottom-4 right-4 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform"
               >
                 {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
               </button>
@@ -1238,7 +1233,7 @@ export default function DividedAttentionClient() {
               {isChallenge ? (
                 <p className="flex-1 text-xs text-neutral-400 py-3 text-center">Waiting for your opponent to finish…</p>
               ) : (
-                <button onClick={enterDrill} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-bold text-xs uppercase tracking-wide cursor-pointer">
+                <button onClick={enterDrill} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold text-xs uppercase tracking-wide cursor-pointer">
                   Play Again
                 </button>
               )}

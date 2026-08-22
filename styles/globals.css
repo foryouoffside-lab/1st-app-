@@ -95,9 +95,6 @@ h1, h2, h3, .display {
 .breadcrumb .sep { opacity: .5; }
 .breadcrumb .current { color: var(--text-dim); font-weight: 600; }
 
-/* ── glow accent ── */
-.glow { position: absolute; top: -30px; right: -30px; width: 80px; height: 80px; border-radius: 50%; background: var(--a); opacity: .16; filter: blur(6px); pointer-events: none; }
-
 /* ── session-log icon treatment (kept from the reverted redesign) ── */
 .viewfinder-box { position: relative; isolation: isolate; }
 .viewfinder-corner { position: absolute; width: 7px; height: 7px; pointer-events: none; border-color: currentColor; opacity: 0.6; }
@@ -137,7 +134,6 @@ h1, h2, h3, .display {
   background: linear-gradient(135deg, color-mix(in srgb, var(--a, var(--brand-2)) 20%, transparent), transparent 60%), var(--card);
   border: 1px solid color-mix(in srgb, var(--a, var(--brand-2)) 30%, transparent);
 }
-.daily-card .glowspot { position: absolute; top: -34%; right: -10%; width: 220px; height: 220px; border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--a, var(--brand-2)) 32%, transparent), transparent 70%); animation: heroGlowPulse 3s ease-in-out infinite; pointer-events: none; }
 .daily-card .top { position: relative; display: flex; align-items: center; gap: 12px; }
 .daily-card .ic { width: 40px; height: 40px; border-radius: 12px; background: color-mix(in srgb, var(--a, var(--brand-2)) 22%, transparent); display: flex; align-items: center; justify-content: center; color: var(--a, var(--brand-3)); flex-shrink: 0; }
 .daily-card .k { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--a, var(--brand-3)); display: flex; align-items: center; gap: 6px; }
@@ -155,7 +151,6 @@ h1, h2, h3, .display {
   border-radius: 13px; padding: 14px; background: var(--card); border: 1px solid var(--line);
   display: flex; flex-direction: column; gap: 10px; position: relative; overflow: hidden;
 }
-.cat-tile .glow { position: absolute; top: -30px; right: -30px; width: 80px; height: 80px; border-radius: 50%; background: var(--a); opacity: .14; filter: blur(6px); }
 .cat-tile .ic { width: 34px; height: 34px; border-radius: 9px; background: color-mix(in srgb, var(--a) 18%, transparent); display: flex; align-items: center; justify-content: center; color: var(--a); position: relative; }
 .cat-tile .nm { font-weight: 700; font-size: 12.5px; position: relative; }
 .cat-tile .cnt { font-size: 10.5px; color: var(--text-faint); position: relative; white-space: nowrap; }
@@ -187,8 +182,6 @@ h1, h2, h3, .display {
   background: linear-gradient(135deg, color-mix(in srgb, var(--a) 18%, transparent), transparent 60%), var(--card);
   border: 1px solid color-mix(in srgb, var(--a) 30%, transparent);
 }
-.cat-hero .glowspot { position: absolute; top: -32%; right: -8%; width: 320px; height: 320px; border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--a) 32%, transparent), transparent 70%); animation: heroGlowPulse 3s ease-in-out infinite; pointer-events: none; }
-@keyframes heroGlowPulse { 0%, 100% { opacity: .65; } 50% { opacity: 1; } }
 .cat-hero-top { display: flex; align-items: center; gap: 16px; position: relative; }
 .cat-hero-icon { width: 56px; height: 56px; border-radius: 15px; background: color-mix(in srgb, var(--a) 22%, transparent); display: flex; align-items: center; justify-content: center; color: var(--a); flex-shrink: 0; }
 .cat-hero h1 { font-size: 1.9rem; }

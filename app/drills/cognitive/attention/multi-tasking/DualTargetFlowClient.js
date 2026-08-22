@@ -1006,7 +1006,6 @@ export default function MultiTaskingClient() {
     );
   }
 
-  const timePct = Math.max(0, Math.min(100, (timeRemaining / totalTime) * 100));
   const showBoard = phase === 'playing' || phase === 'countdown';
 
   return (
@@ -1054,24 +1053,25 @@ export default function MultiTaskingClient() {
         {phase === 'start' && !isChallenge && (
           <div className="relative h-full flex items-center justify-center p-5 overflow-y-auto">
             <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(142,97,246,.16), transparent 70%)' }} />
-            <div className="relative w-full max-w-[280px] rounded-[20px] border border-white/5 bg-[#0c0c16]/90 backdrop-blur-lg px-5 pt-5 pb-[18px] text-center shadow-[0_16px_40px_rgba(0,0,0,.5)] my-6">
+            <div className="relative w-full max-w-[290px] rounded-[20px] border border-white/5 bg-[#0c0c16]/90 backdrop-blur-lg px-5 pt-5 pb-[18px] text-center shadow-[0_16px_40px_rgba(0,0,0,.5)] my-6">
               <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(139,92,246,.35)]">
                 <Layers className="w-[22px] h-[22px] text-white" />
               </div>
               <h1 className="text-[17px] font-bold tracking-tight">Multi-Tasking</h1>
+              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45-second run</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
                 <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
                   <Target className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />
-                  <span className="text-[10.5px] text-slate-300 leading-tight">Tap shapes only when they match your target for that side</span>
+                  <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">Tap shapes matching your side</span>
                 </div>
                 <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
                   <Repeat className="w-3.5 h-3.5 text-violet-400 flex-shrink-0" />
-                  <span className="text-[10.5px] text-slate-300 leading-tight">Targets diverge at Lv.3+ and scramble every 25 seconds</span>
+                  <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">Targets scramble every 25s</span>
                 </div>
                 <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
                   <Heart className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
-                  <span className="text-[10.5px] text-slate-300 leading-tight">Avoid missing target shapes or tapping incorrect ones</span>
+                  <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">Misses and wrong taps cost you</span>
                 </div>
               </div>
 
@@ -1091,7 +1091,7 @@ export default function MultiTaskingClient() {
 
             <button
               onClick={() => setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; })}
-              className="absolute bottom-3.5 right-4 w-[26px] h-[26px] rounded-full bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-slate-500 hover:text-white transition-colors cursor-pointer"
+              className="absolute bottom-3.5 right-4 w-[26px] h-[26px] before:absolute before:top-0 before:left-0 before:-right-[16px] before:-bottom-[14px] before:content-[''] rounded-full bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-slate-500 hover:text-white transition-colors cursor-pointer"
             >
               {soundEnabled ? <Volume2 className="w-3 h-3" /> : <VolumeX className="w-3 h-3" />}
             </button>
@@ -1119,19 +1119,7 @@ export default function MultiTaskingClient() {
                 solo: your score top-left, timer top-right (DrillWrapper no
                 longer renders any duel chrome mid-match). Hearts are
                 solo-only — duels have no lives. */}
-            {/* top time bar */}
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
-              {/* scaleX, not width — a width animation forces layout + paint on
-                  every clock tick for the whole match; a transform is composited.
-                  The 1s linear glide lets the compositor interpolate between the
-                  once-a-second state updates, so the bar still looks continuous
-                  while React renders five times less often. */}
-              <div
-                className={`h-full w-full origin-left transition-transform duration-1000 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-violet-500'}`}
-                style={{ transform: `scaleX(${timePct / 100})` }}
-              />
-            </div>
-
+  
             {/* consolidated HUD cluster */}
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
               <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
@@ -1187,7 +1175,7 @@ export default function MultiTaskingClient() {
               <button
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-                className="absolute bottom-4 right-4 z-40 p-2 rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
+                className="absolute bottom-4 right-4 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
               >
                 {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
               </button>

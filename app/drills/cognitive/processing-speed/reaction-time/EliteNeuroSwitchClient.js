@@ -1127,14 +1127,12 @@ export default function EliteNeuroSwitchClient() {
     return (
       <div className="min-h-[100dvh] flex items-center justify-center bg-[#050508]">
         <div className="text-center">
-          <div className="w-14 h-14 border-4 border-rose-500 border-t-transparent rounded-full animate-spin mx-auto mb-4 shadow-[0_0_20px_rgba(244,63,94,0.5)]" />
+          <div className="w-14 h-14 border-4 border-red-500 border-t-transparent rounded-full animate-spin mx-auto mb-4 shadow-[0_0_20px_rgba(239,68,68,0.5)]" />
           <p className="text-slate-500 font-bold tracking-widest uppercase text-[10px] animate-pulse">Loading Target Lock Engine...</p>
         </div>
       </div>
     );
   }
-
-  const timePct = Math.max(0, Math.min(100, (timeRemaining / totalTime) * 100));
 
   return (
     <DrillWrapper
@@ -1170,7 +1168,7 @@ export default function EliteNeuroSwitchClient() {
 
         {phase === 'rotate-hint' && !isChallenge && (
           <div className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-black/95 text-center p-6">
-            <div className="animate-bounce mb-5 text-rose-500"><RotateCcw className="w-12 h-12 mx-auto" /></div>
+            <div className="animate-bounce mb-5 text-red-500"><RotateCcw className="w-12 h-12 mx-auto" /></div>
             <p className="text-sm font-bold text-white">Rotate your phone to play</p>
             <p className="text-xs text-slate-500 mt-1.5 max-w-[220px] mx-auto">Your browser can't rotate this for you — turn your device to landscape.</p>
             <button 
@@ -1189,7 +1187,7 @@ export default function EliteNeuroSwitchClient() {
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-            className="absolute bottom-5 right-5 z-40 p-2 rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
+            className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
           >
             {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
           </button>
@@ -1198,17 +1196,18 @@ export default function EliteNeuroSwitchClient() {
         {/* ── START SCREEN ── */}
         {phase === 'start' && !isChallenge && (
           <div className="relative h-full flex items-center justify-center p-5 overflow-y-auto z-40">
-            <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(244,63,94,.15), transparent 70%)' }} />
+            <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(239,68,68,.15), transparent 70%)' }} />
             <div className="relative w-full max-w-[290px] rounded-[20px] border border-white/5 bg-[#0c0c16]/90 backdrop-blur-lg px-5 pt-5 pb-[18px] text-center shadow-[0_16px_40px_rgba(0,0,0,.5)] my-6">
-              <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-rose-500 to-red-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(244,63,94,.35)]">
+              <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-red-500 to-rose-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(239,68,68,.35)]">
                 <Target className="w-[22px] h-[22px] text-white" />
               </div>
               <h1 className="text-[17px] font-bold tracking-tight">Target Lock</h1>
+              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45-second run</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
-                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-rose-400 flex-shrink-0" />} node={<>Tap the RED target immediately when it spawns</>} />
-                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />} node={<>Never tap BLUE decoy — costs points <b className="text-white">and a life</b>. 5 lives total</>} />
-                <HowToRow icon={<ZapIcon className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>They sit closer together as you level up</>} />
+                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Tap the <b className="text-white">red</b> target instantly</>} />
+                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />} node={<>Never tap the <b className="text-white">blue</b> decoy</>} />
+                <HowToRow icon={<ZapIcon className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>They sit closer every level</>} />
               </div>
 
               <div className="grid grid-cols-3 gap-1.5 mt-3.5">
@@ -1219,7 +1218,7 @@ export default function EliteNeuroSwitchClient() {
 
               <button
                 onClick={enterDrill}
-                className="w-full mt-3.5 py-[11px] rounded-[13px] bg-gradient-to-r from-rose-500 to-red-600 font-bold text-[12.5px] tracking-wide active:scale-[0.97] transition-transform shadow-[0_0_20px_rgba(244,63,94,.3)] cursor-pointer"
+                className="w-full mt-3.5 py-[11px] rounded-[13px] bg-gradient-to-r from-red-500 to-rose-600 font-bold text-[12.5px] tracking-wide active:scale-[0.97] transition-transform shadow-[0_0_20px_rgba(239,68,68,.3)] cursor-pointer"
               >
                 START
               </button>
@@ -1230,20 +1229,6 @@ export default function EliteNeuroSwitchClient() {
         {/* ── PLAYING ── */}
         {(phase === 'playing' || phase === 'countdown') && (
           <>
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
-              {/* scaleX, not width — a width animation forces layout + paint on
-                  every clock tick for the whole match; a transform is composited.
-                  duration-1000, not 100 — the state driving this only updates
-                  once a second (see the throttle above), so a 100ms transition
-                  meant the bar snapped quickly then sat frozen for ~900ms
-                  instead of gliding the full second, matching DualTargetFlowClient's
-                  already-correct 1000ms pairing. */}
-              <div
-                className={`h-full w-full origin-left transition-transform duration-1000 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-rose-500'}`}
-                style={{ transform: `scaleX(${timePct / 100})` }}
-              />
-            </div>
-
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none">
               <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
               <div className="flex items-center gap-2 mt-1.5">
@@ -1278,9 +1263,9 @@ export default function EliteNeuroSwitchClient() {
         {phase === 'countdown' && !isChallenge && (
           <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/55 backdrop-blur-[2px]">
             <span className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">Get Ready</span>
-            <div className="relative w-28 h-28 rounded-full border-[3px] border-rose-500/20 flex items-center justify-center">
-              <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-rose-400 border-r-rose-400 animate-spin" style={{ animationDuration: '0.7s' }} />
-              <span key={countdownValue} className="fx-pop-in text-5xl font-black bg-gradient-to-b from-white to-rose-300 bg-clip-text text-transparent">
+            <div className="relative w-28 h-28 rounded-full border-[3px] border-red-500/20 flex items-center justify-center">
+              <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-red-400 border-r-red-400 animate-spin" style={{ animationDuration: '0.7s' }} />
+              <span key={countdownValue} className="fx-pop-in text-5xl font-black bg-gradient-to-b from-white to-red-300 bg-clip-text text-transparent">
                 {countdownValue > 0 ? countdownValue : 'GO'}
               </span>
             </div>
@@ -1304,7 +1289,7 @@ function HowToRow({ icon, node }) {
   return (
     <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
       {icon}
-      <span className="text-[10.5px] text-slate-300 leading-tight">{node}</span>
+      <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">{node}</span>
     </div>
   );
 }
@@ -1324,7 +1309,7 @@ function ResultScreen({ summary, maxLives, onPlayAgain, onShare }) {
 
   return (
     <div className="absolute inset-0 z-40 flex animate-in fade-in duration-300" style={{ background: 'rgba(5,5,8,0.97)' }}>
-      <div className="w-[36%] flex flex-col items-center justify-center gap-1.5 border-r border-white/5" style={{ background: 'radial-gradient(ellipse 260px 200px at 50% 30%, rgba(244,63,94,.08), transparent 70%)' }}>
+      <div className="w-[36%] flex flex-col items-center justify-center gap-1.5 border-r border-white/5" style={{ background: 'radial-gradient(ellipse 260px 200px at 50% 30%, rgba(239,68,68,.08), transparent 70%)' }}>
         {summary.isNewBest && (
           <span className="text-[9.5px] font-bold text-yellow-400 bg-yellow-500/10 border border-yellow-500/25 px-2.5 py-0.5 rounded-full mb-1">NEW BEST</span>
         )}
@@ -1342,7 +1327,7 @@ function ResultScreen({ summary, maxLives, onPlayAgain, onShare }) {
           <ResultStat label="XP" value={`+${summary.xpEarned}`} color="text-violet-400" />
         </div>
         <div className="flex gap-2">
-          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-rose-600 to-red-600 text-white font-bold text-xs uppercase tracking-wide cursor-pointer">
+          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-red-500 to-rose-600 text-white font-bold text-xs uppercase tracking-wide cursor-pointer">
             Play Again
           </button>
           <button onClick={onShare} className="w-11 flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer">

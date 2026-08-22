@@ -988,14 +988,12 @@ export default function ReactionTimeTestClient() {
     return (
       <div className="min-h-[100dvh] flex items-center justify-center bg-[#050508]">
         <div className="text-center">
-          <div className="w-14 h-14 border-4 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto mb-4 shadow-[0_0_20px_rgba(245,158,11,0.5)]" />
+          <div className="w-14 h-14 border-4 border-red-500 border-t-transparent rounded-full animate-spin mx-auto mb-4 shadow-[0_0_20px_rgba(239,68,68,0.5)]" />
           <p className="text-slate-500 font-bold tracking-widest uppercase text-[10px] animate-pulse">Loading Reaction Aim Engine...</p>
         </div>
       </div>
     );
   }
-
-  const timePct = Math.max(0, Math.min(100, (timeRemaining / TOTAL_TIME) * 100));
 
   return (
     <DrillWrapper
@@ -1029,7 +1027,7 @@ export default function ReactionTimeTestClient() {
 
         {phase === 'rotate-hint' && (
           <div className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-black/95 text-center p-6">
-            <div className="animate-bounce mb-5 text-amber-500"><RotateCcw className="w-12 h-12 mx-auto" /></div>
+            <div className="animate-bounce mb-5 text-red-500"><RotateCcw className="w-12 h-12 mx-auto" /></div>
             <p className="text-sm font-bold text-white">Rotate your phone to play</p>
             <p className="text-xs text-slate-500 mt-1.5 max-w-[220px] mx-auto">Your browser can't rotate this for you — turn your device to landscape.</p>
             <button 
@@ -1048,7 +1046,7 @@ export default function ReactionTimeTestClient() {
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-            className="absolute bottom-5 right-5 z-40 p-2 rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
+            className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
           >
             {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
           </button>
@@ -1057,17 +1055,18 @@ export default function ReactionTimeTestClient() {
         {/* ── START SCREEN ── */}
         {phase === 'start' && (
           <div className="relative h-full flex items-center justify-center p-5 overflow-y-auto z-40">
-            <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(245,158,11,.15), transparent 70%)' }} />
+            <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(239,68,68,.15), transparent 70%)' }} />
             <div className="relative w-full max-w-[290px] rounded-[20px] border border-white/5 bg-[#0c0c16]/90 backdrop-blur-lg px-5 pt-5 pb-[18px] text-center shadow-[0_16px_40px_rgba(0,0,0,.5)] my-6">
-              <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(245,158,11,.35)]">
+              <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-red-500 to-orange-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(239,68,68,.35)]">
                 <Compass className="w-[22px] h-[22px] text-white" />
               </div>
               <h1 className="text-[17px] font-bold tracking-tight">Reaction Time Test</h1>
+              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45-second run</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
-                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Find and click the targets immediately as they teleport</>} />
-                <HowToRow icon={<ZapIcon className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Foreperiod delay and diagonal distances scale with Level</>} />
-                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>5 lives — miss-clicks and timeouts cost points, combo, and a life</>} />
+                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Tap each target as it teleports</>} />
+                <HowToRow icon={<ZapIcon className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Delays grow with every level</>} />
+                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Misses cost a life · 5 lives</>} />
               </div>
 
               <div className="grid grid-cols-3 gap-1.5 mt-3.5">
@@ -1078,7 +1077,7 @@ export default function ReactionTimeTestClient() {
 
               <button
                 onClick={enterDrill}
-                className="w-full mt-3.5 py-[11px] rounded-[13px] bg-gradient-to-r from-amber-500 to-orange-600 font-bold text-[12.5px] tracking-wide active:scale-[0.97] transition-transform shadow-[0_0_20px_rgba(245,158,11,.3)] cursor-pointer"
+                className="w-full mt-3.5 py-[11px] rounded-[13px] bg-gradient-to-r from-red-500 to-orange-600 font-bold text-[12.5px] tracking-wide active:scale-[0.97] transition-transform shadow-[0_0_20px_rgba(239,68,68,.3)] cursor-pointer"
               >
                 START
               </button>
@@ -1089,15 +1088,11 @@ export default function ReactionTimeTestClient() {
         {/* ── PLAYING (and COUNTDOWN) ── */}
         {(phase === 'playing' || phase === 'countdown') && (
           <>
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-neutral-950 z-[60] pointer-events-none">
-              <div className={`h-full transition-all duration-100 ease-linear ${timeRemaining <= 10 ? 'bg-red-500 animate-pulse' : 'bg-amber-500'}`} style={{ width: `${timePct}%` }} />
-            </div>
-
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none">
               <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
               {isChallenge ? (
                 <div className="flex items-center gap-2 mt-1.5">
-                  <span className="text-[10px] font-black font-mono text-amber-300 bg-amber-500/15 border border-amber-500/25 px-1.5 py-0.5 rounded">Lv.{level}</span>
+                  <span className="text-[10px] font-black font-mono text-red-300 bg-red-500/15 border border-red-500/25 px-1.5 py-0.5 rounded">Lv.{level}</span>
                 </div>
               ) : (
                 <span className="flex items-center gap-0.5 mt-1.5">
@@ -1130,9 +1125,9 @@ export default function ReactionTimeTestClient() {
         {phase === 'countdown' && (
           <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/55 backdrop-blur-[2px]">
             <span className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">Get Ready</span>
-            <div className="relative w-28 h-28 rounded-full border-[3px] border-amber-500/20 flex items-center justify-center">
-              <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-amber-400 border-r-amber-400 animate-spin" style={{ animationDuration: '0.7s' }} />
-              <span key={countdownValue} className="fx-pop-in text-5xl font-black bg-gradient-to-b from-white to-amber-300 bg-clip-text text-transparent">
+            <div className="relative w-28 h-28 rounded-full border-[3px] border-red-500/20 flex items-center justify-center">
+              <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-red-400 border-r-red-400 animate-spin" style={{ animationDuration: '0.7s' }} />
+              <span key={countdownValue} className="fx-pop-in text-5xl font-black bg-gradient-to-b from-white to-red-300 bg-clip-text text-transparent">
                 {countdownValue > 0 ? countdownValue : 'GO'}
               </span>
             </div>
@@ -1156,7 +1151,7 @@ function HowToRow({ icon, node }: { icon: React.ReactNode; node: React.ReactNode
   return (
     <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
       {icon}
-      <span className="text-[10.5px] text-slate-300 leading-tight">{node}</span>
+      <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">{node}</span>
     </div>
   );
 }
@@ -1193,7 +1188,7 @@ function ResultScreen({ summary, onPlayAgain, onShare }: { summary: any; onPlayA
           <ResultStat label="XP" value={`+${summary.xpEarned}`} color="text-violet-400" />
         </div>
         <div className="flex gap-2">
-          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-amber-500 to-orange-600 text-white font-bold text-xs uppercase tracking-wide cursor-pointer">
+          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-red-500 to-orange-600 text-white font-bold text-xs uppercase tracking-wide cursor-pointer">
             Play Again
           </button>
           <button onClick={onShare} className="w-11 flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer">
