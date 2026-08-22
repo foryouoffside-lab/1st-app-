@@ -5,7 +5,7 @@ const devUrl = process.env.CAP_DEV_URL;
 
 const config: CapacitorConfig = {
   appId: 'com.skilldrills.pro',
-  appName: 'SkillDrills Pro',
+  appName: 'SkillDrills',
   webDir: 'out',         
   server: devUrl ? { url: devUrl, cleartext: true } : {},
 

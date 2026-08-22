@@ -26,7 +26,14 @@ your copy-paste reference for the day you deploy.
 
 ## 1. App identity
 
-- **App name:** SkillDrills Pro
+- **App name (on-device label):** SkillDrills — set in
+  `android/app/src/main/res/values/strings.xml` and `capacitor.config.ts`.
+  This is what shows under the launcher icon and in the Google account picker.
+  The "Pro" was dropped on 2026-08-23 to match the legal pages, the login
+  screen, and the OAuth consent screen.
+- **Store listing title:** `SkillDrills: Focus & Reaction` (see §2) — the Play
+  title is a separate, keyword-weighted field and does not have to match the
+  on-device label.
 - **Package name:** com.skilldrills.pro
 - **Category:** Education (or Puzzle/Trivia — "Education" fits best given the
   cognitive-training framing; pick whichever Play Console suggests as closest match)
