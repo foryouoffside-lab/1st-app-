@@ -51,21 +51,28 @@ Two refinements worth considering, neither blocking:
 
 ---
 
-## 2. Two different privacy policies exist — fix before submitting
+## 2. Two different privacy policies existed — RESOLVED 2026-08-23
 
-The live site at `https://skilldrills.online/privacy` serves a **different,
-older** policy (dated July 24, 2026, mentions Vercel Analytics) than the one in
-this repo at `app/privacy/page.js` (now dated August 22, 2026, with the GDPR and
-CCPA sections).
+**Status: done and verified live.** The live site now serves the August 22
+policy, with the GDPR, CCPA, controller-identity and transfer sections.
 
-Play Console will point at the **website** URL. If a regulator or reviewer
-compares the policy you link against what the app actually does, they must
-match. Redeploy the website from this repo so both serve the same document, or
-the newly added GDPR/CCPA sections legally do not exist for your users.
+Important structural note for future edits: **the website is a separate
+project from this one.** It lives at `Desktop/global-drill-system-nextjs -
+Copy` and deploys to Vercel from the `main` branch of the shared GitHub repo.
+This folder (the mobile app) had the website's SEO layer stripped out in
+commit `082882f` and must **never** be pushed to that branch — doing so would
+replace skilldrills.online with the app build.
 
-The website version does correctly mention Vercel Analytics, which the in-repo
-version omits — that detail must survive the merge, since the website really
-does use it.
+So a legal-text change has to be made in **both** places: here for the APK,
+and in the website folder for the URL that Play links.
+
+The Vercel Analytics and Speed Insights disclosure is website-only and was
+deliberately retained there (the site really does run it) while staying out of
+the app's copy (the app does not). It is now also reflected in the website's
+GDPR legitimate-interests and CCPA sections.
+
+Also added to the website in the same pass: `/delete-account`, which Play
+requires to be reachable without installing the app.
 
 ---
 
@@ -218,10 +225,12 @@ the only fields in that category; email is correctly excluded from the document.
 ## 7. Pre-submission checklist
 
 - [x] Fill the operator identity (§1) — Sangmesh, India
-- [ ] Redeploy the website so both privacy policies match (§2)
+- [x] Redeploy the website so both privacy policies match (§2) — live 2026-08-23
 - [x] Rewrite the store listing claims (§4) — done, copy is in the submission doc
 - [ ] Set the OAuth consent screen App name (see `PLAY_STORE_SUBMISSION.md` §1)
-- [ ] Enter the data deletion URL in Play Console
+- [ ] Enter the data deletion URL in Play Console —
+      `https://skilldrills.online/delete-account` (live and returning 200 as of
+      2026-08-23; Data safety → Data deletion)
 - [ ] Create a reviewer test account and document it in App access
 - [ ] Complete Data Safety exactly as §6
 - [ ] Declare target audience 13+ and nothing younger
@@ -239,3 +248,33 @@ the only fields in that category; email is correctly excluded from the document.
 - Terms: added age requirement, an explicit "not a medical device / EIQ is not
   an IQ score / no real-world improvement promised" section, and governing law.
 - Both legal pages re-dated to August 22, 2026.
+
+---
+
+## 9. What was changed on 2026-08-23
+
+The website (`Desktop/global-drill-system-nextjs - Copy`, a **separate project**
+— see §2) was brought up to the same standard and deployed. Verified live.
+
+- `app/privacy/page.js` — merged in controller identity, GDPR lawful bases,
+  data subject rights, CCPA/CPRA, and international transfers. Kept the
+  website-only Vercel Analytics/Speed Insights disclosure and folded it into
+  the legitimate-interests and CCPA sections. Added a section stating plainly
+  that display name and profile photo are visible to other players, since user
+  documents are world-readable for the leaderboard (§6 flagged this).
+- `app/terms/page.js` — added the 13+/16+ age requirement, the "not a medical
+  device / EIQ is not an IQ score / no real-world improvement promised"
+  section, and governing law.
+- `app/delete-account/page.js` — new. Play requires this URL to work without
+  installing the app, and the website had no such page.
+- `app/sitemap.js` — listed `/delete-account`, bumped the legal date.
+
+In this repo (the app), `app/terms/page.js` had gained the new sections on
+Aug 22 but `LAST_UPDATED` was left at July 17, which contradicted the page's
+own promise that the date changes when the terms change. Corrected to
+August 22, 2026.
+
+Still open after this pass: the OAuth consent screen name (Console only), and
+the lawyer question below — the EU/UK Article 27 representative is the live
+part of it, because the controller is established in India rather than the
+EEA/UK.
