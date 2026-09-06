@@ -414,6 +414,232 @@ h1, h2, h3 {
   overflow: hidden;
 }
 
+/* ── animated drill previews ────────────────────────────────────────────
+   Rendered by components/DrillPreview.js into a card's .thumb slot in place
+   of the static webp. Absolutely filled so it works in both the home rail's
+   4:3 thumb and the hub grid's 16:9 one. Pure compositor animation — no rAF,
+   no main-thread cost on a scrolling list — and the blanket reduced-motion
+   rule above parks each one on its first keyframe (a clean still). */
+.gm-prev {
+  position: absolute; inset: 0; display: flex;
+  align-items: center; justify-content: center;
+  background:
+    radial-gradient(ellipse 70% 55% at 50% 42%, rgba(99,102,241,.14), transparent 72%),
+    #050508;
+  overflow: hidden;
+}
+/* faint grid floor, house style */
+.gm-prev::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
+  background-size: 14px 14px;
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 60%);
+          mask-image: linear-gradient(180deg, transparent, #000 60%);
+}
+.gm-prev-grid {
+  position: relative; z-index: 1;
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 8%;
+  width: 52%;
+  max-height: 74%;
+  aspect-ratio: 1 / 1;
+}
+.gm-prev-cell {
+  border-radius: 24%;
+  background: #161d2c;
+  border: 1px solid #2f3b52;
+  box-shadow: 0 0 0 0 rgba(99,102,241,0);
+}
+.gm-prev-on {
+  animation: gm-prev-pulse 3.6s ease-in-out infinite;
+  will-change: transform, box-shadow, background-color;
+}
+@keyframes gm-prev-pulse {
+  /* 1. pattern shown — memorize */
+  0%,  24% {
+    background-color: #6366f1; border-color: #818cf8;
+    box-shadow: 0 0 9px 1px rgba(99,102,241,.55);
+    transform: scale(1);
+  }
+  /* 2. board clears — recall begins */
+  33%, 46% {
+    background-color: #161d2c; border-color: #2f3b52;
+    box-shadow: 0 0 0 0 rgba(99,102,241,0);
+    transform: scale(1);
+  }
+  /* 3. tap — cell pops cyan (cascaded by per-cell animation-delay) */
+  54% {
+    background-color: #22d3ee; border-color: #a5f3fc;
+    box-shadow: 0 0 13px 2px rgba(34,211,238,.6);
+    transform: scale(1.14);
+  }
+  62%, 88% {
+    background-color: #0e7490; border-color: #22d3ee;
+    box-shadow: 0 0 6px 1px rgba(34,211,238,.32);
+    transform: scale(1);
+  }
+  /* 4. clear before the loop snaps a fresh pattern in at 0% */
+  95%, 100% {
+    background-color: #161d2c; border-color: #2f3b52;
+    box-shadow: 0 0 0 0 rgba(99,102,241,0);
+    transform: scale(1);
+  }
+}
+
+/* Moving Target — the drill's own red "layered circle" target, flying a
+   looping path across the field and flashing white once per lap (a hit).
+   The target is rebuilt from lib/canvasFx.js createLayeredSpriteCache(): a
+   faint ghost ring, a tactical ring, a flat red disc, a white core + soft
+   highlight — flat fills, no glow, exactly as the drill ships it. Movement is
+   transform:translate() on a full-field track so % resolves against the field
+   and stays on the compositor. */
+.mt-prev {
+  position: absolute; inset: 0; display: flex;
+  align-items: center; justify-content: center;
+  background:
+    radial-gradient(ellipse 72% 58% at 50% 45%, rgba(239,68,68,.12), transparent 72%),
+    #050508;
+  overflow: hidden;
+}
+.mt-prev::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
+  background-size: 15px 15px;
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 65%);
+          mask-image: linear-gradient(180deg, transparent, #000 65%);
+}
+.mt-prev-field {
+  position: relative;
+  width: 78%; max-height: 92%;
+  aspect-ratio: 1 / 1;
+}
+.mt-prev-track {
+  position: absolute; inset: 0;
+  animation: mt-prev-fly 5s linear infinite;
+  will-change: transform;
+}
+.mt-prev-orb {
+  position: absolute; left: 50%; top: 50%;
+  width: 15%; aspect-ratio: 1 / 1; border-radius: 50%;
+  /* soft highlight blob (up-left) over white core + flat red disc */
+  background:
+    radial-gradient(circle at 37% 35%, rgba(255,255,255,.4) 0 8%, transparent 24%),
+    radial-gradient(circle at 50% 50%, #ffffff 0 11%, rgba(239,68,68,.92) 26% 100%);
+  /* tactical ring (r) + ghost ring (r+5), as concentric box-shadows */
+  box-shadow:
+    0 0 0 1.6px rgba(239,68,68,.55),
+    0 0 0 4px rgba(239,68,68,.18);
+  transform: translate(-50%, -50%);
+  animation: mt-prev-hit 5s linear infinite;
+}
+@keyframes mt-prev-fly {
+  0%   { transform: translate(-32%, -6%); }
+  20%  { transform: translate(30%, -14%); }
+  40%  { transform: translate(34%, 22%); }
+  58%  { transform: translate(-6%, 28%); }
+  78%  { transform: translate(-34%, 12%); }
+  100% { transform: translate(-32%, -6%); }
+}
+@keyframes mt-prev-hit {
+  0%, 22%, 30%, 66%, 76%, 100% {
+    background:
+      radial-gradient(circle at 37% 35%, rgba(255,255,255,.4) 0 8%, transparent 24%),
+      radial-gradient(circle at 50% 50%, #ffffff 0 11%, rgba(239,68,68,.92) 26% 100%);
+    box-shadow: 0 0 0 1.6px rgba(239,68,68,.55), 0 0 0 4px rgba(239,68,68,.18);
+    transform: translate(-50%, -50%) scale(1);
+  }
+  25%, 28%, 69%, 72% {
+    background:
+      radial-gradient(circle at 50% 50%, #ffffff 0 68%, #ffd9d9 100%);
+    box-shadow: 0 0 0 2px rgba(255,255,255,.85), 0 0 0 5px rgba(255,255,255,.28);
+    transform: translate(-50%, -50%) scale(1.16);
+  }
+}
+
+/* Card Matching — the drill's own 3-up board. A matching pair (stars) flips up,
+   pulses and vanishes; a heart + circle flip up, don't match, flip back. Same
+   card backs (violet gradient + centre emblem), same black faces, same lucide
+   glyphs at the drill's tints. CSS 3D flip on .cm-prev-inner. */
+.cm-prev {
+  position: absolute; inset: 0; display: flex;
+  align-items: center; justify-content: center;
+  background:
+    radial-gradient(ellipse 70% 58% at 50% 40%, rgba(139,92,246,.16), transparent 72%),
+    #050508;
+  overflow: hidden;
+}
+.cm-prev-board {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+  gap: 7%;
+  width: 45%; max-height: 80%;
+  aspect-ratio: 1 / 1;
+  transform: translateY(6%);   /* nudge below the difficulty pill */
+}
+.cm-prev-card { position: relative; perspective: 320px; }
+.cm-prev-inner {
+  position: absolute; inset: 0;
+  transform-style: preserve-3d;
+  transform: rotateY(0deg);
+}
+.cm-prev-face {
+  position: absolute; inset: 0; border-radius: 15%;
+  display: flex; align-items: center; justify-content: center;
+  backface-visibility: hidden; -webkit-backface-visibility: hidden;
+}
+.cm-prev-back {
+  background: linear-gradient(135deg, #3b3474, #251f47);
+  border: 1px solid #8272de;
+  box-shadow: 0 1px 4px rgba(0,0,0,.45), inset 0 1px 0 rgba(196,181,253,.30);
+}
+.cm-prev-back::after {
+  content: ''; width: 26%; height: 26%;
+  border-radius: 22%; border: 1.5px solid rgba(196,181,253,.4);
+}
+.cm-prev-front {
+  background: #07070d; border: 1px solid #39325f;
+  transform: rotateY(180deg);
+  box-shadow: inset 0 0 6px rgba(0,0,0,.6);
+  color: #eab308;                 /* star — yellow-500 */
+}
+.cm-prev-front svg {
+  width: 46%; height: 46%; stroke-width: 2.25;
+}
+.cm-prev-c  .cm-prev-front { color: #ef4444; }   /* heart — red-500 */
+.cm-prev-c2 .cm-prev-front { color: #3b82f6; }   /* circle — blue-500 */
+
+/* matching pair: flip up, hold, then the card vanishes and returns face-down */
+.cm-prev-a  .cm-prev-inner { animation: cm-prev-flip-match 5.5s ease-in-out infinite; }
+.cm-prev-a  { animation: cm-prev-vanish 5.5s ease-in-out infinite; }
+
+/* mismatch pair: flip up later, hold, flip back down */
+.cm-prev-c .cm-prev-inner { animation: cm-prev-flip-nomatch 5.5s ease-in-out infinite; }
+
+@keyframes cm-prev-flip-match {
+  0%, 8%    { transform: rotateY(0deg); }
+  17%, 45%  { transform: rotateY(180deg); }
+  50%       { transform: rotateY(180deg); }   /* still flipped as it fades out */
+  55%       { transform: rotateY(0deg); }     /* snap back face-down while hidden */
+  100%      { transform: rotateY(0deg); }
+}
+@keyframes cm-prev-vanish {
+  0%, 40%   { opacity: 1; transform: scale(1);    box-shadow: 0 0 0 0 rgba(34,211,238,0); }
+  44%       { opacity: 1; transform: scale(1.09); box-shadow: 0 0 10px 2px rgba(34,211,238,.55); }
+  50%       { opacity: 0; transform: scale(.5);   box-shadow: 0 0 0 0 rgba(34,211,238,0); }
+  57%       { opacity: 0; transform: scale(.5); }
+  61%, 100% { opacity: 1; transform: scale(1); }
+}
+@keyframes cm-prev-flip-nomatch {
+  0%, 62%   { transform: rotateY(0deg); }
+  70%, 86%  { transform: rotateY(180deg); }
+  93%, 100% { transform: rotateY(0deg); }
+}
+
 /* ── empty state ─────────────────────────────────────────── */
 .empty-block { text-align: center; padding: 22px 16px; border: 1px dashed var(--line); border-radius: 14px; margin-top: 6px; }
 .empty-block .ic { width: 38px; height: 38px; border-radius: 50%; background: var(--card-raised); display: flex; align-items: center; justify-content: center; margin: 0 auto 10px; color: var(--text-faint); }
@@ -437,25 +663,6 @@ h1, h2, h3 {
 @keyframes fastPulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
 .cat-hero p.desc { position: relative; margin-top: 9px; color: var(--text-dim); font-size: 12.5px; max-width: 64ch; line-height: 1.5; }
 .cat-hero .cta { position: relative; margin-top: 20px; display: inline-flex; align-items: center; gap: 8px; background: var(--a); color: var(--ink); font-weight: 700; font-size: 13px; padding: 11px 20px; border-radius: 11px; border: none; }
-
-/* ── subgroup category picker ───────────────────────────────
-   Each subgroup (Attention/Focus/Memory/...) gets real visual identity
-   here via its own --a accent (wired per-card from DRILL_GROUPS), instead
-   of the old monochrome filter-chip row that rendered every subgroup in
-   the same flat purple. Fixed 3-column grid (all 6 cards visible at once,
-   no horizontal scroll) — a scroll strip hid Processing Speed off-screen,
-   forcing an extra scroll gesture just to find it. */
-.group-picker { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin-bottom: 14px; }
-.group-card {
-  display: flex; flex-direction: column; align-items: center; gap: 7px;
-  padding: 12px 8px 10px; border-radius: 16px; background: var(--card); border: 1px solid var(--line);
-  cursor: pointer; text-align: center; transition: border-color .15s, background .15s;
-}
-.group-card.active { background: color-mix(in srgb, var(--a) 14%, var(--card)); border-color: color-mix(in srgb, var(--a) 45%, transparent); }
-.group-card-ic { width: 32px; height: 32px; border-radius: 10px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--a) 20%, transparent); color: var(--a); flex-shrink: 0; }
-.group-card-name { font-size: 10.5px; font-weight: 700; color: var(--text); line-height: 1.2; }
-.group-card-count { font-size: 8.5px; color: var(--text-faint); font-weight: 600; }
-.group-card.active .group-card-name { color: var(--a); }
 
 /* ── drill preview cards (the Cognitive hub's two-up grid) ──
    Replaces the old .drill-row text list. The picture is the point: a drill

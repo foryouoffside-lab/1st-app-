@@ -37,9 +37,13 @@ play button + timer along the bottom.
 > tiles blurred in the background.
 
 **multi-tasking** — accent violet (#8e61f6)
-> Two bright violet targets on two separate curved glowing light tracks, a
-> single beam from a central node splitting to reach both at once, symmetrical
-> composition, a sense of attention divided in two.
+> A screen split down the middle by a single tall glowing violet light-seam.
+> From that seam, two streams of small wireframe geometric glyphs (triangle,
+> circle, square, star, diamond, hexagon) flow outward in opposite directions
+> — left stream drifting left, right stream drifting right — each with faint
+> motion-blur trails. One glyph in the left stream and a DIFFERENT glyph in the
+> right stream glow bright violet as the two things being tracked at once.
+> Symmetrical, calm, a sense of attention held in two places. Landscape.
 
 **moving-target** — accent cyan (#06b6d4)
 > A glowing cyan targeting reticle locked onto a bright darting orb, a long

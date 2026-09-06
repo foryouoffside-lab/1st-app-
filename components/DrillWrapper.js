@@ -13,7 +13,6 @@ import { sendChallenge, sendGlobalChallenge, acceptChallenge, declineChallenge, 
 import { ARENA_ENABLED } from '../lib/featureFlags';
 import { keepAwake, allowSleep } from '../lib/keepAwake';
 import { enterImmersive, exitImmersive } from '../lib/immersive';
-import { HUB_GROUP_KEY, groupFromPath } from '../lib/drillGroups';
 import { useOnlineStatus } from '../lib/useOnlineStatus';
 import DrillErrorBoundary from './DrillErrorBoundary';
 import { doc, onSnapshot, updateDoc, collection, query, where, limit, orderBy, getDoc } from 'firebase/firestore';
@@ -123,33 +122,6 @@ export default function DrillWrapper({
   const challengeId = searchParams ? searchParams.get('challengeId') : null;
   const drillSlug = pathname.replace('/drills/', '');
   const isDuelEligibleDrill = DUEL_DRILLS.some((d) => d.slug === drillSlug);
-
-  // Category of the drill currently open, derived from its own path.
-  const drillGroup = groupFromPath(pathname);
-
-  // Tell the Cognitive hub which category to show when the player comes back.
-  //
-  // Every exit route from a drill — this header's back arrow, Android's back
-  // button, and each drill's result-screen exit link — goes to a bare
-  // /drills/cognitive with no ?group=, so the hub had nothing to go on. It
-  // used to fall back to "All Drills"; remembering the last BROWSED category
-  // fixed the common case but not this one, because the player can reach a
-  // drill without ever browsing its category (Home's "All Drills" list, the
-  // daily challenge, search). Then the stale value won and exiting Sudoku
-  // dropped them in Attention.
-  //
-  // Keying it off the drill's own path instead makes the answer correct no
-  // matter how the drill was reached.
-  useEffect(() => {
-    if (!drillGroup) return;
-    try { sessionStorage.setItem(HUB_GROUP_KEY, drillGroup); } catch {}
-  }, [drillGroup]);
-
-  // Belt and braces for the back arrow specifically: name the category in the
-  // URL too, so that path doesn't depend on storage being available at all.
-  const backHrefWithGroup = drillGroup && backHref === '/drills/cognitive'
-    ? `/drills/cognitive?group=${drillGroup}`
-    : backHref;
 
   const { user, db } = useAuth();
   const { outgoingChallenge, incomingChallenges } = useChallenge();
@@ -954,7 +926,7 @@ export default function DrillWrapper({
             <div className="w-9 h-9" />
           ) : (
             <Link
-              href={backHrefWithGroup}
+              href={backHref}
               className="relative flex items-center justify-center w-9 h-9 rounded-xl active:scale-90 transition-transform duration-100 before:absolute before:-inset-1 before:content-['']"
               style={{ background: 'rgba(255,255,255,0.06)' }}
               aria-label="Back to drills"
@@ -1012,7 +984,7 @@ export default function DrillWrapper({
       <main className="flex-1 relative overflow-hidden" style={{ touchAction: 'none' }}>
         {/* One boundary for every drill — a crash in here used to unmount the
             whole subtree and leave the black screen with nothing to tap. */}
-        <DrillErrorBoundary drillName={drillName} backHref={backHrefWithGroup}>
+        <DrillErrorBoundary drillName={drillName} backHref={backHref}>
           {children}
         </DrillErrorBoundary>
 

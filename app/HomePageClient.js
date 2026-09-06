@@ -14,6 +14,7 @@ import { ARENA_ENABLED } from '../lib/featureFlags';
 import { getDailyChallenge } from '../lib/dailyChallenge';
 import { DRILL_INDEX, byEngagement } from '../lib/drillIndex';
 import { DRILL_GROUPS, getDrillGroup, getGroupIcon } from '../lib/drillGroups';
+import DrillPreview, { hasAnimatedPreview } from '../components/DrillPreview';
 
 const HOMEPAGE_CATEGORIES = DRILL_GROUPS.map(g => ({
   slug: g.id,
@@ -40,6 +41,9 @@ const CATEGORY_TABS = [
 // so the choice is made up front rather than on load failure.)
 const DRILL_ART = new Set([
   'quick-dodge',
+  'distraction-fighter',
+  'multi-tasking',
+  'card-matching',
 ]);
 
 // Same mapping the /drills hub uses for its difficulty pill, so a drill's
@@ -258,16 +262,20 @@ export default function HomePageClient() {
               >
                 <span className="thumb">
                   <span className={`diff-pill ${diffId}`}>{diffLabel}</span>
-                  <img
-                    src={DRILL_ART.has(drill.id)
-                      ? `/drill-art/${drill.id}.webp`
-                      : `/previews/cards/${drill.id}.webp`}
-                    alt=""
-                    width={640}
-                    height={480}
-                    loading="lazy"
-                    decoding="async"
-                  />
+                  {hasAnimatedPreview(drill.id) ? (
+                    <DrillPreview drillId={drill.id} />
+                  ) : (
+                    <img
+                      src={DRILL_ART.has(drill.id)
+                        ? `/drill-art/${drill.id}.webp`
+                        : `/previews/cards/${drill.id}.webp`}
+                      alt=""
+                      width={640}
+                      height={480}
+                      loading="lazy"
+                      decoding="async"
+                    />
+                  )}
                   <span className="dur">{drill.duration || '45s'}</span>
                   <span className="play"><Play className="h-3 w-3 fill-current" /></span>
                 </span>
