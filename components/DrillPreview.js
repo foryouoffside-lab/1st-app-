@@ -14,12 +14,14 @@ import GridMemorizationPreview from './drill-previews/GridMemorizationPreview';
 import MovingTargetPreview from './drill-previews/MovingTargetPreview';
 import CardMatchingPreview from './drill-previews/CardMatchingPreview';
 import QuickDodgePreview from './drill-previews/QuickDodgePreview';
+import DistractionFighterPreview from './drill-previews/DistractionFighterPreview';
 
 const ANIMATED = {
   'grid-memorization': GridMemorizationPreview,
   'moving-target': MovingTargetPreview,
   'card-matching': CardMatchingPreview,
   'quick-dodge': QuickDodgePreview,
+  'distraction-fighter': DistractionFighterPreview,
 };
 
 export function hasAnimatedPreview(id) {
