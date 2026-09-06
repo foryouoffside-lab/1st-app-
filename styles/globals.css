@@ -640,6 +640,161 @@ h1, h2, h3 {
   93%, 100% { transform: rotateY(0deg); }
 }
 
+/* Quick Dodge — the drill's own opening board: three hollow red hazards
+   crossing the field on straight headings while the green player dot weaves
+   between them. Hazard = 1.4px border ON the collision radius over a faint red
+   wash, a bright core and the ring rising out of it; player = the drill's
+   gradient dot, white sheen, breathing halo and expanding pulse. Colours and
+   proportions come straight from `.qd-ob*` / `.qd-player*` below and from
+   ensurePlayerSize() (halo = 2.34x the dot, hazards ~2x the dot), and the three
+   pulses reuse the drill's own qdHalo / qdPlayerRing / qdRing keyframes.
+   No trails and no `qd-glow` tint: the drill only turns those on from ~40% and
+   ~65% through the level table, and this is an early, sparse board.
+   Nothing is ever hit — every pass is a near miss, closest approach ~1.2-1.4x
+   the contact distance in the widest thumb, which is the mechanic. */
+.qd-prev {
+  position: absolute; inset: 0; display: flex;
+  align-items: center; justify-content: center;
+  background:
+    radial-gradient(ellipse 72% 58% at 50% 40%, rgba(16,185,129,.13), transparent 72%),
+    #050508;
+  overflow: hidden;
+}
+.qd-prev::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
+  background-size: 15px 15px;
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 60%);
+          mask-image: linear-gradient(180deg, transparent, #000 60%);
+}
+/* Coordinate frame for the whole loop. Every offset below is a % of THIS box,
+   so the paths keep their shape in both the 4:3 rail thumb and the 16:9 hub
+   one; hazards run out past ±70%, i.e. off the card, and the root clips them. */
+.qd-prev-field {
+  position: relative; z-index: 1;
+  width: 82%; max-height: 84%; aspect-ratio: 1 / 1;
+  transform: translateY(3%);   /* clear of the difficulty pill and the play button */
+}
+
+/* ── hazards ──────────────────────────────────────────────────────────── */
+/* Track layer: full-field, so translate % resolves against the field. Each of
+   the three carries its own path, phased so all three are on the board (and
+   spread) on the 0% frame. */
+.qd-prev-haz { position: absolute; inset: 0; will-change: transform; }
+.qd-prev-ob {
+  position: absolute; left: 50%; top: 50%;
+  width: 13%; aspect-ratio: 1 / 1;
+  transform: translate(-50%, -50%);
+}
+.qd-prev-ob-body {
+  position: absolute; inset: 0; border-radius: 50%;
+  border: 1.4px solid #f87171; background: rgba(239,68,68,.10);
+}
+.qd-prev-ob-core {
+  position: absolute; left: 40%; top: 40%; width: 20%; height: 20%;
+  border-radius: 50%; background: #fecaca;
+}
+.qd-prev-ob-ring {
+  position: absolute; left: 40%; top: 40%; width: 20%; height: 20%;
+  border-radius: 50%; border: 1px solid #f87171;
+  animation: qdRing 1.3s linear infinite;   /* the drill's default ring period */
+}
+/* The jump back to the entry edge happens well off the card; the scale is the
+   drill's spawn grow-in (r starts at 0.6 of maxR and eases up to it). */
+.qd-prev-h1 { animation: qd-prev-p1 6s linear infinite; }
+.qd-prev-h2 { animation: qd-prev-p2 6s linear infinite; }
+.qd-prev-h3 { animation: qd-prev-p3 6s linear infinite; }
+.qd-prev-h1 .qd-prev-ob-body { animation: qd-prev-g1 6s linear infinite; }
+.qd-prev-h2 .qd-prev-ob-body { animation: qd-prev-g2 6s linear infinite; }
+.qd-prev-h3 .qd-prev-ob-body { animation: qd-prev-g3 6s linear infinite; }
+
+/* left -> right across the upper band */
+@keyframes qd-prev-p1 {
+  0%      { transform: translate(-25.1%, -22.9%); }
+  67.9%   { transform: translate(70%, -8%); }
+  67.91%  { transform: translate(-70%, -30%); }
+  100%    { transform: translate(-25.1%, -22.9%); }
+}
+@keyframes qd-prev-g1 {
+  0%, 67.9% { transform: scale(1); }
+  67.91%    { transform: scale(.62); }
+  83%, 100% { transform: scale(1); }
+}
+/* right -> left across the lower band */
+@keyframes qd-prev-p2 {
+  0%      { transform: translate(43%, 29.8%); }
+  80.7%   { transform: translate(-70%, 12%); }
+  80.71%  { transform: translate(70%, 34%); }
+  100%    { transform: translate(43%, 29.8%); }
+}
+@keyframes qd-prev-g2 {
+  0%, 80.7% { transform: scale(1); }
+  80.71%    { transform: scale(.62); }
+  95%, 100% { transform: scale(1); }
+}
+/* top-left -> bottom-right, the one that crosses the middle */
+@keyframes qd-prev-p3 {
+  0%      { transform: translate(14.8%, 30.4%); }
+  30%     { transform: translate(34%, 76%); }
+  30.01%  { transform: translate(-30%, -76%); }
+  100%    { transform: translate(14.8%, 30.4%); }
+}
+@keyframes qd-prev-g3 {
+  0%, 30%   { transform: scale(1); }
+  30.01%    { transform: scale(.62); }
+  45%, 100% { transform: scale(1); }
+}
+
+/* ── player dot ───────────────────────────────────────────────────────── */
+.qd-prev-dot {
+  position: absolute; inset: 0;
+  animation: qd-prev-weave 6s ease-in-out infinite;
+  will-change: transform;
+}
+.qd-prev-player {
+  position: absolute; left: 50%; top: 50%;
+  width: 8.5%; aspect-ratio: 1 / 1;
+  transform: translate(-50%, -50%);
+}
+.qd-prev-halo {
+  position: absolute; left: -67%; top: -67%; width: 234%; height: 234%;
+  border-radius: 50%; background: rgba(16,185,129,.14);
+  animation: qdHalo 2.094s ease-in-out infinite;
+}
+.qd-prev-pulse {
+  position: absolute; inset: 0; border-radius: 50%;
+  border: 1.2px solid rgba(52,211,153,1);
+  animation: qdPlayerRing 1.5s linear infinite;
+}
+.qd-prev-body {
+  position: absolute; inset: 0; border-radius: 50%;
+  background: linear-gradient(135deg, #6ee7b7, #059669);
+  border: 1.2px solid #a7f3d0;
+}
+.qd-prev-sheen {
+  position: absolute; left: 24%; top: 24%; width: 22%; height: 22%;
+  border-radius: 50%; background: #fff;
+}
+/* The dodges. Each leg eases in and out, which is what the stick does to the
+   dot (see PLAYER_ACCEL_TAU / PLAYER_STOP_TAU). Three dodges a lap: 40% cuts
+   in under the hazard crossing the top band, 66% backs away from the one
+   sweeping out to the left, 80% slips past the one coming down through the
+   middle. Closest approach is ~1.25x the contact distance in the widest thumb
+   — close enough to read as a dodge, never a hit. */
+@keyframes qd-prev-weave {
+  0%   { transform: translate(-6%, -2%); }
+  14%  { transform: translate(-18%, 8%); }
+  28%  { transform: translate(-6%, -4%); }
+  40%  { transform: translate(23%, 5%); }
+  54%  { transform: translate(4%, 12%); }
+  66%  { transform: translate(-35%, 7%); }
+  80%  { transform: translate(-10%, 10%); }
+  90%  { transform: translate(-16%, 2%); }
+  100% { transform: translate(-6%, -2%); }
+}
+
 /* ── empty state ─────────────────────────────────────────── */
 .empty-block { text-align: center; padding: 22px 16px; border: 1px dashed var(--line); border-radius: 14px; margin-top: 6px; }
 .empty-block .ic { width: 38px; height: 38px; border-radius: 50%; background: var(--card-raised); display: flex; align-items: center; justify-content: center; margin: 0 auto 10px; color: var(--text-faint); }
