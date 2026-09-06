@@ -1225,6 +1225,155 @@ h1, h2, h3 {
   100%        { opacity: 1; }
 }
 
+/* Concentration Grid — the drill's board being cleared. A shuffled 4x4 gets
+   tapped 1, 2, 3, 4… in order and each cell takes the drill's own found style
+   as it goes: green-500 at 20% over its green border and text, scale(.95),
+   opacity .55, shadow off. The board finishes clear, holds, and a fresh one
+   starts — which is what a clear does in the drill.
+   4x4 is one of its real boards (it opens at 3x3 and grows by one per clear);
+   at 100-170px of thumbnail a 5x5's numerals are no longer readable. The
+   "Find N" badge is HUD and is not here. Numbers are sized off the thumb's
+   short side, a little larger relative to the cell than the drill's
+   92/gridSize, for the same reason.
+   One keyframe set per number rather than one shared set with per-cell delays:
+   the found state has to persist to the end of the lap and then clear for every
+   cell at once, and a delayed shared animation would stagger the clear too. */
+.cg-prev {
+  position: absolute; inset: 0; display: flex;
+  align-items: center; justify-content: center;
+  background:
+    radial-gradient(ellipse 72% 58% at 50% 42%, rgba(6,182,212,.13), transparent 72%),
+    #050508;
+  overflow: hidden;
+  container-type: size;
+}
+.cg-prev::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
+  background-size: 15px 15px;
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 60%);
+          mask-image: linear-gradient(180deg, transparent, #000 60%);
+}
+.cg-prev-grid {
+  position: relative; z-index: 1;
+  display: grid; height: 68%; aspect-ratio: 1 / 1;
+  grid-template-columns: repeat(4, 1fr);
+  grid-template-rows: repeat(4, 1fr);
+  gap: 2.4%;
+  transform: translateY(15%);   /* clear under the difficulty pill */
+}
+.cg-prev-cell {
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 18%;
+  background-color: #0f172a;
+  border: 1px solid rgba(255,255,255,.15);
+  box-shadow: 0 4px 10px rgba(0,0,0,.3);
+  color: #fff; font-weight: 900; line-height: 1;
+  font-size: 9px; font-size: 7.6cqmin;
+  font-family: var(--font-inter), 'Inter', ui-sans-serif, system-ui, sans-serif;
+}
+
+.cg-prev-n1 { animation: cg-prev-f1 6s linear infinite; }
+.cg-prev-n2 { animation: cg-prev-f2 6s linear infinite; }
+.cg-prev-n3 { animation: cg-prev-f3 6s linear infinite; }
+.cg-prev-n4 { animation: cg-prev-f4 6s linear infinite; }
+.cg-prev-n5 { animation: cg-prev-f5 6s linear infinite; }
+.cg-prev-n6 { animation: cg-prev-f6 6s linear infinite; }
+.cg-prev-n7 { animation: cg-prev-f7 6s linear infinite; }
+.cg-prev-n8 { animation: cg-prev-f8 6s linear infinite; }
+.cg-prev-n9 { animation: cg-prev-f9 6s linear infinite; }
+.cg-prev-n10 { animation: cg-prev-f10 6s linear infinite; }
+.cg-prev-n11 { animation: cg-prev-f11 6s linear infinite; }
+.cg-prev-n12 { animation: cg-prev-f12 6s linear infinite; }
+.cg-prev-n13 { animation: cg-prev-f13 6s linear infinite; }
+.cg-prev-n14 { animation: cg-prev-f14 6s linear infinite; }
+.cg-prev-n15 { animation: cg-prev-f15 6s linear infinite; }
+.cg-prev-n16 { animation: cg-prev-f16 6s linear infinite; }
+
+/* number k is found at 4% + (k-1)*5.5% of the lap; the board clears at 94%. */
+@keyframes cg-prev-f1 {
+  0%, 3.9%   { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+  4%, 93%   { background-color:rgba(34,197,94,.2); border-color:rgba(34,197,94,.3); color:#22c55e; transform:scale(.95); opacity:.55; box-shadow:none; }
+  94%, 100% { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+}
+@keyframes cg-prev-f2 {
+  0%, 9.4%   { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+  9.5%, 93%   { background-color:rgba(34,197,94,.2); border-color:rgba(34,197,94,.3); color:#22c55e; transform:scale(.95); opacity:.55; box-shadow:none; }
+  94%, 100% { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+}
+@keyframes cg-prev-f3 {
+  0%, 14.9%   { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+  15%, 93%   { background-color:rgba(34,197,94,.2); border-color:rgba(34,197,94,.3); color:#22c55e; transform:scale(.95); opacity:.55; box-shadow:none; }
+  94%, 100% { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+}
+@keyframes cg-prev-f4 {
+  0%, 20.4%   { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+  20.5%, 93%   { background-color:rgba(34,197,94,.2); border-color:rgba(34,197,94,.3); color:#22c55e; transform:scale(.95); opacity:.55; box-shadow:none; }
+  94%, 100% { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+}
+@keyframes cg-prev-f5 {
+  0%, 25.9%   { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+  26%, 93%   { background-color:rgba(34,197,94,.2); border-color:rgba(34,197,94,.3); color:#22c55e; transform:scale(.95); opacity:.55; box-shadow:none; }
+  94%, 100% { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+}
+@keyframes cg-prev-f6 {
+  0%, 31.4%   { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+  31.5%, 93%   { background-color:rgba(34,197,94,.2); border-color:rgba(34,197,94,.3); color:#22c55e; transform:scale(.95); opacity:.55; box-shadow:none; }
+  94%, 100% { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+}
+@keyframes cg-prev-f7 {
+  0%, 36.9%   { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+  37%, 93%   { background-color:rgba(34,197,94,.2); border-color:rgba(34,197,94,.3); color:#22c55e; transform:scale(.95); opacity:.55; box-shadow:none; }
+  94%, 100% { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+}
+@keyframes cg-prev-f8 {
+  0%, 42.4%   { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+  42.5%, 93%   { background-color:rgba(34,197,94,.2); border-color:rgba(34,197,94,.3); color:#22c55e; transform:scale(.95); opacity:.55; box-shadow:none; }
+  94%, 100% { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+}
+@keyframes cg-prev-f9 {
+  0%, 47.9%   { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+  48%, 93%   { background-color:rgba(34,197,94,.2); border-color:rgba(34,197,94,.3); color:#22c55e; transform:scale(.95); opacity:.55; box-shadow:none; }
+  94%, 100% { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+}
+@keyframes cg-prev-f10 {
+  0%, 53.4%   { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+  53.5%, 93%   { background-color:rgba(34,197,94,.2); border-color:rgba(34,197,94,.3); color:#22c55e; transform:scale(.95); opacity:.55; box-shadow:none; }
+  94%, 100% { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+}
+@keyframes cg-prev-f11 {
+  0%, 58.9%   { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+  59%, 93%   { background-color:rgba(34,197,94,.2); border-color:rgba(34,197,94,.3); color:#22c55e; transform:scale(.95); opacity:.55; box-shadow:none; }
+  94%, 100% { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+}
+@keyframes cg-prev-f12 {
+  0%, 64.4%   { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+  64.5%, 93%   { background-color:rgba(34,197,94,.2); border-color:rgba(34,197,94,.3); color:#22c55e; transform:scale(.95); opacity:.55; box-shadow:none; }
+  94%, 100% { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+}
+@keyframes cg-prev-f13 {
+  0%, 69.9%   { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+  70%, 93%   { background-color:rgba(34,197,94,.2); border-color:rgba(34,197,94,.3); color:#22c55e; transform:scale(.95); opacity:.55; box-shadow:none; }
+  94%, 100% { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+}
+@keyframes cg-prev-f14 {
+  0%, 75.4%   { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+  75.5%, 93%   { background-color:rgba(34,197,94,.2); border-color:rgba(34,197,94,.3); color:#22c55e; transform:scale(.95); opacity:.55; box-shadow:none; }
+  94%, 100% { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+}
+@keyframes cg-prev-f15 {
+  0%, 80.9%   { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+  81%, 93%   { background-color:rgba(34,197,94,.2); border-color:rgba(34,197,94,.3); color:#22c55e; transform:scale(.95); opacity:.55; box-shadow:none; }
+  94%, 100% { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+}
+@keyframes cg-prev-f16 {
+  0%, 86.4%   { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+  86.5%, 93%   { background-color:rgba(34,197,94,.2); border-color:rgba(34,197,94,.3); color:#22c55e; transform:scale(.95); opacity:.55; box-shadow:none; }
+  94%, 100% { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
+}
+
 /* ── empty state ─────────────────────────────────────────── */
 .empty-block { text-align: center; padding: 22px 16px; border: 1px dashed var(--line); border-radius: 14px; margin-top: 6px; }
 .empty-block .ic { width: 38px; height: 38px; border-radius: 50%; background: var(--card-raised); display: flex; align-items: center; justify-content: center; margin: 0 auto 10px; color: var(--text-faint); }

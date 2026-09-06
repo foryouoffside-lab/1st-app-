@@ -18,6 +18,7 @@ import DistractionFighterPreview from './drill-previews/DistractionFighterPrevie
 import MultiTaskingPreview from './drill-previews/MultiTaskingPreview';
 import ShadeFinderPreview from './drill-previews/ShadeFinderPreview';
 import TowerOfHanoiPreview from './drill-previews/TowerOfHanoiPreview';
+import ConcentrationGridPreview from './drill-previews/ConcentrationGridPreview';
 
 const ANIMATED = {
   'grid-memorization': GridMemorizationPreview,
@@ -28,6 +29,7 @@ const ANIMATED = {
   'multi-tasking': MultiTaskingPreview,
   'shade-finder': ShadeFinderPreview,
   'tower-of-hanoi': TowerOfHanoiPreview,
+  'concentration-grid': ConcentrationGridPreview,
 };
 
 export function hasAnimatedPreview(id) {
