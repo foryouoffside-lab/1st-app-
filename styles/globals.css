@@ -1374,6 +1374,165 @@ h1, h2, h3 {
   94%, 100% { background-color:#0f172a; border-color:rgba(255,255,255,.15); color:#fff; transform:scale(1); opacity:1; box-shadow:0 4px 10px rgba(0,0,0,.3); }
 }
 
+/* Finger Sequencing — the drill's chain board. Nodes scattered across the
+   field on its dashed violet route, tapped one at a time: the live node wears
+   the emerald ring and the white "1" (the drill's whole cue — upcoming nodes
+   carry no number at all), and once taken it pops and is gone, the route now
+   starting from the next one. The chain runs out and a fresh one spawns.
+   Colours and construction are the canvas draw pass's: violet-500 hairline over
+   an almost-transparent fill for an upcoming node, emerald-500 at 2px over a
+   15% emerald fill for the live one, numeral at 0.85 of the radius, and the
+   rgba(168,85,247,.25) 6/6 dashed polyline drawn from the live node onward.
+   The per-node countdown ring (a timer readout) and the trap node (which only
+   turns up deeper into a run) are not here, and the consumed node pops rather
+   than throwing the drill's eight emerald particles — at 13px of node a burst
+   is a smudge. Nodes run larger than the drill's 18-25px on a 844px landscape
+   field, as everything in these previews does.
+   Geometry lives in a fixed 2:1 board, so segment angles and lengths hold in
+   both the 4:3 rail thumb and the 16:9 hub one. */
+.fs-prev {
+  position: absolute; inset: 0; display: flex;
+  align-items: center; justify-content: center;
+  background:
+    radial-gradient(ellipse 74% 60% at 50% 44%, rgba(168,85,247,.13), transparent 72%),
+    #050508;
+  overflow: hidden;
+  container-type: size;
+}
+.fs-prev::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
+  background-size: 15px 15px;
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 60%);
+          mask-image: linear-gradient(180deg, transparent, #000 60%);
+}
+.fs-prev-board {
+  position: relative; z-index: 1;
+  height: 62%; aspect-ratio: 2 / 1;
+  transform: translateY(9%);   /* clear under the difficulty pill */
+}
+/* A node. Upcoming state is the base; the live and taken states are keyframes. */
+.fs-prev-node {
+  position: absolute; width: 11%; aspect-ratio: 1 / 1;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  background-color: rgba(255,255,255,.02);
+  border: 1px solid rgba(168,85,247,.55);
+  transform: translate(-50%, -50%);
+}
+.fs-prev-cue {
+  font-family: var(--font-inter), 'Inter', ui-sans-serif, system-ui, sans-serif;
+  font-style: normal; font-weight: 700; line-height: 1; color: #fff;
+  font-size: 5px; font-size: 4.4cqmin;
+  opacity: 0;
+}
+/* The route. Each segment is drawn from the node it leaves, so it goes when
+   that node is taken. */
+.fs-prev-seg {
+  position: absolute; height: 1px;
+  background: repeating-linear-gradient(90deg,
+    rgba(168,85,247,.25) 0 2px, transparent 2px 4px);
+  transform-origin: 50% 50%;
+}
+
+.fs-prev-n1 { left: 13.000%; top: 70.000%; }
+.fs-prev-n2 { left: 33.000%; top: 26.000%; }
+.fs-prev-n3 { left: 54.000%; top: 70.000%; }
+.fs-prev-n4 { left: 75.000%; top: 30.000%; }
+.fs-prev-n5 { left: 86.000%; top: 70.000%; }
+
+.fs-prev-s1 { left: 23.000%; top: 48.000%; width: 29.732%; transform: translate(-50%, -50%) rotate(-47.73deg); }
+.fs-prev-s2 { left: 43.500%; top: 48.000%; width: 30.414%; transform: translate(-50%, -50%) rotate(46.33deg); }
+.fs-prev-s3 { left: 64.500%; top: 50.000%; width: 29.000%; transform: translate(-50%, -50%) rotate(-43.60deg); }
+.fs-prev-s4 { left: 80.500%; top: 50.000%; width: 22.825%; transform: translate(-50%, -50%) rotate(61.19deg); }
+
+/* One step per node: live at 3%, 20%, 37%, 54% and 71% of the lap, taken 16%
+   later, and a fresh chain spawns at 95%. A taken node keeps popping for 3%
+   after the next one lights, the way the drill's particles outlive the tap —
+   but only ever one node is live, as in the drill. */
+.fs-prev-n1 { animation: fs-prev-node1 6s linear infinite; }
+.fs-prev-n1 .fs-prev-cue { animation: fs-prev-cue1 6s linear infinite; }
+.fs-prev-n2 { animation: fs-prev-node2 6s linear infinite; }
+.fs-prev-n2 .fs-prev-cue { animation: fs-prev-cue2 6s linear infinite; }
+.fs-prev-n3 { animation: fs-prev-node3 6s linear infinite; }
+.fs-prev-n3 .fs-prev-cue { animation: fs-prev-cue3 6s linear infinite; }
+.fs-prev-n4 { animation: fs-prev-node4 6s linear infinite; }
+.fs-prev-n4 .fs-prev-cue { animation: fs-prev-cue4 6s linear infinite; }
+.fs-prev-n5 { animation: fs-prev-node5 6s linear infinite; }
+.fs-prev-n5 .fs-prev-cue { animation: fs-prev-cue5 6s linear infinite; }
+@keyframes fs-prev-node1 {
+  0%, 2.7%    { background-color:rgba(255,255,255,.02); border-color:rgba(168,85,247,.55); border-width:1px; opacity:1; transform:translate(-50%,-50%) scale(1); }
+  2.8%, 19%  { background-color:rgba(16,185,129,.15); border-color:#10b981; border-width:2px; opacity:1; transform:translate(-50%,-50%) scale(1); }
+  22%, 94.9% { background-color:rgba(16,185,129,.15); border-color:#10b981; border-width:2px; opacity:0; transform:translate(-50%,-50%) scale(1.35); }
+  95%, 100% { background-color:rgba(255,255,255,.02); border-color:rgba(168,85,247,.55); border-width:1px; opacity:1; transform:translate(-50%,-50%) scale(1); }
+}
+@keyframes fs-prev-cue1 { 0%, 2.9% { opacity: 0; } 3%, 19% { opacity: 1; } 19.1%, 100% { opacity: 0; } }
+@keyframes fs-prev-node2 {
+  0%, 19.7%    { background-color:rgba(255,255,255,.02); border-color:rgba(168,85,247,.55); border-width:1px; opacity:1; transform:translate(-50%,-50%) scale(1); }
+  19.8%, 36%  { background-color:rgba(16,185,129,.15); border-color:#10b981; border-width:2px; opacity:1; transform:translate(-50%,-50%) scale(1); }
+  39%, 94.9% { background-color:rgba(16,185,129,.15); border-color:#10b981; border-width:2px; opacity:0; transform:translate(-50%,-50%) scale(1.35); }
+  95%, 100% { background-color:rgba(255,255,255,.02); border-color:rgba(168,85,247,.55); border-width:1px; opacity:1; transform:translate(-50%,-50%) scale(1); }
+}
+@keyframes fs-prev-cue2 { 0%, 19.9% { opacity: 0; } 20%, 36% { opacity: 1; } 36.1%, 100% { opacity: 0; } }
+@keyframes fs-prev-node3 {
+  0%, 36.7%    { background-color:rgba(255,255,255,.02); border-color:rgba(168,85,247,.55); border-width:1px; opacity:1; transform:translate(-50%,-50%) scale(1); }
+  36.8%, 53%  { background-color:rgba(16,185,129,.15); border-color:#10b981; border-width:2px; opacity:1; transform:translate(-50%,-50%) scale(1); }
+  56%, 94.9% { background-color:rgba(16,185,129,.15); border-color:#10b981; border-width:2px; opacity:0; transform:translate(-50%,-50%) scale(1.35); }
+  95%, 100% { background-color:rgba(255,255,255,.02); border-color:rgba(168,85,247,.55); border-width:1px; opacity:1; transform:translate(-50%,-50%) scale(1); }
+}
+@keyframes fs-prev-cue3 { 0%, 36.9% { opacity: 0; } 37%, 53% { opacity: 1; } 53.1%, 100% { opacity: 0; } }
+@keyframes fs-prev-node4 {
+  0%, 53.7%    { background-color:rgba(255,255,255,.02); border-color:rgba(168,85,247,.55); border-width:1px; opacity:1; transform:translate(-50%,-50%) scale(1); }
+  53.8%, 70%  { background-color:rgba(16,185,129,.15); border-color:#10b981; border-width:2px; opacity:1; transform:translate(-50%,-50%) scale(1); }
+  73%, 94.9% { background-color:rgba(16,185,129,.15); border-color:#10b981; border-width:2px; opacity:0; transform:translate(-50%,-50%) scale(1.35); }
+  95%, 100% { background-color:rgba(255,255,255,.02); border-color:rgba(168,85,247,.55); border-width:1px; opacity:1; transform:translate(-50%,-50%) scale(1); }
+}
+@keyframes fs-prev-cue4 { 0%, 53.9% { opacity: 0; } 54%, 70% { opacity: 1; } 70.1%, 100% { opacity: 0; } }
+@keyframes fs-prev-node5 {
+  0%, 70.7%    { background-color:rgba(255,255,255,.02); border-color:rgba(168,85,247,.55); border-width:1px; opacity:1; transform:translate(-50%,-50%) scale(1); }
+  70.8%, 87%  { background-color:rgba(16,185,129,.15); border-color:#10b981; border-width:2px; opacity:1; transform:translate(-50%,-50%) scale(1); }
+  90%, 94.9% { background-color:rgba(16,185,129,.15); border-color:#10b981; border-width:2px; opacity:0; transform:translate(-50%,-50%) scale(1.35); }
+  95%, 100% { background-color:rgba(255,255,255,.02); border-color:rgba(168,85,247,.55); border-width:1px; opacity:1; transform:translate(-50%,-50%) scale(1); }
+}
+@keyframes fs-prev-cue5 { 0%, 70.9% { opacity: 0; } 71%, 87% { opacity: 1; } 87.1%, 100% { opacity: 0; } }
+
+/* A segment lives until the node it leaves is taken. */
+.fs-prev-s1 { animation: fs-prev-seg1 6s linear infinite; }
+@keyframes fs-prev-seg1 { 0%, 19% { opacity: 1; } 19.1%, 94.9% { opacity: 0; } 95%, 100% { opacity: 1; } }
+.fs-prev-s2 { animation: fs-prev-seg2 6s linear infinite; }
+@keyframes fs-prev-seg2 { 0%, 36% { opacity: 1; } 36.1%, 94.9% { opacity: 0; } 95%, 100% { opacity: 1; } }
+.fs-prev-s3 { animation: fs-prev-seg3 6s linear infinite; }
+@keyframes fs-prev-seg3 { 0%, 53% { opacity: 1; } 53.1%, 94.9% { opacity: 0; } 95%, 100% { opacity: 1; } }
+.fs-prev-s4 { animation: fs-prev-seg4 6s linear infinite; }
+@keyframes fs-prev-seg4 { 0%, 70% { opacity: 1; } 70.1%, 94.9% { opacity: 0; } 95%, 100% { opacity: 1; } }
+
+/* Reduced motion. The blanket rule in this file collapses every duration to
+   ~0, which parks a preview on a frame — but this one is fourteen independent
+   animations with fourteen different keyframe sets, and they do not reliably
+   park on the SAME frame: a load can land on segments with no nodes, or a node
+   popping with nothing live. So the still is stated outright instead: the full
+   chain, its route, and the first node live with its cue. */
+@media (prefers-reduced-motion: reduce) {
+  .fs-prev-node, .fs-prev-seg, .fs-prev-cue { animation: none !important; }
+  .fs-prev-n1 {
+    background-color: rgba(16,185,129,.15);
+    border-color: #10b981; border-width: 2px;
+  }
+  .fs-prev-n1 .fs-prev-cue { opacity: 1; }
+}
+
+/* Reduced motion: park the board on its starting position — the full tower on
+   peg 1 — rather than trusting three independent animations to freeze on the
+   same frame, which can leave two disks overlapping mid-move. */
+@media (prefers-reduced-motion: reduce) {
+  .th-prev-track, .th-prev-disk { animation: none !important; }
+  .th-prev-t1 { transform: translate(-32%, -43.2%); }
+  .th-prev-t2 { transform: translate(-32%, -21.6%); }
+  .th-prev-t3 { transform: translate(-32%, 0%); }
+}
+
 /* ── empty state ─────────────────────────────────────────── */
 .empty-block { text-align: center; padding: 22px 16px; border: 1px dashed var(--line); border-radius: 14px; margin-top: 6px; }
 .empty-block .ic { width: 38px; height: 38px; border-radius: 50%; background: var(--card-raised); display: flex; align-items: center; justify-content: center; margin: 0 auto 10px; color: var(--text-faint); }

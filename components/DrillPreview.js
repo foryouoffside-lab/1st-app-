@@ -19,6 +19,7 @@ import MultiTaskingPreview from './drill-previews/MultiTaskingPreview';
 import ShadeFinderPreview from './drill-previews/ShadeFinderPreview';
 import TowerOfHanoiPreview from './drill-previews/TowerOfHanoiPreview';
 import ConcentrationGridPreview from './drill-previews/ConcentrationGridPreview';
+import FingerSequencingPreview from './drill-previews/FingerSequencingPreview';
 
 const ANIMATED = {
   'grid-memorization': GridMemorizationPreview,
@@ -30,6 +31,7 @@ const ANIMATED = {
   'shade-finder': ShadeFinderPreview,
   'tower-of-hanoi': TowerOfHanoiPreview,
   'concentration-grid': ConcentrationGridPreview,
+  'finger-sequencing': FingerSequencingPreview,
 };
 
 export function hasAnimatedPreview(id) {
