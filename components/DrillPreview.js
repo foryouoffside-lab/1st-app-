@@ -17,6 +17,7 @@ import QuickDodgePreview from './drill-previews/QuickDodgePreview';
 import DistractionFighterPreview from './drill-previews/DistractionFighterPreview';
 import MultiTaskingPreview from './drill-previews/MultiTaskingPreview';
 import ShadeFinderPreview from './drill-previews/ShadeFinderPreview';
+import TowerOfHanoiPreview from './drill-previews/TowerOfHanoiPreview';
 
 const ANIMATED = {
   'grid-memorization': GridMemorizationPreview,
@@ -26,6 +27,7 @@ const ANIMATED = {
   'distraction-fighter': DistractionFighterPreview,
   'multi-tasking': MultiTaskingPreview,
   'shade-finder': ShadeFinderPreview,
+  'tower-of-hanoi': TowerOfHanoiPreview,
 };
 
 export function hasAnimatedPreview(id) {

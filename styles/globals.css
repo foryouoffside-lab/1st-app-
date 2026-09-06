@@ -1104,6 +1104,127 @@ h1, h2, h3 {
   83.01%, 100% { background-color: hsl(190, 75%, 59%); transform: scale(1); }
 }
 
+/* Tower of Hanoi — the drill's opening board solving itself: three disks, the
+   seven-move optimal sequence, one legal move at a time, then the completed
+   tower on peg 3 and a reload. Disks are the drill's first three DISK_SKINS
+   (violet, indigo, blue up the stack) built as its Disk component builds them —
+   flat fill, lighter rim, coloured glow, no gloss — at getDiskWidth's 36→132px
+   proportions; pegs and bases are its own posts and capsules. The board keeps
+   the drill's shape: the peg area is about 3.1x as wide as it is tall.
+   The drill re-renders a moved disk straight onto its new peg; here it is
+   carried across, because on a thumbnail an instant jump reads as a glitch
+   rather than as a move — 0.56s of the 8s loop per move, so the board is at
+   rest more often than not and the reduced-motion still is likely to catch a
+   settled position. Labels and the moves/par counter are chrome, so they are
+   not here. */
+.th-prev {
+  position: absolute; inset: 0; display: flex;
+  align-items: center; justify-content: center;
+  background:
+    radial-gradient(ellipse 74% 60% at 50% 44%, rgba(139,92,246,.13), transparent 72%),
+    #050508;
+  overflow: hidden;
+  container-type: size;
+}
+.th-prev::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
+  background-size: 15px 15px;
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 60%);
+          mask-image: linear-gradient(180deg, transparent, #000 60%);
+}
+/* The peg area. Every offset below is a % of this box: x of its width, y of
+   its height, exactly as the drill's own geometry is. */
+.th-prev-board {
+  position: relative; z-index: 1;
+  width: 76%; aspect-ratio: 3.1 / 1;
+  transform: translateY(-4%);   /* room for the bases below, clear of the play row */
+}
+.th-prev-peg {
+  position: absolute; bottom: 0; width: 2.7%; height: 100%;
+  transform: translateX(-50%);
+  border-radius: 999px 999px 0 0;
+  background: linear-gradient(135deg, #3a3a46 0%, #1c1c24 100%);
+}
+.th-prev-base {
+  position: absolute; top: 104%; height: 10.3%; width: 26%;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.1);
+  background: linear-gradient(135deg, #2c2c36 0%, #111116 100%);
+}
+.th-prev-p1 { left: 18%; }
+.th-prev-p2 { left: 50%; }
+.th-prev-p3 { left: 82%; }
+
+/* One full-board track per disk, so a move is a single translate. */
+.th-prev-track { position: absolute; inset: 0; will-change: transform; }
+.th-prev-disk {
+  position: absolute; left: 50%; bottom: 0;
+  height: 19%;                        /* the drill's 22px disk on its 116px peg */
+  transform: translateX(-50%);
+  border-radius: 2px; border-radius: 2cqmin;
+  border: 1px solid;
+}
+.th-prev-d1 { width: 9%;    background: #8b5cf6; border-color: #a78bfa; box-shadow: 0 0 4px rgba(139,92,246,.5); }
+.th-prev-d2 { width: 20.5%; background: #6366f1; border-color: #818cf8; box-shadow: 0 0 4px rgba(99,102,241,.5); }
+.th-prev-d3 { width: 32%;   background: #3b82f6; border-color: #60a5fa; box-shadow: 0 0 4px rgba(59,130,246,.5); }
+
+/* Peg centres sit at ±32% of the board from the middle one; the stack slots are
+   21.6% of the board's height apart (the drill's 25px pitch on its 116px peg),
+   and a lifted disk clears the tallest stack at -72%. */
+.th-prev-t1 { animation: th-prev-m1 8s ease-in-out infinite; }
+.th-prev-t2 { animation: th-prev-m2 8s ease-in-out infinite; }
+.th-prev-t3 { animation: th-prev-m3 8s ease-in-out infinite; }
+.th-prev-disk { animation: th-prev-reload 8s linear infinite; }
+
+/* Smallest disk: moves 1, 3, 5 and 7 of the sequence. */
+@keyframes th-prev-m1 {
+  0%, 3%      { transform: translate(-32%, -43.2%); }
+  5.5%        { transform: translate(-32%, -72%); }
+  8%          { transform: translate(32%, -72%); }
+  10%, 27%    { transform: translate(32%, 0%); }
+  29.5%       { transform: translate(32%, -72%); }
+  32%         { transform: translate(0%, -72%); }
+  34%, 51%    { transform: translate(0%, -21.6%); }
+  53.5%       { transform: translate(0%, -72%); }
+  56%         { transform: translate(-32%, -72%); }
+  58%, 75%    { transform: translate(-32%, 0%); }
+  77.5%       { transform: translate(-32%, -72%); }
+  80%         { transform: translate(32%, -72%); }
+  82%, 95.4%  { transform: translate(32%, -43.2%); }
+  95.5%, 100% { transform: translate(-32%, -43.2%); }
+}
+/* Middle disk: moves 2 and 6. */
+@keyframes th-prev-m2 {
+  0%, 15%     { transform: translate(-32%, -21.6%); }
+  17.5%       { transform: translate(-32%, -72%); }
+  20%         { transform: translate(0%, -72%); }
+  22%, 63%    { transform: translate(0%, 0%); }
+  65.5%       { transform: translate(0%, -72%); }
+  68%         { transform: translate(32%, -72%); }
+  70%, 95.4%  { transform: translate(32%, -21.6%); }
+  95.5%, 100% { transform: translate(-32%, -21.6%); }
+}
+/* Largest disk: move 4, the one the whole sequence exists to make legal. */
+@keyframes th-prev-m3 {
+  0%, 39%     { transform: translate(-32%, 0%); }
+  41.5%       { transform: translate(-32%, -72%); }
+  44%         { transform: translate(32%, -72%); }
+  46%, 95.4%  { transform: translate(32%, 0%); }
+  95.5%, 100% { transform: translate(-32%, 0%); }
+}
+/* Tower complete: hold it, then reload the board — which is what the drill does
+   on a clear (its completion flash is one of the blank ones). The disks are
+   invisible over the reset, so the jump back to peg 1 is never seen. */
+@keyframes th-prev-reload {
+  0%, 92%     { opacity: 1; }
+  95%, 96.9%  { opacity: 0; }
+  100%        { opacity: 1; }
+}
+
 /* ── empty state ─────────────────────────────────────────── */
 .empty-block { text-align: center; padding: 22px 16px; border: 1px dashed var(--line); border-radius: 14px; margin-top: 6px; }
 .empty-block .ic { width: 38px; height: 38px; border-radius: 50%; background: var(--card-raised); display: flex; align-items: center; justify-content: center; margin: 0 auto 10px; color: var(--text-faint); }
