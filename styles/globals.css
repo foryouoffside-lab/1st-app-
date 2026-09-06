@@ -1031,6 +1031,79 @@ h1, h2, h3 {
   68.1%, 100%   { opacity: 0; color: #60a5fa; text-shadow: 0 0 .62em #60a5fa;
                   transform: translate(-50%, -50%) scale(1.2); }
 }
+/* Shade Finder — the drill's 7x7 board. One hue for every cell and one cell
+   nine lightness points off it, exactly as spawnRound builds a round (random
+   hue, S 65-85%, L 40-60%, SHADE_DELTA = 9); the odd cell presses in with the
+   drill's active:scale-[0.93], the board re-rolls into a new hue with the odd
+   one somewhere else, and that one is found too. Two rounds in 6s is the
+   drill's own opening pace (WINDOW_START_MS = 3000). Panel, hairline, cell
+   radius and gap are the drill's. Nothing marks the found cell — the drill
+   marks nothing; the press and the re-roll are the whole confirmation. */
+.sf-prev {
+  position: absolute; inset: 0; display: flex;
+  align-items: center; justify-content: center;
+  background:
+    radial-gradient(ellipse 72% 58% at 50% 42%, rgba(139,92,246,.13), transparent 72%),
+    #050508;
+  overflow: hidden;
+  container-type: size;
+}
+.sf-prev::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
+  background-size: 15px 15px;
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 60%);
+          mask-image: linear-gradient(180deg, transparent, #000 60%);
+}
+.sf-prev-board {
+  position: relative; z-index: 1;
+  height: 68%; aspect-ratio: 1 / 1;
+  padding: 2.9%;
+  border-radius: 6.3%;
+  background: rgba(12,12,22,.7);
+  border: 1px solid rgba(255,255,255,.05);
+  box-shadow: 0 12px 26px rgba(0,0,0,.5);
+  transform: translateY(15%);  /* clear under the difficulty pill, above the play row */
+}
+.sf-prev-grid {
+  display: grid; width: 100%; height: 100%;
+  grid-template-columns: repeat(7, 1fr);
+  grid-template-rows: repeat(7, 1fr);
+  /* The drill's gap is 4px on a ~330px board (1.2%). Held wider here: at a
+     60-100px board a 1.2% gap is under a device pixel, so 1fr rounding drops
+     some of the lines entirely and the rows visibly merge. */
+  gap: 2.4%;
+}
+.sf-prev-cell {
+  border-radius: 13%;
+  animation: sf-prev-roll 6s linear infinite;
+}
+/* Round 1 hue, then round 2's — a hard step, because the drill replaces the
+   whole board in one setGridCells. */
+@keyframes sf-prev-roll {
+  0%, 46.99% { background-color: hsl(265, 72%, 52%); }
+  47%, 100%  { background-color: hsl(190, 75%, 48%); }
+}
+/* The odd cell of round 1: nine points lighter, pressed at 30%, and an
+   ordinary cell again once the board re-rolls. */
+.sf-prev-odd1 { animation: sf-prev-odd1 6s linear infinite; }
+@keyframes sf-prev-odd1 {
+  0%, 29.99%  { background-color: hsl(265, 72%, 61%); transform: scale(1); }
+  30%, 33%    { background-color: hsl(265, 72%, 61%); transform: scale(.93); }
+  33.01%, 46.99% { background-color: hsl(265, 72%, 61%); transform: scale(1); }
+  47%, 100%   { background-color: hsl(190, 75%, 48%); transform: scale(1); }
+}
+/* And round 2's, which spends round 1 as an ordinary cell. */
+.sf-prev-odd2 { animation: sf-prev-odd2 6s linear infinite; }
+@keyframes sf-prev-odd2 {
+  0%, 46.99%  { background-color: hsl(265, 72%, 52%); transform: scale(1); }
+  47%, 79.99% { background-color: hsl(190, 75%, 59%); transform: scale(1); }
+  80%, 83%    { background-color: hsl(190, 75%, 59%); transform: scale(.93); }
+  83.01%, 100% { background-color: hsl(190, 75%, 59%); transform: scale(1); }
+}
+
 /* ── empty state ─────────────────────────────────────────── */
 .empty-block { text-align: center; padding: 22px 16px; border: 1px dashed var(--line); border-radius: 14px; margin-top: 6px; }
 .empty-block .ic { width: 38px; height: 38px; border-radius: 50%; background: var(--card-raised); display: flex; align-items: center; justify-content: center; margin: 0 auto 10px; color: var(--text-faint); }
