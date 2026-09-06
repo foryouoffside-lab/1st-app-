@@ -897,6 +897,140 @@ h1, h2, h3 {
 @keyframes df-prev-show1 { 0%, 47% { opacity: 1; } 48%, 100% { opacity: 0; } }
 @keyframes df-prev-show2 { 0%, 47% { opacity: 0; } 48%, 100% { opacity: 1; } }
 
+/* Multi-Tasking (Dual Target Flow) — the drill's two lanes streaming outward
+   from its violet seam. Glyphs are the drill's own SHAPES, drawn as mountShape
+   draws them (sans-serif, #d1d5db, centred on their point) and flying its exact
+   paths — left 50%→-8%, right 42%→108% of the field, linear, expiring off the
+   edge. One target per lane gets tapped and takes the drill's 150ms hit: blue-
+   400, its `0 0 20px` glow, scale(1.2), gone. No target readout: that is HUD.
+   Eight flights, one every eighth of the loop alternating lanes exactly as the
+   drill's single spawn timer does, so ~3 are in the air at any frame — the
+   reduced-motion still included. Glyphs run a little larger than the drill's
+   8% of the short side; at 100px of thumb its own size is a speck. */
+.dt-prev {
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(ellipse 76% 60% at 50% 45%, rgba(139,92,246,.13), transparent 72%),
+    #050508;
+  overflow: hidden;
+  container-type: size;
+}
+.dt-prev::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
+  background-size: 15px 15px;
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 60%);
+          mask-image: linear-gradient(180deg, transparent, #000 60%);
+}
+/* The drill's centre divider, hairline for hairline. */
+.dt-prev-seam {
+  position: absolute; top: 0; left: 50%; width: 1px; height: 100%; z-index: 2;
+  background: linear-gradient(180deg, transparent, rgba(139,92,246,.3), transparent);
+}
+/* Flight layer: full-field, so its translate % resolves against the field. */
+.dt-prev-fly { position: absolute; inset: 0; z-index: 1; will-change: transform; }
+.dt-prev-g {
+  position: absolute; left: 0; display: block; line-height: 1;
+  font-family: sans-serif; font-style: normal;
+  font-size: 17px; font-size: 15cqmin;
+  color: #d1d5db;
+  transform: translate(-50%, -50%);
+}
+/* Lane rows, clear of the difficulty pill up top and of the play button and
+   duration chip along the bottom. */
+.dt-prev-l1 .dt-prev-g { top: 32%; }
+.dt-prev-l2 .dt-prev-g { top: 56%; }
+.dt-prev-l3 .dt-prev-g { top: 70%; }
+.dt-prev-l4 .dt-prev-g { top: 42%; }
+.dt-prev-r1 .dt-prev-g { top: 68%; }
+.dt-prev-r2 .dt-prev-g { top: 34%; }
+.dt-prev-r3 .dt-prev-g { top: 58%; }
+.dt-prev-r4 .dt-prev-g { top: 44%; }
+
+.dt-prev-l1 { animation: dt-prev-l1 6s linear infinite; }
+.dt-prev-l2 { animation: dt-prev-l2 6s linear infinite; }
+.dt-prev-l3 { animation: dt-prev-l3 6s linear infinite; }
+.dt-prev-l4 { animation: dt-prev-l4 6s linear infinite; }
+.dt-prev-r1 { animation: dt-prev-r1 6s linear infinite; }
+.dt-prev-r2 { animation: dt-prev-r2 6s linear infinite; }
+.dt-prev-r3 { animation: dt-prev-r3 6s linear infinite; }
+.dt-prev-r4 { animation: dt-prev-r4 6s linear infinite; }
+
+/* Left lane: spawn on the seam, run out past the left edge, then hold off-field
+   until the next spawn — so the jump back to the seam is never seen; it reads
+   as the next spawn, which is what it is. */
+@keyframes dt-prev-l1 {           /* spawns at 0% */
+  0%          { transform: translateX(50%); }
+  42%, 100%   { transform: translateX(-8%); }
+}
+@keyframes dt-prev-l2 {           /* spawns at 25%, tapped mid-lane */
+  0%, 24.99%  { transform: translateX(-8%); }
+  25%         { transform: translateX(50%); }
+  67%, 100%   { transform: translateX(-8%); }
+}
+@keyframes dt-prev-l3 {           /* spawns at 50% */
+  0%, 49.99%  { transform: translateX(-8%); }
+  50%         { transform: translateX(50%); }
+  92%, 100%   { transform: translateX(-8%); }
+}
+@keyframes dt-prev-l4 {           /* spawned at 75%, still in flight at 0% */
+  0%          { transform: translateX(15.5%); }
+  17%, 74.99% { transform: translateX(-8%); }
+  75%         { transform: translateX(50%); }
+  100%        { transform: translateX(15.5%); }
+}
+/* Right lane, mirrored — the drill starts these just inside the seam and runs
+   them out past the right edge. */
+@keyframes dt-prev-r1 {           /* spawns at 12.5% */
+  0%, 12.49%   { transform: translateX(108%); }
+  12.5%        { transform: translateX(42%); }
+  54.5%, 100%  { transform: translateX(108%); }
+}
+@keyframes dt-prev-r2 {           /* spawns at 37.5%, tapped mid-lane */
+  0%, 37.49%   { transform: translateX(108%); }
+  37.5%        { transform: translateX(42%); }
+  79.5%, 100%  { transform: translateX(108%); }
+}
+@keyframes dt-prev-r3 {           /* spawned at 62.5%, leaving the field at 0% */
+  0%           { transform: translateX(100.9%); }
+  4.5%, 62.49% { transform: translateX(108%); }
+  62.5%        { transform: translateX(42%); }
+  100%         { transform: translateX(100.9%); }
+}
+@keyframes dt-prev-r4 {           /* spawned at 87.5%, still in flight at 0% */
+  0%            { transform: translateX(61.6%); }
+  29.5%, 87.49% { transform: translateX(108%); }
+  87.5%         { transform: translateX(42%); }
+  100%          { transform: translateX(61.6%); }
+}
+
+/* The tap. The drill recolours the glyph, glows it, scales it 1.2 and removes
+   the shape 150ms later. Held ~330ms here instead: at 150ms the flash is two
+   frames of a thumbnail nobody is staring at, and the hit is the point of the
+   loop. Opacity 0 between flights so a shape that has been taken never
+   reappears before its next spawn. */
+.dt-prev-l2 .dt-prev-hit { animation: dt-prev-tap-l 6s linear infinite; }
+.dt-prev-r2 .dt-prev-hit { animation: dt-prev-tap-r 6s linear infinite; }
+@keyframes dt-prev-tap-l {
+  0%, 24.99%  { opacity: 0; }
+  25%, 49.99% { opacity: 1; color: #d1d5db; text-shadow: none;
+                transform: translate(-50%, -50%) scale(1); }
+  50%, 55.5%  { opacity: 1; color: #60a5fa; text-shadow: 0 0 .62em #60a5fa;
+                transform: translate(-50%, -50%) scale(1.2); }
+  55.6%, 100% { opacity: 0; color: #60a5fa; text-shadow: 0 0 .62em #60a5fa;
+                transform: translate(-50%, -50%) scale(1.2); }
+}
+@keyframes dt-prev-tap-r {
+  0%, 37.49%    { opacity: 0; }
+  37.5%, 62.49% { opacity: 1; color: #d1d5db; text-shadow: none;
+                  transform: translate(-50%, -50%) scale(1); }
+  62.5%, 68%    { opacity: 1; color: #60a5fa; text-shadow: 0 0 .62em #60a5fa;
+                  transform: translate(-50%, -50%) scale(1.2); }
+  68.1%, 100%   { opacity: 0; color: #60a5fa; text-shadow: 0 0 .62em #60a5fa;
+                  transform: translate(-50%, -50%) scale(1.2); }
+}
 /* ── empty state ─────────────────────────────────────────── */
 .empty-block { text-align: center; padding: 22px 16px; border: 1px dashed var(--line); border-radius: 14px; margin-top: 6px; }
 .empty-block .ic { width: 38px; height: 38px; border-radius: 50%; background: var(--card-raised); display: flex; align-items: center; justify-content: center; margin: 0 auto 10px; color: var(--text-faint); }

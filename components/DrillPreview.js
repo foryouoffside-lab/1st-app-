@@ -15,6 +15,7 @@ import MovingTargetPreview from './drill-previews/MovingTargetPreview';
 import CardMatchingPreview from './drill-previews/CardMatchingPreview';
 import QuickDodgePreview from './drill-previews/QuickDodgePreview';
 import DistractionFighterPreview from './drill-previews/DistractionFighterPreview';
+import MultiTaskingPreview from './drill-previews/MultiTaskingPreview';
 
 const ANIMATED = {
   'grid-memorization': GridMemorizationPreview,
@@ -22,6 +23,7 @@ const ANIMATED = {
   'card-matching': CardMatchingPreview,
   'quick-dodge': QuickDodgePreview,
   'distraction-fighter': DistractionFighterPreview,
+  'multi-tasking': MultiTaskingPreview,
 };
 
 export function hasAnimatedPreview(id) {
