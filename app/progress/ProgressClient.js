@@ -8,9 +8,8 @@ import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import AvatarEditor from 'react-avatar-editor';
 import {
-  BarChart3, Trophy, Flame, Zap, Target, Star,
-  Trash2, Volume2, VolumeOff, ChevronRight, Award,
-  LogOut, User, ShieldAlert, Camera, FileText
+  Volume2, VolumeOff, ChevronRight, LogOut, ShieldAlert, Camera,
+  FileText
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { doc, updateDoc } from 'firebase/firestore';
@@ -41,7 +40,6 @@ export default function ProgressClient() {
   const [sessions, setSessions] = useState(0);
   const [drillsP,  setDrillsP]  = useState(0);
   const [bestCombo, setBestCombo] = useState(0);
-  const [topScores,setTopScores]= useState([]);
   const [sound,    setSound]    = useState(true);
   const [cleared,  setCleared]  = useState(false);
 
@@ -70,7 +68,6 @@ export default function ProgressClient() {
       setStreak(s);
       setSessions(sess);
       setDrillsP(dp);
-      setTopScores(ts);
       setSound(settings.soundEnabled ?? true);
 
       // Load guest name
@@ -442,7 +439,7 @@ export default function ProgressClient() {
       <div className="px-4 pt-0 max-w-lg mx-auto space-y-6">
 
         {/* ── Page Title ── */}
-        <h1 className="text-2xl font-black text-white">Your Progress</h1>
+        <h1 className="font-display text-[28px] text-white">Your Progress</h1>
 
         {/* ── Profile Hero ── */}
         <div className="p-hero">
@@ -626,20 +623,11 @@ export default function ProgressClient() {
               </button>
             )}
 
-            {/* Reset Settings */}
-            <button 
-              onClick={() => {
-                if (confirm("Reset device preferences? This will reset your sound settings.")) {
-                  localStorage.removeItem('sd_settings');
-                  setCleared(c => !c);
-                }
-              }}
-              className="w-full text-left acct-row cursor-pointer hover:bg-white/[0.02]"
-            >
-              <Trash2 className="w-4 h-4 text-neutral-500" />
-              <span>Reset Device Settings</span>
-              <ChevronRight className="chev" />
-            </button>
+            {/* "Reset Device Settings" removed. The only preference it
+                cleared was the sound setting, which already has its own
+                dedicated toggle — so the row was a second, more alarming way
+                to do something the switch above does directly, sitting in a
+                confirm() dialog next to the real destructive action. */}
 
             {/* Legal */}
             <Link href="/privacy" className="w-full text-left acct-row cursor-pointer hover:bg-white/[0.02]">
@@ -664,10 +652,27 @@ export default function ProgressClient() {
           </button>
         </div>
 
-        {/* App metadata */}
+        {/* App metadata.
+            "SkillDrills Pro" was the last user-visible survivor of the old
+            name — the launcher label, capacitor.config.js and the store
+            listing all say "SkillDrills", and a name that doesn't match the
+            listing is the sort of thing that gets queried in review.
+
+            The claims underneath it are gone, because they were not true and
+            not checkable:
+              - "All data encrypted locally on your device" — solo progress
+                goes to SharedPreferences via @capacitor/preferences, which is
+                plain XML. Android encrypts the whole filesystem at the OS
+                level, but that is the OS doing it for every app, not
+                something this app implements, and claiming it as a feature is
+                a security claim we cannot stand behind.
+              - "Privacy-focused calibration" means nothing.
+            What replaced them is only what the code actually does: solo
+            progress is stored on-device (see lib/progressStore.js), and the
+            account data that does leave the device is listed plainly. */}
         <div className="text-center py-4 text-[10px] text-neutral-600 space-y-1">
-          <p>SkillDrills Pro · All data encrypted locally on your device</p>
-          <p>No cross-site tracking · Privacy-focused calibration</p>
+          <p>SkillDrills · Your drill progress stays on this device</p>
+          <p>Only your name, photo and Arena record are stored online</p>
         </div>
 
       </div>

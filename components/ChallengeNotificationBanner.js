@@ -3,14 +3,20 @@
 import React, { useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useChallenge } from '../contexts/ChallengeContext';
+import { isInviteFresh } from '../lib/challengeEngine';
 import { useRouter } from 'next/navigation';
-import { X, Play, LogOut, Swords } from 'lucide-react';
+import { X, Play, Swords } from 'lucide-react';
 
 export default function ChallengeNotificationBanner() {
   const { user } = useAuth();
   const { incomingChallenges, acceptChallenge, declineChallenge } = useChallenge();
   const router = useRouter();
-  const activeChallenge = incomingChallenges[0] || null;
+  // Only ever offer an invite that's still worth answering. Pending invites
+  // linger in Firestore for 20 minutes before the stale sweep collects them
+  // (STALE_CHALLENGE_MS), so without this an invite from long ago popped up
+  // as a live "wants to duel" card — and accepting it dropped the player into
+  // a lobby against someone who had closed the app ages before.
+  const activeChallenge = incomingChallenges.find(isInviteFresh) || null;
   const announcedRef = useRef(new Set());
 
   useEffect(() => {
@@ -51,8 +57,12 @@ export default function ChallengeNotificationBanner() {
       // Route player directly to the game with challengeId parameter
       router.push(`/drills/${activeChallenge.drillSlug}?challengeId=${activeChallenge.id}`);
     } catch (e) {
+      if (e?.code === 'arena/locked-out' || e?.code === 'challenge/taken' || e?.code === 'challenge/expired') {
+        alert(e.message);
+        return;
+      }
       console.error(e);
-      alert(e?.code === 'arena/locked-out' ? e.message : "Failed to accept challenge. The challenge may have expired or been cancelled.");
+      alert("Failed to accept challenge. The challenge may have expired or been cancelled.");
     }
   };
 
@@ -68,48 +78,67 @@ export default function ChallengeNotificationBanner() {
   if (!activeChallenge) return null;
 
   return (
-    <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-[9999] w-full max-w-md px-4 pointer-events-none">
-      <div className="bg-neutral-900/95 border-2 border-purple-500/80 shadow-[0_0_25px_rgba(168,85,247,0.3)] backdrop-blur-md rounded-2xl p-4 flex items-center justify-between gap-4 pointer-events-auto animate-bounce-short">
-        <div className="flex items-center gap-3">
-          <div className="relative shrink-0">
-            {activeChallenge.fromPhoto ? (
-              <img 
-                src={activeChallenge.fromPhoto} 
-                alt={activeChallenge.fromName} 
-                className="w-11 h-11 rounded-full border border-purple-500"
-              />
-            ) : (
-              <div className="w-11 h-11 rounded-full bg-purple-900/60 flex items-center justify-center border border-purple-500">
-                <Swords className="w-5 h-5 text-purple-400" />
-              </div>
-            )}
-            <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-neutral-900 rounded-full animate-ping"></span>
-            <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-neutral-900 rounded-full"></span>
-          </div>
-          
-          <div>
-            <h4 className="text-sm font-bold text-white flex items-center gap-1.5">
-              <span>{activeChallenge.fromName}</span>
-              <span className="text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 py-0.5 rounded-full font-normal">CHALLENGE</span>
-            </h4>
-            <p className="text-xs text-neutral-400">wants to duel in <strong className="text-purple-300">{activeChallenge.drillName}</strong></p>
-          </div>
+    <div
+      className="fixed left-1/2 z-[9999] w-full max-w-md -translate-x-1/2 px-3 pointer-events-none"
+      style={{ top: 'calc(12px + env(safe-area-inset-top))' }}
+    >
+      {/* Card colour matches the Arena's own cards (#12131c) instead of the
+          translucent neutral-900 this used to be: over the app's near-black
+          ground that washed out into a flat grey slab that looked like a
+          different app's component. One purple ring + one soft glow carries
+          the "this is a duel" signal; the backdrop-blur is gone (it bought
+          nothing over an opaque card and cost a compositor pass on every
+          frame it was on screen). */}
+      <div className="pointer-events-auto flex items-center gap-3 rounded-2xl border border-purple-500/40 bg-[#12131c] p-3 shadow-[0_8px_30px_rgba(0,0,0,.55),0_0_20px_rgba(168,85,247,.12)]">
+        <div className="relative shrink-0">
+          {activeChallenge.fromPhoto ? (
+            <img
+              src={activeChallenge.fromPhoto}
+              alt={activeChallenge.fromName}
+              referrerPolicy="no-referrer"
+              className="h-11 w-11 rounded-full border border-purple-500/40 object-cover"
+            />
+          ) : (
+            <div className="flex h-11 w-11 items-center justify-center rounded-full border border-purple-500/40 bg-purple-600/15">
+              <Swords className="h-5 w-5 text-purple-300" />
+            </div>
+          )}
+          {/* Static dot. The old one was two stacked spans, the upper running
+              `animate-ping` forever — a permanently animating layer on a card
+              that can sit on screen for the full two-minute invite TTL. */}
+          <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-[#12131c] bg-emerald-500" />
         </div>
 
-        <div className="flex items-center gap-2">
+        {/* min-w-0 is load-bearing: without it a long display name refuses to
+            shrink and pushes the buttons off the card. That is what made the
+            old banner wrap "For You" onto its own line and split the drill
+            name across two more. */}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-sm font-black text-white">{activeChallenge.fromName}</span>
+            <span className="shrink-0 rounded-full border border-purple-500/30 bg-purple-500/15 px-1.5 py-px text-[9px] font-black uppercase tracking-wider text-purple-300">
+              Challenge
+            </span>
+          </div>
+          {/* Just the drill. "wants to duel in" was a sentence wrapped around
+              the only word here that carries information. */}
+          <p className="mt-0.5 truncate text-xs font-bold text-purple-300">{activeChallenge.drillName}</p>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1.5">
           <button
             onClick={handleDecline}
-            className="p-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-white rounded-xl transition duration-200"
-            title="Decline"
+            className="flex h-9 w-9 items-center justify-center rounded-xl text-neutral-500 transition hover:bg-white/5 hover:text-neutral-300 active:scale-95"
+            aria-label="Decline duel"
           >
-            <X className="w-5 h-5" />
+            <X className="h-4 w-4" />
           </button>
-          
+
           <button
             onClick={handleAccept}
-            className="flex items-center gap-1.5 px-3 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-purple-500/10 transition duration-200"
+            className="flex items-center gap-1.5 rounded-xl bg-violet-600 px-3.5 py-2.5 text-xs font-black text-white transition hover:bg-violet-500 active:scale-95"
           >
-            <Play className="w-3.5 h-3.5 fill-white" />
+            <Play className="h-3.5 w-3.5 fill-white" />
             Accept
           </button>
         </div>

@@ -1,5 +1,5 @@
 import './../styles/globals.css';
-import { Inter, Space_Grotesk } from 'next/font/google';
+import { Inter, Anton, IBM_Plex_Mono } from 'next/font/google';
 import AppShellClient from '../components/AppShellClient';
 import { AuthProvider } from '../contexts/AuthContext';
 import AuthGate from '../components/AuthGate';
@@ -11,10 +11,19 @@ const inter = Inter({
   adjustFontFallback: true,
 });
 
-const spaceGrotesk = Space_Grotesk({
+const anton = Anton({
   subsets: ['latin'],
-  variable: '--font-space-grotesk',
+  weight: '400',
+  variable: '--font-anton',
   fallback: ['system-ui', 'arial'],
+  adjustFontFallback: true,
+});
+
+const ibmPlexMono = IBM_Plex_Mono({
+  subsets: ['latin'],
+  weight: ['500', '600', '700'],
+  variable: '--font-mono',
+  fallback: ['ui-monospace', 'monospace'],
   adjustFontFallback: true,
 });
 
@@ -40,13 +49,15 @@ export const viewport = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en" className={`${inter.variable} ${spaceGrotesk.variable} scroll-smooth`}>
+    <html lang="en" className={`${inter.variable} ${anton.variable} ${ibmPlexMono.variable} scroll-smooth`}>
       <head>
-        {/* Preconnect for Google Fonts, used by the app UI itself */}
-        <link rel="dns-prefetch" href="//fonts.googleapis.com" />
-        <link rel="dns-prefetch" href="//fonts.gstatic.com" />
-        <link rel="preconnect" href="https://fonts.googleapis.com" crossOrigin="anonymous" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        {/* No Google Fonts preconnect here on purpose. next/font SELF-HOSTS
+            Inter, Anton and IBM Plex Mono into /_next/static/media at build time, so
+            nothing is ever fetched from fonts.googleapis.com or
+            fonts.gstatic.com — these four hints only opened connections to
+            hosts the app never talks to, which in an offline-capable WebView
+            app is pure cost. The real font hints are the rel=preload tags
+            injected into every exported page by scripts/preload-fonts.js. */}
 
         {/* Favicon & Icons */}
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -60,8 +71,12 @@ export default function RootLayout({ children }) {
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <meta name="apple-mobile-web-app-title" content="SkillDrills" />
 
-        {/* Preload critical image */}
-        <link rel="preload" href="/icons/icon-512x512.png" as="image" type="image/png" />
+        {/* No image preload here on purpose. icon-512x512.png is referenced
+            only by manifest.json (the PWA install icon) and is never rendered,
+            so preloading it fetched and decoded 90KB on every single page load
+            and then threw it away — the WebView logged "preloaded but not used"
+            on every route. Native builds get their launcher icon from Android,
+            not from this tag. */}
       </head>
       <body className={`${inter.className} antialiased`}>
         <main id="main-content">

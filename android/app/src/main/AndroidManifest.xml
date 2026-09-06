@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <application
         android:allowBackup="true"
@@ -11,13 +12,28 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 
+        <!--
+          screenOrientation=portrait is the app-wide DEFAULT, not a ban on
+          rotating. It used to be "fullSensor", which let every screen follow
+          the accelerometer — so the sign-in screen, the home hub, Arena and
+          Progress all swung into landscape if the phone tilted, and none of
+          them have a landscape layout. The login screen rotating while you
+          are trying to tap "Continue with Google" is what this fixes.
+
+          The 16 landscape drills are unaffected: they call
+          ScreenOrientation.lock('landscape') on entry (lib/orientation.js),
+          and a runtime setRequestedOrientation() overrides whatever the
+          manifest says. This value only decides what the app does when
+          nothing has asked for something else — and everywhere that is true,
+          portrait is the only layout that exists.
+        -->
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
             android:name=".MainActivity"
             android:label="@string/title_activity_main"
             android:theme="@style/AppTheme.NoActionBarLaunch"
             android:launchMode="singleTask"
-            android:screenOrientation="fullSensor"
+            android:screenOrientation="portrait"
             android:exported="true">
 
             <intent-filter>
@@ -42,4 +58,24 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!--
+      Firebase Analytics (play-services-measurement) merges in the advertising
+      ID permissions by default. This app has no ads, no ad SDK and no ad
+      attribution, so it has no use for them — and leaving them in would mean
+      answering "yes" to Play Console's advertising-ID question and carrying
+      the matching Data Safety declaration for data the app never touches.
+      Removing them here lets that answer be a straight "no".
+
+      Analytics itself is unaffected: it keeps working off the Firebase
+      app-instance ID. Only ad attribution, which this app does not do, needs
+      these. Delete this block if an ad SDK is ever added — and update the
+      Play declarations in the same change.
+    -->
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID"
+        tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_AD_ID"
+        tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_ATTRIBUTION"
+        tools:node="remove" />
 </manifest>

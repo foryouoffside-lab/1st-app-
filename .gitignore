@@ -4,6 +4,7 @@ node_modules/
 
 # Build outputs
 .next/
+.next-diag/
 .next-build/
 out/
 build/
@@ -20,6 +21,9 @@ dist/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+# firebase-tools writes firebase-debug.log / firestore-debug.log into the repo
+# root on every deploy; they carry project ids and command history.
+*.log
 
 # Runtime data
 pids
@@ -53,3 +57,5 @@ coverage/
 Thumbs.db
 # Graphify knowledge graph output
 graphify-out/
+.next-previews/
+previews-raw/

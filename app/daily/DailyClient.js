@@ -3,86 +3,58 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
-  Sparkles, Timer, CheckCircle2, ArrowRight,
-  Flame, CalendarDays, Trophy, TrendingUp, Crosshair
+  CheckCircle2, Play, Flame,
+  Layers, Grid3x3, Shield, Crosshair, Contrast, Copy, Brain, Puzzle, Fingerprint, Zap,
 } from 'lucide-react';
-import { msUntilMidnight, getDailyChallenges } from '../../lib/dailyChallenge';
+import { getDailyChallenge } from '../../lib/dailyChallenge';
 import { getStreak } from '../../lib/progressStore';
 import { DRILL_INDEX } from '../../lib/drillIndex';
-import { getDrillGroup, getGroupIcon, getGroupMeta } from '../../lib/drillGroups';
 
-// Why each of today's 3 drills was picked — mirrors the `reason` tag
-// lib/dailyChallenge.js attaches during personalization. 'random' (cold
-// start, not enough local history yet) intentionally shows no badge rather
-// than claim a personalization that hasn't happened yet.
-const REASON_META = {
-  focus:     { label: 'Your Focus',        icon: Crosshair,  className: 'text-violet-300 bg-violet-500/10 border-violet-500/20' },
-  weakness:  { label: 'Growth Area',       icon: TrendingUp, className: 'text-amber-300 bg-amber-500/10 border-amber-500/20' },
-  momentum:  { label: 'Your Strength',     icon: Trophy,     className: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
-  discovery: { label: 'Try Something New', icon: Sparkles,   className: 'text-cyan-300 bg-cyan-500/10 border-cyan-500/20' },
+// One small original mark per drill, not a shared category icon — a wall of
+// three identical icons said nothing about which game was which. These are
+// SkillDrills' own picks from the app's existing lucide set (Grid3x3 for a
+// grid, Crosshair for a moving target, Fingerprint for a finger-tap drill,
+// and so on), not anything borrowed from a competitor's icon set.
+const DRILL_LOGO = {
+  'multi-tasking': Layers,
+  'concentration-grid': Grid3x3,
+  'distraction-fighter': Shield,
+  'moving-target': Crosshair,
+  'shade-finder': Contrast,
+  'card-matching': Copy,
+  'grid-memorization': Brain,
+  'tower-of-hanoi': Puzzle,
+  'finger-sequencing': Fingerprint,
+  'quick-dodge': Zap,
 };
 
-function useMidnightCountdown() {
-  const [countdown, setCountdown] = useState('');
-
-  useEffect(() => {
-    function update() {
-      const ms = msUntilMidnight();
-      if (ms <= 0) {
-        setCountdown('00:00:00');
-        return;
-      }
-      const hrs = String(Math.floor(ms / 3600000)).padStart(2, '0');
-      const mins = String(Math.floor((ms % 3600000) / 60000)).padStart(2, '0');
-      const secs = String(Math.floor((ms % 60000) / 1000)).padStart(2, '0');
-      setCountdown(`${hrs}:${mins}:${secs}`);
-    }
-    update();
-    const interval = window.setInterval(update, 1000);
-    return () => window.clearInterval(interval);
-  }, []);
-
-  return countdown;
-}
-
 export default function DailyClient() {
-  const [challenges, setChallenges] = useState([]);
+  const [challenge, setChallenge] = useState(null);
   const [streak, setStreak] = useState(0);
-  const countdown = useMidnightCountdown();
 
   useEffect(() => {
     async function load() {
       try {
-        const [dailyList, s] = await Promise.all([
-          getDailyChallenges(),
+        const [today, s] = await Promise.all([
+          getDailyChallenge(),
           getStreak()
         ]);
-        setChallenges(dailyList);
+        setChallenge(today);
         setStreak(s.current);
       } catch (error) {
-        console.error("Failed to load daily challenges:", error);
+        console.error("Failed to load daily challenge:", error);
       }
     }
     load();
   }, []);
 
-  const completedCount = challenges.filter(c => c.completed).length;
-  const totalCount = challenges.length;
-  const progressPercent = totalCount ? Math.round((completedCount / totalCount) * 100) : 0;
-
   return (
     <div className="min-h-screen pb-28 text-slate-100 bg-[#050508]" style={{ paddingTop: 'calc(16px + env(safe-area-inset-top))' }}>
       <div className="relative px-4 pt-0 max-w-lg mx-auto space-y-6">
-        
+
         {/* Header */}
         <div className="flex items-center justify-between">
-          <div>
-            <div className="flex items-center gap-1.5 mb-1">
-              <CalendarDays className="w-4 h-4 text-violet-400" />
-              <span className="text-[10px] font-black text-violet-300 uppercase tracking-widest">Midnight Calibration</span>
-            </div>
-            <h1 className="text-2xl font-black text-white tracking-tight">Daily Routines</h1>
-          </div>
+          <h1 className="font-display text-[28px] text-white">Today&apos;s Drills</h1>
           {streak > 0 && (
             <div className="flex items-center gap-1 px-3 py-1.5 rounded-2xl bg-orange-500/15 border border-orange-500/20">
               <Flame className="w-3.5 h-3.5 text-orange-400 animate-pulse" />
@@ -91,109 +63,80 @@ export default function DailyClient() {
           )}
         </div>
 
-        {/* Progress Tracker Card */}
-        <div className="rounded-3xl border border-neutral-800 bg-[#12131c] p-5 relative overflow-hidden">
-          <div className="flex justify-between items-center mb-3">
-            <div>
-              <span className="text-xs text-neutral-400 font-bold uppercase tracking-wider block">Today's Progress</span>
-              <span className="text-lg font-black text-white mt-1 block">
-                {completedCount} of {totalCount} Calibrations Complete
-              </span>
-            </div>
-            <div className="text-right">
-              <span className="text-xs text-neutral-500 font-bold block"><Timer className="w-3 h-3 inline mr-1" /> RESETS IN</span>
-              <span className="text-sm font-black text-violet-300 tabular mt-0.5 block">{countdown || '--:--'}</span>
-            </div>
-          </div>
-          <div className="h-2 rounded-full overflow-hidden bg-neutral-900">
-            <div
-              className="h-full rounded-full bg-violet-500 transition-all duration-500"
-              style={{ width: `${progressPercent}%` }}
-            />
-          </div>
-          <p className="text-[11px] text-neutral-500 mt-3 leading-relaxed">
-            {completedCount === totalCount
-              ? "All routines finalized. Calibration parameters locked, streak preserved!"
-              : "Each exercise below earns double XP on its own — finish all 3 for a bonus on top."}
-          </p>
-        </div>
-
-        {/* 3 Daily Challenge Cards List */}
+        {/* Today's set. No section label above it — the page heading is
+            already the words "Today's Drills", and a second copy in caps
+            three inches below it just said the same thing twice. */}
         <div className="space-y-4">
-          <div className="text-xs font-bold text-neutral-500 uppercase tracking-widest">Active Routines</div>
-          {challenges.map(({ drill, completed }, index) => {
+          {(challenge?.drills || []).map((drill) => {
+            const completed = drill.completed;
             const details = DRILL_INDEX.find(d => d.id === drill.id) || drill;
-            const difficulty = details.difficulty || 'intermediate';
             const duration = details.duration || '45s';
-            const reasonMeta = REASON_META[drill.reason] || null;
-            const group = getDrillGroup(details);
-            const DrillIcon = getGroupIcon(group);
-            const groupAccent = getGroupMeta(group).accent;
+            const DrillLogo = DRILL_LOGO[drill.id] || Zap;
 
             return (
+              // One accent for all three cards, not one per category. The
+              // per-category version made the set look like three unrelated
+              // offers; today's drills are a single set, so they read as one.
+              // Completed cards still swap to green — that is a state, not a
+              // category, and it needs to stand out from the other two.
               <div
                 key={drill.id}
-                className={`viewfinder-box relative rounded-3xl border p-5 transition-all duration-300 ${
-                  completed
-                    ? 'border-emerald-500/20 bg-emerald-950/5'
-                    : 'border-neutral-800 bg-[#12131c] hover:border-neutral-700'
-                }`}
-                style={{ '--a': groupAccent }}
+                className="viewfinder-box relative rounded-3xl border p-5 transition-all duration-300"
+                style={{
+                  '--a': completed ? '#22c55e' : 'var(--brand-2)',
+                  background: 'linear-gradient(135deg, color-mix(in srgb, var(--a) 14%, transparent), transparent 62%), var(--card)',
+                  borderColor: 'color-mix(in srgb, var(--a) 26%, transparent)',
+                }}
               >
                 <div className="viewfinder-corner tl" />
                 <div className="viewfinder-corner tr" />
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex gap-3.5">
-                    <div className="lab-ic shrink-0">
-                      <DrillIcon className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h3 className="text-base font-black text-white leading-snug">
-                        {drill.name}
-                      </h3>
-                      <div className="flex items-center gap-1.5 flex-wrap mt-1.5">
-                        <span className={`diff-pill ${difficulty} text-[8.5px] px-2 py-0.5 rounded-full font-bold uppercase`}>
-                          {difficulty}
-                        </span>
-                        <span className="text-[10px] text-neutral-500 font-semibold">{duration}</span>
-                        {reasonMeta && (
-                          <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[8.5px] font-black uppercase tracking-wider ${reasonMeta.className}`}>
-                            <reasonMeta.icon className="w-2.5 h-2.5" />
-                            {reasonMeta.label}
-                          </div>
-                        )}
-                      </div>
+                {/* [ logo ]  [ name + metadata, flexes ]  [ play ] — three
+                    fixed-purpose zones so a long name never reaches the
+                    button; it truncates in its own middle column instead. */}
+                <div className="flex items-center gap-3.5">
+                  <div
+                    className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl"
+                    style={{ background: 'color-mix(in srgb, var(--a) 18%, transparent)', color: 'var(--a)' }}
+                  >
+                    <DrillLogo className="w-6 h-6" />
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <h3 className="font-display text-xl text-white leading-none truncate">
+                      {drill.name}
+                    </h3>
+                    <div className="flex items-center gap-1.5 mt-1.5 text-[10px] text-white/60 font-semibold">
+                      <span>{duration}</span>
+                      <span className="text-white/25">&bull;</span>
+                      <span>2&times; XP</span>
                     </div>
                   </div>
 
-                  {/* Completion Status Badge */}
-                  {completed && (
-                    <div className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-black text-[9px] uppercase tracking-wider shrink-0">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      Done
+                  {/* The play button IS the "start" control — completed
+                      drills show a static checkmark instead of a link,
+                      since replaying from here was never something the old
+                      full-width button offered either. */}
+                  {completed ? (
+                    <div
+                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-emerald-400 bg-emerald-500/10 border border-emerald-500/20"
+                      aria-label={`${drill.name} completed`}
+                    >
+                      <CheckCircle2 className="w-5 h-5" />
                     </div>
+                  ) : (
+                    <Link
+                      href={drill.path || '/drills'}
+                      aria-label={`Start ${drill.name}`}
+                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-white shadow-md transition-transform duration-150 active:scale-90 cursor-pointer"
+                      style={{ background: 'var(--a)' }}
+                    >
+                      <Play className="w-[18px] h-[18px] ml-0.5" fill="currentColor" />
+                    </Link>
                   )}
                 </div>
-
-                {/* Bottom CTA */}
-                {!completed && (
-                  <Link
-                    href={drill.path || '/drills'}
-                    className="mt-4 flex items-center justify-center gap-2 w-full py-3 rounded-2xl text-xs font-black bg-violet-600 hover:bg-violet-500 text-white shadow-md transition active:scale-[.98] cursor-pointer"
-                  >
-                    Start Challenge {index + 1}
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </Link>
-                )}
               </div>
             );
           })}
-        </div>
-
-        {/* Informative Footer */}
-        <div className="text-center py-4 text-[10px] text-neutral-600 space-y-1">
-          <p>Each daily exercise triggers double XP yield on completion.</p>
-          <p>Reset occurs automatically at local midnight.</p>
         </div>
 
       </div>

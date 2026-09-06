@@ -13,7 +13,17 @@ import { DRILL_GROUPS } from '../lib/drillGroups';
 // Legal pages must stay readable without signing in — app store reviewers
 // and prospective users who haven't created an account yet both need to
 // reach these before the sign-in wall, not after it.
-const PUBLIC_PATHS = ['/privacy', '/terms'];
+const PUBLIC_PATHS = ['/privacy', '/terms', '/delete-account'];
+
+// next.config.js sets trailingSlash: true, so these routes are exported as
+// /privacy/index.html and the WebView loads them at "/privacy/". Comparing
+// the raw pathname against the list above therefore missed every one of
+// them and put the legal pages behind the sign-in wall — the exact thing
+// the list exists to prevent. Normalise before comparing.
+function isPublicPath(pathname) {
+  const p = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
+  return PUBLIC_PATHS.includes(p);
+}
 
 // Real vector art (same design as public/favicon.svg), not a raster <img> —
 // crisp at any size/DPI instead of a PNG that looks soft when scaled.
@@ -58,19 +68,31 @@ function GoogleIcon(props) {
   );
 }
 
+// No `font-sans` here on purpose. Tailwind's font-sans is the generic
+// `ui-sans-serif, system-ui, ...` stack, and putting it on this wrapper was
+// overriding the app's own Inter (set on <body> in app/layout.js) for every
+// piece of body copy on the sign-in screens — they were rendering in
+// whatever the OS default happened to be. Dropping it lets Inter inherit
+// for these functional prompts; only the Brand() wordmark below opts into
+// Anton via .font-display (see globals.css).
 function Frame({ children }) {
   return (
-    <div className="min-h-[100dvh] bg-[#050508] flex items-center justify-center text-white p-5 relative overflow-hidden font-sans">
+    <div className="min-h-[100dvh] bg-[#050508] flex items-center justify-center text-white p-5 relative overflow-hidden">
       <div className="w-full max-w-[380px] relative z-10">{children}</div>
     </div>
   );
 }
 
+// Horizontal lockup: mark first, wordmark second, both on a single
+// baseline. Anton (the app's display face, see .font-display in
+// globals.css) ships one weight only — .font-display forces
+// font-weight:400 !important for exactly this reason, so nothing here
+// asks the browser to synthesise a bold or black cut that doesn't exist.
 function Brand() {
   return (
-    <div className="flex flex-col items-center text-center mb-7">
-      <LogoMark className="w-14 h-14 mb-4 drop-shadow-[0_0_20px_rgba(139,92,246,.5)]" />
-      <h1 className="text-[22px] font-black tracking-tight text-white">
+    <div className="flex items-center justify-center gap-2.5">
+      <LogoMark className="w-9 h-9 shrink-0 drop-shadow-[0_0_18px_rgba(139,92,246,.45)]" />
+      <h1 className="font-display text-[30px] text-white">
         SkillDrills
       </h1>
     </div>
@@ -93,8 +115,8 @@ function UsernameStep({ pendingSignup, completeSignup }) {
 
   return (
     <Frame>
-      <div className="rounded-[24px] border border-white/5 bg-[#0b0b14]/80 backdrop-blur-2xl p-7 shadow-[0_24px_60px_rgba(0,0,0,.55)]">
-        <div className="flex flex-col items-center text-center mb-6">
+      <div className="rounded-[24px] border border-[var(--line)] bg-[var(--card)] p-7 shadow-[0_24px_60px_rgba(0,0,0,.55)]">
+        <div className="flex flex-col items-center text-center mb-7">
           <div className="relative mb-4">
             <img
               src={pendingSignup.photoURL}
@@ -105,10 +127,11 @@ function UsernameStep({ pendingSignup, completeSignup }) {
               <ShieldCheck className="w-3 h-3 text-white" />
             </div>
           </div>
-          <h1 className="text-[19px] font-black tracking-tight text-white">Choose your player name</h1>
-          <p className="text-slate-400 text-[11.5px] mt-2 max-w-[26ch] leading-relaxed">
-            This is your player name across SkillDrills — pick something unique.
-          </p>
+          {/* 18px, not 19: `whitespace-nowrap` guarantees the one-line
+              heading, so the size has to be one that still fits the ~224px
+              of card interior left on a 320px-wide phone. At 19px it
+              measured exactly 224px and would have clipped there. */}
+          <h1 className="text-[18px] font-bold tracking-[-0.02em] leading-none whitespace-nowrap text-white">Choose your player name</h1>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-3.5">
@@ -154,9 +177,9 @@ function UsernameStep({ pendingSignup, completeSignup }) {
 // Arena/leaderboard are hidden for now (see lib/featureFlags.js) — these
 // perks only list things actually available today.
 const FEATURES = [
-  { icon: TrendingUp, label: 'Track Progress' },
-  { icon: CalendarDays, label: 'Daily Challenges' },
-  { icon: Trophy, label: 'Earn XP & Levels' },
+  { icon: TrendingUp, label: 'Track Progress', blurb: 'Every score saved and charted.' },
+  { icon: CalendarDays, label: 'Daily Challenges', blurb: 'Three fresh drills a day, at 2x XP.' },
+  { icon: Trophy, label: 'Earn XP & Levels', blurb: 'Level up as you train.' },
 ];
 
 export default function AuthGate({ children }) {
@@ -177,7 +200,21 @@ export default function AuthGate({ children }) {
     return () => clearTimeout(t);
   }, []);
 
-  if (PUBLIC_PATHS.includes(pathname)) {
+  if (isPublicPath(pathname)) {
+    return children;
+  }
+
+  // scripts/capture-previews.js drives the real app to screenshot each drill
+  // mid-play for the hub's preview cards. It has no Google account, so the
+  // gate would stop it on the very first screen.
+  //
+  // Deliberately guarded on NODE_ENV as well as the flag, so this can never
+  // reach a user: `next build` substitutes the literal 'production' here, the
+  // condition folds to false, and the minifier drops the branch entirely.
+  // Every shipping path (mobile:build, mobile:release, the website deploy)
+  // goes through `next build`, so there is no temporary switch that has to be
+  // remembered and reverted — the capture only works under `next dev`.
+  if (process.env.NODE_ENV !== 'production' && process.env.NEXT_PUBLIC_CAPTURE_PREVIEWS === '1') {
     return children;
   }
 
@@ -198,7 +235,7 @@ export default function AuthGate({ children }) {
             <div className="absolute w-16 h-16 rounded-full border-[3px] border-t-violet-500 border-r-transparent border-b-transparent border-l-transparent animate-spin" />
             <LogoMark className="w-11 h-11 drop-shadow-[0_0_20px_rgba(139,92,246,.5)]" />
           </div>
-          <h2 className="text-[15px] font-bold tracking-wide text-white">Loading SkillDrills</h2>
+          <h2 className="text-[15px] font-bold tracking-[-0.01em] text-white">Loading SkillDrills</h2>
           <p className="text-slate-500 text-[11px] mt-1.5">Connecting to secure servers...</p>
         </div>
       </Frame>
@@ -211,51 +248,107 @@ export default function AuthGate({ children }) {
 
   if (!user) {
     return (
-      <Frame>
-        <div className="rounded-[24px] border border-white/5 bg-[#0b0b14]/80 backdrop-blur-2xl p-7 shadow-[0_24px_60px_rgba(0,0,0,.55)]">
-          <Brand />
+      // Full-height, not a floating card. This is the app's front door and
+      // the only thing on screen, so a bordered box centred in a field of
+      // black just drew a rectangle around empty space — and it put the one
+      // button the player has to press in the middle of the display, the
+      // hardest place on a phone to reach. Everything the player reads or
+      // presses is ONE centred column — brand, line, perks, button, trust —
+      // so spare height collects evenly above and below it instead of pooling
+      // in a single void. Only the drill count is pinned to the bottom.
+      <div className="relative min-h-[100dvh] bg-[#050508] text-white flex flex-col overflow-y-auto">
+        <div className="relative mx-auto flex w-full max-w-[340px] flex-1 flex-col px-6 pt-10 pb-[max(28px,env(safe-area-inset-bottom))]">
+          {/* The centred group. This used to be a brand pinned high with the
+              perks pushed to the bottom of a flexible band, which put every
+              spare pixel of a tall phone into one void between the wordmark
+              and the tiles — read as a layout mistake, not as breathing room.
+              Centring divides the slack evenly above and below instead, and
+              the fixed margins inside keep the pieces a single unit at any
+              screen height. */}
+          <div className="flex flex-1 flex-col justify-center">
+            {/* Depth behind the mark — flat black under a logo is what made
+                the top half read as unfinished rather than minimal. The glow
+                is anchored to the brand, so it travels with it. */}
+            <div className="relative">
+              <div
+                aria-hidden
+                className="pointer-events-none absolute left-1/2 top-1/2 h-[320px] w-[320px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+                style={{ background: 'radial-gradient(circle, rgba(124,58,237,.22), transparent 68%)' }}
+              />
+              <div className="relative">
+                <Brand />
 
-          <p className="text-slate-400 text-[12.5px] text-center leading-relaxed mb-6 -mt-2">
-            Sign in to save your progress and unlock the full training platform.
-          </p>
-
-          <div className="grid grid-cols-3 gap-2 mb-6">
-            {FEATURES.map(({ icon: Icon, label }) => (
-              <div key={label} className="flex flex-col items-center gap-1.5 rounded-[13px] border border-white/5 bg-white/[0.02] py-3 px-1.5 text-center">
-                <Icon className="w-4 h-4 text-violet-400" />
-                <span className="text-[9px] font-semibold text-slate-400 leading-tight">{label}</span>
+                {/* One line, always: the column is only ~292px wide inside its
+                    padding on a 360px phone, so this stays short enough that
+                    it can never wrap to an orphaned word. The three tiles
+                    below do the selling, so the sentence does not have to. */}
+                <p className="text-slate-400 text-[12.5px] text-center tracking-[-0.005em] whitespace-nowrap mt-3.5">
+                  Sign in to save your progress.
+                </p>
               </div>
-            ))}
+            </div>
+
+            {/* Rows, not three small tiles side by side. Squeezed into thirds
+                of a 340px column the labels wrapped to two lines at 9.5px and
+                said nothing beyond their own name; as rows they have room for
+                the line that actually sells them. The gap above them is a
+                fixed, deliberate margin now — while it was flexible it
+                stretched to absorb every spare pixel on a tall phone, which
+                is what made the wordmark look stranded. */}
+            <div className="mt-9 space-y-2">
+              {FEATURES.map(({ icon: Icon, label, blurb }) => (
+                <div key={label} className="flex items-center gap-3 rounded-[13px] border border-white/[0.06] bg-white/[0.025] px-3.5 py-3">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] bg-violet-400/10 text-violet-300">
+                    <Icon className="w-4 h-4" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-[12px] font-semibold tracking-[-0.01em] text-slate-100 leading-tight">{label}</span>
+                    <span className="mt-0.5 block text-[10.5px] text-slate-500 leading-tight">{blurb}</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {/* The button belongs to the centred group rather than being
+                pinned to the bottom edge. Pinned, it left a second void — the
+                gap simply moved from above the perks to below them, which on
+                a tall phone was worse, because a lone button floating over
+                340px of black reads as a page that failed to load. Inside the
+                group it still lands in the lower half of the display, which
+                is the part of the thumb zone that matters. */}
+            <div className="pt-8" />
+
+            <button
+              onClick={handleSignIn}
+              disabled={signingIn}
+              className="w-full flex items-center justify-center gap-3 bg-white hover:bg-slate-100 text-slate-900 font-bold py-[15px] rounded-[14px] transition-all duration-200 active:scale-[0.98] shadow-[0_10px_30px_rgba(0,0,0,.45)] disabled:opacity-60 disabled:active:scale-100 text-[13.5px] tracking-[-0.01em]"
+            >
+              {signingIn ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Signing in...
+                </>
+              ) : (
+                <>
+                  <GoogleIcon />
+                  Continue with Google
+                </>
+              )}
+            </button>
+
+            <div className="flex items-start justify-center gap-2 text-[10px] text-slate-500 leading-normal mt-4">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-px" />
+              <span>Real Google sign-in — we never see or store your password.</span>
+            </div>
           </div>
 
-          <button
-            onClick={handleSignIn}
-            disabled={signingIn}
-            className="w-full flex items-center justify-center gap-3 bg-white hover:bg-slate-100 text-slate-900 font-bold py-[13px] rounded-[13px] transition-all duration-200 active:scale-[0.98] shadow-[0_8px_24px_rgba(0,0,0,.3)] disabled:opacity-60 disabled:active:scale-100 text-[13px]"
-          >
-            {signingIn ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Signing in...
-              </>
-            ) : (
-              <>
-                <GoogleIcon />
-                Continue with Google
-              </>
-            )}
-          </button>
-
-          <div className="flex items-center gap-2 text-[10px] text-slate-500 leading-normal mt-5 pt-5 border-t border-white/5">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-            <span>Real Google sign-in — we never see or store your password.</span>
-          </div>
+          {/* The one thing that stays pinned to the bottom edge: a footnote,
+              not something the player has to read or reach. */}
+          <p className="text-center text-[10px] text-slate-600 font-medium mt-5 tracking-wide">
+            {DRILL_INDEX.length} free drills · {DRILL_GROUPS.length} categories
+          </p>
         </div>
-
-        <p className="text-center text-[10px] text-slate-600 font-medium mt-5 tracking-wide">
-          {DRILL_INDEX.length} free drills · {DRILL_GROUPS.length} categories
-        </p>
-      </Frame>
+      </div>
     );
   }
 

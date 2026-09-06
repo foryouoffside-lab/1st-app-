@@ -13,8 +13,8 @@ android {
         applicationId "com.skilldrills.pro"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode 3
+        versionName "1.0.2"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -34,7 +34,10 @@ android {
     }
     buildTypes {
         release {
-            minifyEnabled false
+            // R8 on. Every reflective entry point a Capacitor app depends on is
+            // kept explicitly in proguard-rules.pro — read the header there before
+            // touching this. shrinkResources stays OFF on purpose (same file).
+            minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
             signingConfig keystorePropertiesFile.exists() ? signingConfigs.release : null
         }

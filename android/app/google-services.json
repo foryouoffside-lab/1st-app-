@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "220381726989-76nosnboc964tq0g0ummf580403ev5sm.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.skilldrills.pro",
+            "certificate_hash": "a091a7e29b03156220ddfa3023336c114bd9dc12"
+          }
+        },
+        {
           "client_id": "220381726989-c4tcaai2cgv7s657kva4faaunneiohje.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {

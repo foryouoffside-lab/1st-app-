@@ -5,24 +5,44 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { 
   Compass, Volume2, VolumeX, Eye, Zap, Ban,
-  Share2, ArrowLeft, Heart
+  Share2, ArrowLeft
 } from 'lucide-react';
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade, getComboMultiplier } from '../../../../../lib/scoringEngine';
+import {
+  rampToFloor, applyHit, applyMistake, scoringMaxLevel, scoringLives,
+} from '../../../../../lib/drillRules';
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { lockPortrait, unlockOrientation } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
 import { getPlayerName } from '../../../../../lib/progressStore';
-import generateShareCard, { shareScoreCard } from '../../../../../components/ShareScoreCard';
-import { Capacitor } from '@capacitor/core';
-import { StatusBar } from '@capacitor/status-bar';
+import { useShareCard } from '../../../../../components/ShareScoreCard';
 import DrillWrapper from '../../../../../components/DrillWrapper';
-import { useDuelMatchStart } from '../../../../../lib/challengeEngine';
+import { useDuelMatchStart, duelSecondsRemaining } from '../../../../../lib/challengeEngine';
+import { APP_SHARE_URL } from '../../../../../lib/shareLinks';
 
 // ============================================================
 // TUNING CONSTANTS
 // ============================================================
 const TOTAL_TIME = 45.0;
-const MAX_LIVES = 5;
+
+// How a solo run is won and lost — the clock as the only fail state, what a hit
+// earns, what a mistake costs — is defined once in lib/drillRules.js and shared
+// by every drill. Read that file for the model and the reasoning.
+//
+// This drill is the one exception to "difficulty ramps forever". Its difficulty
+// IS the grid size, and grid size is capped by the PHONE SCREEN, not by taste —
+// an 11x11 grid of tappable numbers does not fit on a handset (see
+// getMaxGridCeiling: 7 on narrow devices, 8 otherwise). So the board stops
+// growing at level 5-6 and cannot be pushed further.
+//
+// The ramp therefore moves to the clock instead. Level counts BOARDS CLEARED,
+// not grid size, so it keeps climbing after the grid caps out; clearing a board
+// used to hand back a flat full 45s, which meant a player who could clear the
+// biggest grid refilled faster than the clock drained and would never finish.
+// Now the refill decays toward a floor, forever. The board stays humane, the
+// clock gets meaner, and the run always ends.
+const BOARD_REFILL_START = 45.0;
+const BOARD_REFILL_FLOOR = 6.0;
 const STORAGE_KEY = 'skilldrills_concentration_grid_v1';
 
 // ============================================================
@@ -38,7 +58,7 @@ class AudioSynthesizer {
     if (!this.ctx) {
       try {
         this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-      } catch (e) {}
+      } catch {}
     }
     if (this.ctx && this.ctx.state === 'suspended') {
       this.ctx.resume();
@@ -62,7 +82,7 @@ class AudioSynthesizer {
       gainNode.connect(this.ctx.destination);
       osc.start();
       osc.stop(this.ctx.currentTime + dur);
-    } catch (e) {}
+    } catch {}
   }
 
   // 1. Hit sound
@@ -71,8 +91,85 @@ class AudioSynthesizer {
   // 2. Countdown tick sound
   playCountdownTick() { this.tone(440, 0.09, 'sine', 0.12, 440); }
 
-  // 3. "GO" start sound
-  playGo() { this.tone(523.25, 0.18, 'triangle', 0.17, 784); }
+  // GO — a struck wooden bar. Warm rather than urgent: this is the last beat
+  // of 3-2-1, so it has to feel bigger than the 440Hz ticks without turning
+  // the start of a focus drill into an alarm.
+  //
+  // Earlier versions chased impact and got harshness instead — a bright A5
+  // mallet, a four-note arpeggio over a sub drop, a chord with a glide into
+  // it. Next to the ticks they all read as ARCADE.
+  //
+  // What works is a marimba tap. A 12ms noise burst bandpassed at 900Hz is
+  // the beater contacting wood — low and short enough that it never reads as
+  // a drum, but without it the tone has no onset and nothing feels struck.
+  // Behind it, three voices 5ms later: C5 as the bar, its octave for a little
+  // air, C4 underneath for warmth. Each is a pair of sines detuned four cents
+  // apart through a lowpass — the same construction as chimeVoice — which is
+  // why nothing here buzzes. C is a minor third above the 440Hz ticks, so it
+  // resolves upward and lands clearly without shouting. Decays over ~350ms.
+  //
+  // Scheduled on the AudioContext clock, not with setTimeout: the main thread
+  // is setting the round up at exactly this instant.
+  playGo() {
+    if (!this.enabled || !this.ctx) return;
+    try {
+      const ctx = this.ctx;
+      if (ctx.state === 'suspended') ctx.resume();
+      const t0 = ctx.currentTime;
+
+      // The beater. Linearly-decaying white noise through a bandpass — a
+      // wooden knock, not a snare.
+      const nLen = Math.max(1, Math.floor(ctx.sampleRate * 0.012));
+      const nBuf = ctx.createBuffer(1, nLen, ctx.sampleRate);
+      const nData = nBuf.getChannelData(0);
+      for (let i = 0; i < nLen; i++) {
+        nData[i] = (Math.random() * 2 - 1) * (1 - i / nLen);
+      }
+      const nSrc = ctx.createBufferSource();
+      nSrc.buffer = nBuf;
+      const nBand = ctx.createBiquadFilter();
+      nBand.type = 'bandpass';
+      nBand.frequency.setValueAtTime(900, t0);
+      nBand.Q.setValueAtTime(1.6, t0);
+      const nGain = ctx.createGain();
+      nGain.gain.setValueAtTime(0.042, t0);
+      nGain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.012);
+      nSrc.connect(nBand);
+      nBand.connect(nGain);
+      nGain.connect(ctx.destination);
+      nSrc.start(t0);
+      nSrc.stop(t0 + 0.012);
+
+      // The bar. 5ms behind the knock so the two read as one event.
+      [
+        // freq    at     dur   vol    cut   attack
+        [523.25,  0.005, 0.35, 0.120, 2000, 0.008], // body — C5
+        [1046.50, 0.005, 0.13, 0.034, 3200, 0.008], // octave — air
+        [261.63,  0.005, 0.30, 0.040, 1200, 0.012]  // foundation — C4
+      ].forEach(([freq, at, dur, vol, cut, attack]) => {
+        const startAt = t0 + at;
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(cut, startAt);
+        filter.Q.setValueAtTime(0.5, startAt);
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.0001, startAt);
+        gain.gain.linearRampToValueAtTime(vol, startAt + attack);
+        gain.gain.exponentialRampToValueAtTime(0.001, startAt + dur);
+        filter.connect(gain);
+        gain.connect(ctx.destination);
+        [-4, 4].forEach((cents) => {
+          const osc = ctx.createOscillator();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, startAt);
+          osc.detune.setValueAtTime(cents, startAt);
+          osc.connect(filter);
+          osc.start(startAt);
+          osc.stop(startAt + dur);
+        });
+      });
+    } catch {}
+  }
 
   // 4. Penalty / Miss sound
   playPenalty() {
@@ -96,7 +193,7 @@ class AudioSynthesizer {
         osc.start(t0 + delay);
         osc.stop(t0 + delay + 0.08);
       });
-    } catch (e) {}
+    } catch {}
   }
   playMiss() { this.playPenalty(); }
   playWrongBoom() { this.playPenalty(); }
@@ -120,7 +217,7 @@ class AudioSynthesizer {
         osc.start(t0 + offset);
         osc.stop(t0 + offset + 0.15);
       });
-    } catch (e) {}
+    } catch {}
   }
 
   chimeVoice(freq, startAt, dur, vol, filterFreq = 2600) {
@@ -158,7 +255,7 @@ class AudioSynthesizer {
         this.chimeVoice(freq, t0 + i * 0.08, 0.24, 0.13, 3200);
       });
       this.chimeVoice(1046.50, t0 + 0.26, 0.6, 0.16, 4200);
-    } catch (e) {}
+    } catch {}
   }
 
   setEnabled(status) {
@@ -189,7 +286,7 @@ const getSavedData = () => {
     };
     saveData(initial);
     return initial;
-  } catch (e) {
+  } catch {
     return { bestScore: 0, bestGrid: 3, bestCombo: 0, totalSessions: 0 };
   }
 };
@@ -197,7 +294,7 @@ const getSavedData = () => {
 const saveData = (data) => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch (e) {}
+  } catch {}
 };
 
 // ============================================================
@@ -210,6 +307,13 @@ export default function ConcentrationGridClient() {
   const totalTime = isChallenge ? 30 : TOTAL_TIME;
   const matchStartAt = useDuelMatchStart(challengeId);
   const duelAutoStartedRef = useRef(false);
+  // The duel's shared start instant, on this device's clock. Held in a ref so
+  // the match clock below can read it without rebuilding its interval, and
+  // null outside a duel so solo play keeps its own local countdown.
+  const duelDeadlineRef = useRef(null);
+  useEffect(() => {
+    duelDeadlineRef.current = isChallenge ? matchStartAt : null;
+  }, [isChallenge, matchStartAt]);
 
   // === Phase Machine State ===
   const [phase, setPhase] = useState('start'); // 'start' | 'countdown' | 'playing' | 'ended'
@@ -227,9 +331,11 @@ export default function ConcentrationGridClient() {
   
   // HUD variables
   const [score, setScore] = useState(0);
-  const [combo, setCombo] = useState(0);
+  // The live "Lv." HUD badge was the only thing that ever READ this, so the
+  // React state went with it. The ramp itself runs off levelRef, which the
+  // game loop already uses; keeping a useState in step with it only bought a
+  // re-render of the whole drill on every level-up, mid-play, for nothing.
   const [timeRemaining, setTimeRemaining] = useState(totalTime);
-  const [lives, setLives] = useState(MAX_LIVES);
   const [dangerLevel, setDangerLevel] = useState(0);
 
   // === Best stats ===
@@ -253,10 +359,13 @@ export default function ConcentrationGridClient() {
 
   const scoreRef = useRef(0);
   const timeLeftRef = useRef(totalTime);
+  const runOverRef = useRef(false);
   const comboRef = useRef(0);
-  const livesRef = useRef(MAX_LIVES);
   const maxStreakRef = useRef(0);
   const gridSizeRef = useRef(3);
+  // Boards cleared + 1. This is the real level — it keeps rising after the grid
+  // stops growing, which is what lets the clock keep tightening.
+  const levelRef = useRef(1);
   const startGridRef = useRef(3);
   const currentNumberRef = useRef(1);
   
@@ -361,7 +470,7 @@ export default function ConcentrationGridClient() {
     audioSynth?.playResultsReveal();
 
     const totalClicks = correctClicksRef.current + penaltyCountRef.current;
-    const accuracyVal = totalClicks > 0 ? Math.round((correctClicksRef.current / totalClicks) * 100) : 100;
+    const accuracyVal = totalClicks > 0 ? Math.round((correctClicksRef.current / totalClicks) * 100) : 0;
 
     const bonuses = calcEndBonuses({
       rawScore: scoreRef.current,
@@ -369,8 +478,7 @@ export default function ConcentrationGridClient() {
       bestCombo: maxStreakRef.current,
       totalActions: totalClicks,
       mistakes: penaltyCountRef.current,
-      livesRemaining: Math.max(0, livesRef.current),
-      maxLives: MAX_LIVES,
+      livesRemaining: scoringLives(0),
       category: 'cognitive'
     });
 
@@ -421,6 +529,7 @@ export default function ConcentrationGridClient() {
       bestCombo: maxStreakRef.current,
       xpEarned: xpResult.xp,
       isNewBest,
+      prevBest: prev.bestScore,
     });
   }, []);
 
@@ -439,7 +548,6 @@ export default function ConcentrationGridClient() {
       foundNumbersSetRef.current.add(num);
       currentNumberRef.current += 1;
       comboRef.current += 1;
-      setCombo(comboRef.current);
       if (comboRef.current > maxStreakRef.current) {
         maxStreakRef.current = comboRef.current;
       }
@@ -453,14 +561,13 @@ export default function ConcentrationGridClient() {
           category: 'cognitive',
           reactionMs: reactionTimeMs,
           combo: comboRef.current,
-          livesRemaining: livesRef.current,
-          maxLives: MAX_LIVES,
+          livesRemaining: scoringLives(0),
           timeRemaining: timeLeftRef.current,
           totalGameTime: totalTime,
-          level: gridSizeRef.current - 2,
-          maxLevel: getMaxGridCeiling() - 2
+          level: levelRef.current,
+          maxLevel: scoringMaxLevel(isChallenge)
         });
-      } catch (err) {
+      } catch {
         const base = 6;
         const comboMult = getComboMultiplier(comboRef.current);
         const speedBonus = reactionTimeMs < 1200 ? Math.round(base * (1200 - reactionTimeMs) / 1200) : 0;
@@ -469,6 +576,21 @@ export default function ConcentrationGridClient() {
 
       let pointsToAdd = pointsObj.total;
       scoreRef.current += pointsToAdd;
+      // Buy back a slice of the clock. Solo only - in a duel the clock comes from
+      // duelDeadlineRef (the match's shared absolute end instant), which nothing
+      // local may move. No state is set here; the existing tick redraws the
+      // seconds when the displayed number changes, so this costs nothing per hit.
+      // Clamped to this drill's own 45s, not the shared SOLO_RULES.TIME_CAP of
+      // 60 that applyHit() enforces. The endurance economy is unchanged — hits
+      // and board clears still buy the clock back — but the bar a player is
+      // playing against is the one the start card promises ("45s per board"),
+      // instead of quietly banking up to a further 15 seconds on a strong run.
+      if (!isChallenge) {
+        timeLeftRef.current = Math.min(
+          totalTime,
+          applyHit({ timeRemaining: timeLeftRef.current, level: levelRef.current })
+        );
+      }
 
       const totalCells = gridSizeRef.current * gridSizeRef.current;
 
@@ -487,9 +609,15 @@ export default function ConcentrationGridClient() {
         // match while the opponent's 30s expired and left them stuck on
         // "Waiting for opponent to finish..." for the rest of it.
         if (!isChallenge) {
-          timeLeftRef.current = totalTime;
-          setTimeRemaining(totalTime);
+          const refill = rampToFloor(levelRef.current, BOARD_REFILL_START, BOARD_REFILL_FLOOR);
+          // Same 45s ceiling as the per-hit reward above.
+          timeLeftRef.current = Math.min(totalTime, timeLeftRef.current + refill);
+          runOverRef.current = false;
+          setTimeRemaining(Math.ceil(timeLeftRef.current));
         }
+
+        // Clearing a board is a level, whether or not the grid can still grow.
+        levelRef.current += 1;
 
         const maxCeiling = getMaxGridCeiling();
         if (gridSizeRef.current < maxCeiling) {
@@ -509,7 +637,6 @@ export default function ConcentrationGridClient() {
       audioSynth?.playPenalty();
       penaltyCountRef.current += 1;
       comboRef.current = 0;
-      setCombo(0);
 
       triggerFlash('red');
 
@@ -520,10 +647,12 @@ export default function ConcentrationGridClient() {
         return;
       }
 
-      livesRef.current = Math.max(0, livesRef.current - 1);
-      setLives(livesRef.current);
+      const after = applyMistake({ timeRemaining: timeLeftRef.current });
+      timeLeftRef.current = after.timeRemaining;
+      runOverRef.current = after.runOver;
+      setTimeRemaining(Math.ceil(timeLeftRef.current));
 
-      if (livesRef.current <= 0) {
+      if (runOverRef.current) {
         endGame();
       } else {
         syncGridDataToState();
@@ -552,16 +681,30 @@ export default function ConcentrationGridClient() {
 
     const tick = () => {
       if (!gameActiveRef.current) return;
-      timeLeftRef.current = Math.max(0, timeLeftRef.current - 0.2);
+      // In a duel the clock is read from the match's shared absolute end
+      // instant, never accumulated locally — see duelSecondsRemaining. A
+      // tick that lands late (busy frame, GC pause, the OS throttling a
+      // backgrounded webview) must cost this player frames, not extra
+      // seconds of play their opponent never got.
+      timeLeftRef.current = duelDeadlineRef.current
+        ? duelSecondsRemaining(duelDeadlineRef.current)
+        : Math.max(0, timeLeftRef.current - 0.2);
       // Flush the authoritative score alongside the clock so DrillWrapper's
-      // duel score-sync and final submit always see the latest value.
-      setScore(scoreRef.current);
+      // duel score-sync and final submit always see the latest value. Guarded
+      // so an unchanged score costs nothing — between taps this fires 5 times a
+      // second with the same number.
+      setScore((v) => (v === scoreRef.current ? v : scoreRef.current));
       if (timeLeftRef.current <= 0) {
         setTimeRemaining(0);
         endGame();
         return;
       }
-      setTimeRemaining(timeLeftRef.current);
+      // Quantised to the second it is DISPLAYED at. The clock is only ever read
+      // through Math.ceil (the HUD and DrillWrapper's timeLeft prop), but a raw
+      // float differs on every tick, so React could never bail out and this
+      // re-rendered the whole 5x5 grid 5 times a second for the entire run.
+      const shown = Math.ceil(timeLeftRef.current);
+      setTimeRemaining((v) => (v === shown ? v : shown));
     };
 
     clockTimerRef.current = setInterval(tick, 200);
@@ -599,11 +742,12 @@ export default function ConcentrationGridClient() {
 
       scoreRef.current = 0;
       timeLeftRef.current = totalTime;
+      runOverRef.current = false;
       comboRef.current = 0;
-      setCombo(0);
-      livesRef.current = MAX_LIVES;
       maxStreakRef.current = 0;
       gridSizeRef.current = startGridRef.current;
+      levelRef.current = 1;
+
       currentNumberRef.current = 1;
       foundNumbersSetRef.current.clear();
       correctClicksRef.current = 0;
@@ -612,7 +756,6 @@ export default function ConcentrationGridClient() {
 
       setScore(0);
       setTimeRemaining(totalTime);
-      setLives(MAX_LIVES);
       setDangerLevel(0);
       setFlashes([]);
 
@@ -637,17 +780,16 @@ export default function ConcentrationGridClient() {
     if (isChallenge) {
       startGridRef.current = 3;
     } else {
-      const saved = getSavedData();
-      const maxLevel = getMaxGridCeiling() - 2;
-      const savedBestLevel = Math.max(1, (saved.bestGrid || 3) - 2);
-      const startLevel = Math.max(1, Math.min(maxLevel, Math.round(savedBestLevel * 0.55)));
-      startGridRef.current = startLevel + 2;
+      // Every run starts at the lowest difficulty. It used to start at 55% of the
+      // player's best level, so improving once permanently raised the speed every
+      // future run opened at - a silent spike with nothing on screen explaining it.
+      // That head-start only existed because a fixed 45s was too short to climb the
+      // ramp; the endurance clock replaces it.
+      startGridRef.current = 3;
     }
 
     setScore(0);
-    setCombo(0);
     setTimeRemaining(totalTime);
-    setLives(MAX_LIVES);
     setDangerLevel(0);
     setFlashes([]);
     setEndSummary(null);
@@ -676,39 +818,28 @@ export default function ConcentrationGridClient() {
     setPhase('start');
     phaseRef.current = 'start';
     setScore(0);
-    setCombo(0);
-    setLives(MAX_LIVES);
     setEndSummary(null);
     setTimeRemaining(totalTime);
     timeLeftRef.current = totalTime;
+    runOverRef.current = false;
   }, [challengeId, totalTime]);
 
-  // Hide floating controls during play
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      if (phase === 'playing' || phase === 'countdown') {
-        document.body.classList.add('hide-drill-controls');
-      } else {
-        document.body.classList.remove('hide-drill-controls');
-      }
-    }
-    return () => {
-      if (typeof window !== 'undefined') {
-        document.body.classList.remove('hide-drill-controls');
-      }
-    };
-  }, [phase]);
-
-  const shareResult = useCallback(() => {
-    if (!endSummary) return;
-    const text = `Scored ${endSummary.score} on Concentration Grid (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — SkillDrills`;
-    const url = 'https://skilldrills.online/drills/cognitive/focus/concentration-grid';
-    if (typeof navigator !== 'undefined' && navigator.share) {
-      navigator.share({ title: 'Concentration Grid — SkillDrills', text, url }).catch(() => {});
-    } else if (typeof navigator !== 'undefined' && navigator.clipboard) {
-      navigator.clipboard.writeText(`${text} ${url}`);
-    }
-  }, [endSummary]);
+  // Score card. Drawn and encoded while the result screen sits idle,
+  // not on the tap - see useShareCard in components/ShareScoreCard.js.
+  const shareResult = useShareCard(endSummary ? {
+    score: endSummary.score,
+    bestScore: endSummary.prevBest ?? bestScore,
+    accuracy: endSummary.accuracy,
+    bestCombo: endSummary.bestCombo,
+    rating: getGrade(endSummary.accuracy),
+    newBest: endSummary.isNewBest,
+    drillName: 'Concentration Grid',
+    playerName: getPlayerName(),
+  } : null, {
+    url: APP_SHARE_URL,
+    title: 'Concentration Grid — SkillDrills',
+    text: endSummary ? `Scored ${endSummary.score} on Concentration Grid (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — SkillDrills` : '',
+  });
 
   if (loading || !isClient) {
     return (
@@ -727,8 +858,6 @@ export default function ConcentrationGridClient() {
       category="cognitive"
       score={score}
       timeLeft={phase === 'ended' ? 0 : Math.ceil(timeRemaining)}
-      lives={isChallenge || phase === 'start' || phase === 'countdown' ? null : lives}
-      maxLives={isChallenge ? null : MAX_LIVES}
       soundEnabled={soundEnabled}
       onSoundToggle={() => setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; })}
       backHref="/drills/cognitive"
@@ -768,13 +897,13 @@ export default function ConcentrationGridClient() {
               <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(6,182,212,.35)]">
                 <Compass className="w-[22px] h-[22px] text-white" />
               </div>
-              <h1 className="text-[17px] font-bold tracking-tight text-white">Concentration Grid</h1>
-              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45s per board</p>
+              <h1 className="font-display text-[32px] sm:text-[38px] text-white">Concentration Grid</h1>
+              <p className="text-[9px] label-tiny text-slate-500 mt-1">45s per board</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
                 <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Tap the numbers in order from 1</>} />
                 <HowToRow icon={<Zap className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Grid grows with each board</>} />
-                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Wrong taps cost a life · 3 lives</>} />
+                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Hits add time, misses cost it</>} />
               </div>
 
               <div className="grid grid-cols-3 gap-1.5 mt-3.5">
@@ -797,26 +926,15 @@ export default function ConcentrationGridClient() {
         {(phase === 'playing' || phase === 'countdown') && (
           <>
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
-              <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
-              <div className="flex items-center gap-2 mt-1.5">
-                {/* Duels show no level badge — the play area stays clean, and a
-                    rising number tells an opponent nothing useful mid-match. */}
-                {!isChallenge && (
-                  <span className="flex items-center gap-0.5">
-                    {Array.from({ length: MAX_LIVES }).map((_, i) => (
-                      <Heart key={i} className={`w-3 h-3 ${i < lives ? 'fill-red-500 text-red-500' : 'text-white/15'}`} />
-                    ))}
-                  </span>
-                )}
-              </div>
+              <span className="text-2xl font-hud font-bold text-white leading-none tabular-nums">{score}</span>
             </div>
 
             {/* Timer overlay top-right */}
             <div className="absolute top-5 right-5 z-40 flex flex-col items-end pointer-events-none select-none">
-              <span className={`text-3xl font-black font-mono leading-none tabular-nums ${timeRemaining <= 10 ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}>
+              <span className={`text-3xl font-hud font-bold leading-none tabular-nums ${timeRemaining <= 10 ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}>
                 {Math.ceil(timeRemaining)}s
               </span>
-              <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest mt-1">Time Left</span>
+              <span className="text-[8px] label-tiny text-slate-500 mt-1">Time Left</span>
             </div>
 
             {/* Target indicator — solid fill instead of backdrop-blur: this
@@ -826,7 +944,7 @@ export default function ConcentrationGridClient() {
                 for zero visible difference against this near-opaque fill. */}
             <div className="absolute top-5 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 border border-white/10 rounded-full px-4 py-1.5 pointer-events-none select-none" style={{ background: 'rgba(5,5,8,0.94)' }}>
               <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Find</span>
-              <span className="text-lg font-black text-cyan-400 font-mono leading-none">{currentNumber}</span>
+              <span className="text-lg font-black text-cyan-400 leading-none">{currentNumber}</span>
             </div>
 
             {/* Grid cells area — see GridBoard's own note on why the board is
@@ -845,11 +963,11 @@ export default function ConcentrationGridClient() {
 
         {/* ── COUNTDOWN ── */}
         {phase === 'countdown' && !isChallenge && (
-          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/55 backdrop-blur-[2px]">
+          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/55">
             <span className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">Get Ready</span>
             <div className="relative w-28 h-28 rounded-full border-[3px] border-cyan-500/20 flex items-center justify-center">
               <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-cyan-400 border-r-cyan-400 animate-spin" style={{ animationDuration: '0.7s' }} />
-              <span key={countdownValue} className="fx-pop-in text-5xl font-black bg-gradient-to-b from-white to-cyan-300 bg-clip-text text-transparent">
+              <span key={countdownValue} className="fx-pop-in text-5xl font-display bg-gradient-to-b from-white to-cyan-300 bg-clip-text text-transparent">
                 {countdownValue > 0 ? countdownValue : 'GO'}
               </span>
             </div>
@@ -859,7 +977,7 @@ export default function ConcentrationGridClient() {
 
         {/* ── RESULT SCREEN ── */}
         {phase === 'ended' && endSummary && !isChallenge && (
-          <ResultScreen summary={endSummary} onPlayAgain={enterDrill} onShare={shareResult} />
+          <ResultScreen summary={endSummary} bestScore={bestScore} onPlayAgain={enterDrill} onShare={shareResult} />
         )}
       </div>
     </DrillWrapper>
@@ -936,13 +1054,13 @@ function HowToRow({ icon, node }) {
 function MiniStat({ label, value, color }) {
   return (
     <div className="rounded-[9px] border border-white/5 bg-white/[0.02] py-1.5 px-1 text-center">
-      <div className={`text-[12px] font-bold ${color}`}>{value}</div>
-      <div className="text-[7.5px] uppercase tracking-wide text-slate-500 font-bold mt-0.5">{label}</div>
+      <div className={`text-[12px] font-hud font-bold ${color}`}>{value}</div>
+      <div className="text-[7.5px] label-tiny text-slate-500 mt-0.5">{label}</div>
     </div>
   );
 }
 
-function ResultScreen({ summary, onPlayAgain, onShare }) {
+function ResultScreen({ summary, bestScore, onPlayAgain, onShare }) {
   const grade = getGrade(summary.accuracy);
   const gradeColor = grade.grade === 'S+' || grade.grade === 'S' ? '#fbbf24' : '#a78bfa';
 
@@ -950,28 +1068,28 @@ function ResultScreen({ summary, onPlayAgain, onShare }) {
     <div className="absolute inset-0 z-40 flex" style={{ background: 'rgba(5,5,8,0.97)' }}>
       <div className="w-[36%] flex flex-col items-center justify-center gap-1.5 border-r border-white/5" style={{ background: 'radial-gradient(ellipse 260px 200px at 50% 30%, rgba(250,204,21,.08), transparent 70%)' }}>
         {summary.isNewBest && (
-          <span className="text-[9.5px] font-bold text-yellow-400 bg-yellow-500/10 border border-yellow-500/25 px-2.5 py-0.5 rounded-full mb-1">NEW BEST</span>
+          <span className="text-[11px] font-display text-yellow-400 bg-yellow-500/10 border border-yellow-500/25 px-2.5 py-1 rounded-full mb-1">NEW BEST</span>
         )}
-        <div className="text-5xl sm:text-6xl font-black leading-none" style={{ color: gradeColor }}>{grade.grade}</div>
-        <div className="text-[10px] uppercase tracking-widest text-slate-500">{grade.label}</div>
-        <div className="text-3xl sm:text-4xl font-black text-white mt-1 tabular-nums">{summary.score.toLocaleString()}</div>
-        <div className="text-[9px] uppercase tracking-widest text-slate-500">Points</div>
+        <div className="text-5xl sm:text-6xl font-display leading-none" style={{ color: gradeColor }}>{grade.grade}</div>
+        <div className="text-[10px] label-tiny text-slate-500">{grade.label}</div>
+        <div className="text-3xl sm:text-4xl font-display text-white mt-1 tabular-nums">{summary.score.toLocaleString()}</div>
+        <div className="text-[9px] label-tiny text-slate-500">Points</div>
       </div>
 
       <div className="flex-1 flex flex-col justify-center gap-3 px-6 sm:px-8 py-4 min-w-0">
         <div className="grid grid-cols-3 gap-2">
+          <ResultStat label="Best Score" value={(bestScore ?? 0).toLocaleString()} color="text-yellow-400" />
           <ResultStat label="Accuracy" value={`${summary.accuracy}%`} color="text-blue-400" />
-          <ResultStat label="Combo" value={`${summary.bestCombo}x`} color="text-orange-400" />
           <ResultStat label="XP" value={`+${summary.xpEarned}`} color="text-violet-400" />
         </div>
         <div className="flex gap-2">
-          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-cyan-600 to-blue-600 text-white font-bold text-xs uppercase tracking-wide cursor-pointer">
+          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-cyan-600 to-blue-600 text-white font-extrabold text-xs uppercase tracking-wider cursor-pointer">
             Play Again
           </button>
-          <button onClick={onShare} className="w-11 flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer">
+          <button onClick={onShare} className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer">
             <Share2 className="w-4 h-4" />
           </button>
-          <Link href="/drills/cognitive" className="w-11 flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white">
+          <Link href="/drills/cognitive" className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white">
             <ArrowLeft className="w-4 h-4 text-slate-400" />
           </Link>
         </div>
@@ -983,8 +1101,8 @@ function ResultScreen({ summary, onPlayAgain, onShare }) {
 function ResultStat({ label, value, color }) {
   return (
     <div className="rounded-[11px] border border-white/5 bg-white/[0.03] py-2 px-1 text-center">
-      <div className={`text-sm font-black ${color} tabular-nums`}>{value}</div>
-      <div className="text-[7.5px] uppercase tracking-wide text-slate-500 font-bold mt-0.5">{label}</div>
+      <div className={`text-sm font-hud font-bold ${color} tabular-nums`}>{value}</div>
+      <div className="text-[7.5px] label-tiny text-slate-500 mt-0.5">{label}</div>
     </div>
   );
 }

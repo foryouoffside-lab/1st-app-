@@ -5,26 +5,51 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
   Compass, Volume2, VolumeX, Eye, Zap, Ban,
-  Share2, ArrowLeft, Heart
+  Share2, ArrowLeft
 } from 'lucide-react';
 
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade, getComboMultiplier } from '../../../../../lib/scoringEngine';
+import {
+  applyHit, applyMistake, scoringMaxLevel, scoringLives,
+} from '../../../../../lib/drillRules';
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { lockPortrait, unlockOrientation } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
 import { getPlayerName } from '../../../../../lib/progressStore';
-import generateShareCard, { shareScoreCard } from '../../../../../components/ShareScoreCard';
-import { Capacitor } from '@capacitor/core';
-import { StatusBar } from '@capacitor/status-bar';
+import { useShareCard } from '../../../../../components/ShareScoreCard';
 import DrillWrapper from '../../../../../components/DrillWrapper';
+import { APP_SHARE_URL } from '../../../../../lib/shareLinks';
 
 // ============================================================
 // TUNING CONSTANTS
 // ============================================================
 const TOTAL_TIME = 45.0;
-const MAX_LIVES = 5;
-const MAX_LEVEL = 12;
 
+// Seconds a correct action buys, overriding the shared TIME_PER_HIT.
+//
+// The shared 1.0s is calibrated for a STREAM drill — several targets alive at
+// once, two to three actions a second. This drill is one action per round:
+// one Stroop answer per round (~0.75s).
+// Against a clock that drains 1s per second that cadence could not refill at
+// any accuracy, so the run was a flat TOTAL_TIME every time and skill could
+// not extend it — the endurance model silently doing nothing.
+// 1.2 makes 80% accuracy the break-even bar. See rewardForActionRate() in
+// lib/drillRules.js, and recompute this if the round window is retuned.
+const TIME_PER_HIT = 1.2;
+
+
+// How a solo run is won and lost — the clock as the only fail state, what a hit
+// earns, what a mistake costs — is defined once in lib/drillRules.js and shared
+// by every drill. Read that file for the model and the reasoning.
+//
+// This drill needs no level ramp of its own: its difficulty is an ADAPTIVE
+// STAIRCASE (updateStaircase) that tightens the response deadline when you get
+// answers right and loosens it when you don't, already floored at
+// DEADLINE_FLOOR_MS. That converges on each player's real limit, which is what
+// the shared ramp is trying to do anyway — so it stays as it is. What a
+// staircase can't do is END a run: by design it settles at a deadline you CAN
+// sustain. The decaying time-per-hit payout in drillRules does that instead,
+// keyed off the staircase's own speed level.
 const STROOP_COLORS = [
   { name: 'Red', hex: '#ef4444' },
   { name: 'Blue', hex: '#3b82f6' },
@@ -36,13 +61,19 @@ const STROOP_COLORS = [
   { name: 'Cyan', hex: '#06b6d4' },
 ];
 
-const deadlineForLevel = (lvl) => Math.max(400, 1500 - (lvl - 1) * 100);
+const DEADLINE_FLOOR_MS = 400;
+// How much shorter the word stays on screen after each correct answer.
+const DEADLINE_STEP_MS = 50;
 
-const getOptionCountForLevel = (lvl) => {
-  if (lvl <= 3) return 4;
-  if (lvl <= 6) return 5;
-  return 6;
-};
+const deadlineForLevel = (lvl) => Math.max(DEADLINE_FLOOR_MS, 1500 - (lvl - 1) * 100);
+
+// Always four buttons, at every level. The drill's difficulty is the response
+// deadline, not the size of the search. Adding a 5th and 6th option deeper in
+// a run changes the task from "resolve the conflict" into "scan a bigger grid"
+// — a different skill, on a two-column layout that also has to reflow to three
+// columns mid-run, moving every button out from under the player's thumb at
+// exactly the moment the clock is tightest.
+const OPTION_COUNT = 4;
 
 // Fisher-Yates Shuffle
 const fisherYatesShuffle = (arr) => {
@@ -55,15 +86,15 @@ const fisherYatesShuffle = (arr) => {
 };
 
 // Both the ink color AND the word's own color name are guaranteed a slot
-// among the options — not just the ink color. Whichever rule is live for
-// this trial (see spawnTrial's ruleMode), the correct button has to actually
-// be on screen, and revealing the rule via "is the answer even present"
-// would give it away for free.
-const getOptionsForTrial = (targetColor, textColor, optionCount) => {
+// among the options — not just the answer. The wrong one of the pair is the
+// drill's whole point: it is the trap the rule tells you to ignore, and if it
+// were sometimes absent the player could answer by elimination instead of by
+// inhibition. The remaining two slots are unrelated decoys.
+const getOptionsForTrial = (targetColor, textColor) => {
   const excludeNames = new Set([targetColor.name, textColor.name]);
   const otherColors = STROOP_COLORS.filter(c => !excludeNames.has(c.name));
   const shuffledOthers = fisherYatesShuffle(otherColors);
-  const decoys = shuffledOthers.slice(0, Math.max(0, optionCount - 2));
+  const decoys = shuffledOthers.slice(0, OPTION_COUNT - 2);
   return fisherYatesShuffle([targetColor, textColor, ...decoys]);
 };
 
@@ -80,7 +111,7 @@ class AudioSynthesizer {
     if (!this.ctx) {
       try {
         this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-      } catch (e) {}
+      } catch {}
     }
     if (this.ctx && this.ctx.state === 'suspended') {
       this.ctx.resume();
@@ -104,7 +135,7 @@ class AudioSynthesizer {
       gainNode.connect(this.ctx.destination);
       osc.start();
       osc.stop(this.ctx.currentTime + dur);
-    } catch (e) {}
+    } catch {}
   }
 
   // 1. Hit sound
@@ -113,8 +144,85 @@ class AudioSynthesizer {
   // 2. Countdown tick sound
   playCountdownTick() { this.tone(440, 0.09, 'sine', 0.12, 440); }
 
-  // 3. "GO" start sound
-  playGo() { this.tone(523.25, 0.18, 'triangle', 0.17, 784); }
+  // GO — a struck wooden bar. Warm rather than urgent: this is the last beat
+  // of 3-2-1, so it has to feel bigger than the 440Hz ticks without turning
+  // the start of a focus drill into an alarm.
+  //
+  // Earlier versions chased impact and got harshness instead — a bright A5
+  // mallet, a four-note arpeggio over a sub drop, a chord with a glide into
+  // it. Next to the ticks they all read as ARCADE.
+  //
+  // What works is a marimba tap. A 12ms noise burst bandpassed at 900Hz is
+  // the beater contacting wood — low and short enough that it never reads as
+  // a drum, but without it the tone has no onset and nothing feels struck.
+  // Behind it, three voices 5ms later: C5 as the bar, its octave for a little
+  // air, C4 underneath for warmth. Each is a pair of sines detuned four cents
+  // apart through a lowpass — the same construction as chimeVoice — which is
+  // why nothing here buzzes. C is a minor third above the 440Hz ticks, so it
+  // resolves upward and lands clearly without shouting. Decays over ~350ms.
+  //
+  // Scheduled on the AudioContext clock, not with setTimeout: the main thread
+  // is setting the round up at exactly this instant.
+  playGo() {
+    if (!this.enabled || !this.ctx) return;
+    try {
+      const ctx = this.ctx;
+      if (ctx.state === 'suspended') ctx.resume();
+      const t0 = ctx.currentTime;
+
+      // The beater. Linearly-decaying white noise through a bandpass — a
+      // wooden knock, not a snare.
+      const nLen = Math.max(1, Math.floor(ctx.sampleRate * 0.012));
+      const nBuf = ctx.createBuffer(1, nLen, ctx.sampleRate);
+      const nData = nBuf.getChannelData(0);
+      for (let i = 0; i < nLen; i++) {
+        nData[i] = (Math.random() * 2 - 1) * (1 - i / nLen);
+      }
+      const nSrc = ctx.createBufferSource();
+      nSrc.buffer = nBuf;
+      const nBand = ctx.createBiquadFilter();
+      nBand.type = 'bandpass';
+      nBand.frequency.setValueAtTime(900, t0);
+      nBand.Q.setValueAtTime(1.6, t0);
+      const nGain = ctx.createGain();
+      nGain.gain.setValueAtTime(0.042, t0);
+      nGain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.012);
+      nSrc.connect(nBand);
+      nBand.connect(nGain);
+      nGain.connect(ctx.destination);
+      nSrc.start(t0);
+      nSrc.stop(t0 + 0.012);
+
+      // The bar. 5ms behind the knock so the two read as one event.
+      [
+        // freq    at     dur   vol    cut   attack
+        [523.25,  0.005, 0.35, 0.120, 2000, 0.008], // body — C5
+        [1046.50, 0.005, 0.13, 0.034, 3200, 0.008], // octave — air
+        [261.63,  0.005, 0.30, 0.040, 1200, 0.012]  // foundation — C4
+      ].forEach(([freq, at, dur, vol, cut, attack]) => {
+        const startAt = t0 + at;
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(cut, startAt);
+        filter.Q.setValueAtTime(0.5, startAt);
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.0001, startAt);
+        gain.gain.linearRampToValueAtTime(vol, startAt + attack);
+        gain.gain.exponentialRampToValueAtTime(0.001, startAt + dur);
+        filter.connect(gain);
+        gain.connect(ctx.destination);
+        [-4, 4].forEach((cents) => {
+          const osc = ctx.createOscillator();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, startAt);
+          osc.detune.setValueAtTime(cents, startAt);
+          osc.connect(filter);
+          osc.start(startAt);
+          osc.stop(startAt + dur);
+        });
+      });
+    } catch {}
+  }
 
   // 4. Penalty / Miss sound
   playPenalty() {
@@ -138,7 +246,7 @@ class AudioSynthesizer {
         osc.start(t0 + delay);
         osc.stop(t0 + delay + 0.08);
       });
-    } catch (e) {}
+    } catch {}
   }
   playMiss() { this.playPenalty(); }
   playWrongBoom() { this.playPenalty(); }
@@ -162,7 +270,7 @@ class AudioSynthesizer {
         osc.start(t0 + offset);
         osc.stop(t0 + offset + 0.15);
       });
-    } catch (e) {}
+    } catch {}
   }
 
   chimeVoice(freq, startAt, dur, vol, filterFreq = 2600) {
@@ -200,7 +308,7 @@ class AudioSynthesizer {
         this.chimeVoice(freq, t0 + i * 0.08, 0.24, 0.13, 3200);
       });
       this.chimeVoice(1046.50, t0 + 0.26, 0.6, 0.16, 4200);
-    } catch (e) {}
+    } catch {}
   }
 
   setEnabled(status) {
@@ -220,7 +328,7 @@ const getSavedData = () => {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
     return { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0 };
-  } catch (e) {
+  } catch {
     return { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0 };
   }
 };
@@ -228,7 +336,7 @@ const getSavedData = () => {
 const saveData = (data) => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch (e) {}
+  } catch {}
 };
 
 // ============================================================
@@ -250,13 +358,15 @@ export default function DistractionFighterClient() {
   // === Gameplay / Stroop States ===
   const [currentTrial, setCurrentTrial] = useState(null);
   const [options, setOptions] = useState([]);
-  const [speedLevel, setSpeedLevel] = useState(1);
-
+  // The staircase's speed level. This used to be React state mirrored into a
+  // ref; the live "Lv." HUD badge was the only thing that ever READ the state,
+  // so it went with the badge. The ref is the real one — the game loop and the
+  // callbacks read it directly, which also avoids the stale-value capture a
+  // state read inside those callbacks would have had.
+  const speedLevelRef = useRef(1);
   // HUD variables
   const [score, setScore] = useState(0);
   const [timeRemaining, setTimeRemaining] = useState(totalTime);
-  const [combo, setCombo] = useState(0);
-  const [lives, setLives] = useState(MAX_LIVES);
   const [dangerLevel, setDangerLevel] = useState(0);
 
   // === Best stats ===
@@ -281,14 +391,13 @@ export default function DistractionFighterClient() {
 
   const scoreRef = useRef(0);
   const timeLeftRef = useRef(totalTime);
+  const runOverRef = useRef(false);
   const comboRef = useRef(0);
-  const livesRef = useRef(MAX_LIVES);
   const maxStreakRef = useRef(0);
   const totalFramesRef = useRef(0);
 
   const deadlineRef = useRef(1500);
   const startDeadlineRef = useRef(1500);
-
   const trialActiveRef = useRef(false);
   const trialSpawnedAtRef = useRef(0);
   
@@ -298,6 +407,10 @@ export default function DistractionFighterClient() {
 
   const flashIdRef = useRef(0);
   const phaseRef = useRef('start');
+  // Last values actually pushed to state from the render loop — see the HUD
+  // sync note in the loop.
+  const hudTimeRef = useRef(-1);
+  const hudScoreRef = useRef(-1);
 
   useEffect(() => {
     setIsClient(true);
@@ -320,22 +433,6 @@ export default function DistractionFighterClient() {
     };
   }, []);
 
-  // Hide floating close controls during play
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      if (phase === 'playing' || phase === 'countdown') {
-        document.body.classList.add('hide-drill-controls');
-      } else {
-        document.body.classList.remove('hide-drill-controls');
-      }
-    }
-    return () => {
-      if (typeof window !== 'undefined') {
-        document.body.classList.remove('hide-drill-controls');
-      }
-    };
-  }, [phase]);
-
   useEffect(() => { if (audioSynth) audioSynth.setEnabled(soundEnabled); }, [soundEnabled]);
 
   const triggerFlash = (variant) => {
@@ -347,18 +444,28 @@ export default function DistractionFighterClient() {
     }, 150);
   };
 
-  // DIFFICULTY RATCHET: Increases only on correct answers, never decreases on mistakes
+  // DIFFICULTY RATCHET: the only thing that escalates is how long the word
+  // stays on screen. It tightens on every correct answer and never loosens on
+  // a mistake, so the drill gets harder as the player performs and a slip
+  // costs a life rather than handing back time.
+  //
+  // The step used to be 100ms, which hit the 400ms floor after eleven correct
+  // answers — about fifteen seconds into a 45-second run, leaving two thirds
+  // of it flat at maximum speed. At 50ms the squeeze is spread across roughly
+  // twenty-two answers, so it is still tightening right to the end and the
+  // per-trial change is small enough to chase rather than trip over.
   const updateStaircase = useCallback((isCorrect) => {
     if (isCorrect) {
-      deadlineRef.current = Math.max(400, deadlineRef.current - 100);
+      deadlineRef.current = Math.max(DEADLINE_FLOOR_MS, deadlineRef.current - DEADLINE_STEP_MS);
     }
 
     const cosmeticLvl = Math.max(1, Math.floor((1500 - deadlineRef.current) / 100) + 1);
-    setSpeedLevel(cosmeticLvl);
+    speedLevelRef.current = cosmeticLvl;
+
   }, []);
 
   const spawnTrial = useCallback(() => {
-    if (timeLeftRef.current <= 0 || livesRef.current <= 0 || phaseRef.current !== 'playing') return;
+    if (timeLeftRef.current <= 0 || runOverRef.current || phaseRef.current !== 'playing') return;
 
     const targetColorObj = STROOP_COLORS[Math.floor(Math.random() * STROOP_COLORS.length)];
 
@@ -367,24 +474,23 @@ export default function DistractionFighterClient() {
       textColorObj = STROOP_COLORS[Math.floor(Math.random() * STROOP_COLORS.length)];
     } while (textColorObj.name === targetColorObj.name);
 
-    // Two rules, picked fresh each trial: 'ink' is the original mechanic
-    // (tap the physical ink color, ignore the word). 'word' flips it — tap
-    // the color the word itself names, ignoring what it's actually printed
-    // in. Randomizing per-trial (rather than fixing one rule for the whole
-    // run) is the actual difficulty add the player asked for: autopilot on a
-    // single fixed rule stops working, since the rule banner has to be read
-    // every round.
-    const ruleMode = Math.random() < 0.5 ? 'ink' : 'word';
-
-    const cosmeticLvl = Math.max(1, Math.floor((1500 - deadlineRef.current) / 100) + 1);
-    const optCount = getOptionCountForLevel(cosmeticLvl);
-    const trialOptions = getOptionsForTrial(targetColorObj, textColorObj, optCount);
+    // ONE RULE, FULL STOP: tap the colour the word is PRINTED in, ignore what
+    // it says. It is the same on every trial of every run, so there is nothing
+    // on screen the player has to check before answering.
+    //
+    // There used to be a second rule ('word' — tap the colour the word NAMES)
+    // rolled per run, with a banner in the play area saying which way round
+    // this run was. Two rules means the player does two jobs: resolve the
+    // Stroop conflict AND remember/re-read which direction applies. The second
+    // job is banner-reading, not inhibition, and it drowns out the thing the
+    // drill trains. Fixing the rule lets the automatic response form; the
+    // escalating deadline in updateStaircase is what makes the run hard.
+    const trialOptions = getOptionsForTrial(targetColorObj, textColorObj);
 
     const newTrial = {
       displayWord: textColorObj.name.toUpperCase(),
       hex: targetColorObj.hex,
-      trueColorName: ruleMode === 'ink' ? targetColorObj.name : textColorObj.name,
-      ruleMode,
+      trueColorName: targetColorObj.name,
       options: trialOptions,
       spawnedAt: performance.now()
     };
@@ -407,7 +513,7 @@ export default function DistractionFighterClient() {
     audioSynth?.playResultsReveal();
 
     const totalClicks = correctCountRef.current + wrongCountRef.current + timeoutCountRef.current;
-    const accuracyVal = totalClicks > 0 ? Math.round((correctCountRef.current / totalClicks) * 100) : 100;
+    const accuracyVal = totalClicks > 0 ? Math.round((correctCountRef.current / totalClicks) * 100) : 0;
 
     const bonuses = calcEndBonuses({
       rawScore: scoreRef.current,
@@ -415,8 +521,7 @@ export default function DistractionFighterClient() {
       bestCombo: maxStreakRef.current,
       totalActions: totalClicks,
       mistakes: wrongCountRef.current + timeoutCountRef.current,
-      livesRemaining: Math.max(0, livesRef.current),
-      maxLives: MAX_LIVES,
+      livesRemaining: scoringLives(0),
       category: 'cognitive'
     });
 
@@ -468,6 +573,7 @@ export default function DistractionFighterClient() {
       bestCombo: maxStreakRef.current,
       xpEarned: xpResult.xp,
       isNewBest,
+      prevBest: prev.bestScore,
     });
   }, []);
 
@@ -475,7 +581,6 @@ export default function DistractionFighterClient() {
     audioSynth?.playHit();
     correctCountRef.current += 1;
     comboRef.current += 1;
-    setCombo(comboRef.current);
     if (comboRef.current > maxStreakRef.current) {
       maxStreakRef.current = comboRef.current;
     }
@@ -489,14 +594,13 @@ export default function DistractionFighterClient() {
         category: 'cognitive',
         reactionMs: reactionTimeMs,
         combo: comboRef.current,
-        livesRemaining: livesRef.current,
-        maxLives: MAX_LIVES,
+        livesRemaining: scoringLives(0),
         timeRemaining: timeLeftRef.current,
         totalGameTime: 45,
         level: cosmeticLvl,
-        maxLevel: MAX_LEVEL
+        maxLevel: scoringMaxLevel(isChallenge)
       });
-    } catch (err) {
+    } catch {
       const base = 6;
       const comboMult = getComboMultiplier(comboRef.current);
       const speedBonus = reactionTimeMs < 1200 ? Math.round(base * (1200 - reactionTimeMs) / 1200) : 0;
@@ -504,6 +608,13 @@ export default function DistractionFighterClient() {
     }
 
     scoreRef.current += pointsObj.total;
+    // Buy back a slice of the clock. Solo only - in a duel the clock comes from
+    // duelDeadlineRef (the match's shared absolute end instant), which nothing
+    // local may move. No state is set here; the existing tick redraws the
+    // seconds when the displayed number changes, so this costs nothing per hit.
+    if (!isChallenge) {
+      timeLeftRef.current = applyHit({ timeRemaining: timeLeftRef.current, level: speedLevelRef.current, reward: TIME_PER_HIT });
+    }
     setScore(scoreRef.current);
 
     updateStaircase(true);
@@ -516,10 +627,11 @@ export default function DistractionFighterClient() {
   const resolveWrong = useCallback((kind) => {
     audioSynth?.playPenalty();
     comboRef.current = 0;
-    setCombo(0);
     
-    livesRef.current -= 1;
-    setLives(Math.max(0, livesRef.current));
+    const after = applyMistake({ timeRemaining: timeLeftRef.current });
+    timeLeftRef.current = after.timeRemaining;
+    runOverRef.current = after.runOver;
+    setTimeRemaining(Math.ceil(timeLeftRef.current));
 
     if (kind === 'timeout') {
       timeoutCountRef.current += 1;
@@ -530,7 +642,7 @@ export default function DistractionFighterClient() {
     updateStaircase(false);
     triggerFlash('red');
 
-    if (livesRef.current <= 0 || timeLeftRef.current <= 0) {
+    if (runOverRef.current || timeLeftRef.current <= 0) {
       endGame();
     } else {
       setTimeout(() => {
@@ -571,8 +683,31 @@ export default function DistractionFighterClient() {
         }
       }
 
-      if (totalFramesRef.current % 6 === 0) {
-        setTimeRemaining(timeLeftRef.current);
+      // HUD sync, straight out of the render loop.
+      //
+      // This was `every 6th frame, push both`, and both halves were wrong.
+      // A frame counter is not a clock — 6 frames is 100ms on a steady 60Hz
+      // panel but anything from 60ms to 200ms on a WebView that jitters — and
+      // `timeLeftRef` is a raw float, so the pushed value ALWAYS differed from
+      // the last one and React could never bail out. The result was a full
+      // re-render of the trial, the option buttons, the vignette and the lives
+      // row roughly ten times a second, scheduled from inside the animation
+      // loop itself, for the entire run.
+      //
+      // Both values are now pushed only when what they DISPLAY changes: the
+      // clock renders through Math.ceil, and the score is an integer that only
+      // moves when the player answers. On a quiet frame this costs two integer
+      // comparisons and no render at all.
+      // Compared against a plain ref rather than handed to a functional
+      // updater: this runs every frame, and a ref comparison is a couple of
+      // instructions where entering React's update path at all is not.
+      const shownTime = Math.ceil(timeLeftRef.current);
+      if (hudTimeRef.current !== shownTime) {
+        hudTimeRef.current = shownTime;
+        setTimeRemaining(shownTime);
+      }
+      if (hudScoreRef.current !== scoreRef.current) {
+        hudScoreRef.current = scoreRef.current;
         setScore(scoreRef.current);
       }
 
@@ -590,11 +725,11 @@ export default function DistractionFighterClient() {
   const scheduleHeartbeat = useCallback(() => {
     if (isChallenge) return;
     if (!gameActiveRef.current) return;
-    const dangerFromLives = (MAX_LIVES - livesRef.current) / MAX_LIVES;
+    // Time is the only danger there is now — the lives term went with the lives.
     const dangerFromTime = timeLeftRef.current <= 10 ? (10 - timeLeftRef.current) / 10 : 0;
-    const danger = Math.max(dangerFromLives * 0.7, dangerFromTime);
-    // Clamped: an unclamped tempo goes NEGATIVE once danger exceeds ~1.69 (which
-    // negative lives can produce), and a setTimeout with a negative delay fires
+    const danger = Math.min(1, Math.max(0, dangerFromTime));
+    // Clamped: an unclamped tempo goes NEGATIVE once danger exceeds ~1.69, and
+    // a setTimeout with a negative delay fires
     // immediately — turning this self-rescheduling callback into a tight loop
     // spawning audio nodes at full CPU. That was the "phone heats up and makes
     // noise" bug already fixed in the other drills; this brings the rest in line.
@@ -630,9 +765,10 @@ export default function DistractionFighterClient() {
       scoreRef.current = 0;
       timeLeftRef.current = totalTime;
       comboRef.current = 0;
-      livesRef.current = MAX_LIVES;
       maxStreakRef.current = 0;
       totalFramesRef.current = 0;
+      hudTimeRef.current = -1;
+      hudScoreRef.current = -1;
       deadlineRef.current = startDeadlineRef.current;
 
       trialActiveRef.current = false;
@@ -640,13 +776,9 @@ export default function DistractionFighterClient() {
       wrongCountRef.current = 0;
       timeoutCountRef.current = 0;
 
-      const startLvl = Math.max(1, Math.floor((1500 - deadlineRef.current) / 100) + 1);
-
-      setScore(0);
+        setScore(0);
       setTimeRemaining(totalTime);
-      setCombo(0);
-      setLives(MAX_LIVES);
-      setSpeedLevel(startLvl);
+
       setDangerLevel(0);
       setFlashes([]);
 
@@ -668,15 +800,15 @@ export default function DistractionFighterClient() {
     if (heartbeatTimerRef.current) clearTimeout(heartbeatTimerRef.current);
     if (animationRef.current) cancelAnimationFrame(animationRef.current);
 
-    const saved = getSavedData();
-    const savedBestLevel = Math.max(1, saved.bestLevel || 1);
-    const startLevel = Math.max(1, Math.min(MAX_LEVEL, Math.round(savedBestLevel * 0.55)));
-    startDeadlineRef.current = deadlineForLevel(startLevel);
+    // Every run starts at the lowest difficulty. It used to start at 55% of the
+    // player's best level, so improving once permanently raised the speed every
+    // future run opened at - a silent spike with nothing on screen explaining it.
+    // That head-start only existed because a fixed 45s was too short to climb the
+    // ramp; the endurance clock replaces it.
+    startDeadlineRef.current = deadlineForLevel(1);
 
     setScore(0);
     setTimeRemaining(totalTime);
-    setCombo(0);
-    setLives(MAX_LIVES);
     setDangerLevel(0);
     setFlashes([]);
     setEndSummary(null);
@@ -686,16 +818,22 @@ export default function DistractionFighterClient() {
     runCountdown(isChallenge ? 0 : 3);
   }, [runCountdown, isChallenge, totalTime]);
 
-  const shareResult = useCallback(() => {
-    if (!endSummary) return;
-    const text = `Scored ${endSummary.score} on Distraction Fighter (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — SkillDrills`;
-    const url = 'https://skilldrills.online/drills/cognitive/focus/distraction-fighter';
-    if (typeof navigator !== 'undefined' && navigator.share) {
-      navigator.share({ title: 'Distraction Fighter — SkillDrills', text, url }).catch(() => {});
-    } else if (typeof navigator !== 'undefined' && navigator.clipboard) {
-      navigator.clipboard.writeText(`${text} ${url}`);
-    }
-  }, [endSummary]);
+  // Score card. Drawn and encoded while the result screen sits idle,
+  // not on the tap - see useShareCard in components/ShareScoreCard.js.
+  const shareResult = useShareCard(endSummary ? {
+    score: endSummary.score,
+    bestScore: endSummary.prevBest ?? bestScore,
+    accuracy: endSummary.accuracy,
+    bestCombo: endSummary.bestCombo,
+    rating: getGrade(endSummary.accuracy),
+    newBest: endSummary.isNewBest,
+    drillName: 'Distraction Fighter',
+    playerName: getPlayerName(),
+  } : null, {
+    url: APP_SHARE_URL,
+    title: 'Distraction Fighter — SkillDrills',
+    text: endSummary ? `Scored ${endSummary.score} on Distraction Fighter (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — SkillDrills` : '',
+  });
 
   if (loading || !isClient) {
     return (
@@ -714,8 +852,6 @@ export default function DistractionFighterClient() {
       category="cognitive"
       score={score}
       timeLeft={phase === 'ended' ? 0 : Math.ceil(timeRemaining)}
-      lives={isChallenge || phase === 'start' || phase === 'countdown' ? null : lives}
-      maxLives={isChallenge ? null : MAX_LIVES}
       soundEnabled={soundEnabled}
       onSoundToggle={() => setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; })}
       backHref="/drills/cognitive"
@@ -755,13 +891,15 @@ export default function DistractionFighterClient() {
               <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(6,182,212,.35)]">
                 <Compass className="w-[22px] h-[22px] text-white" />
               </div>
-              <h1 className="text-[17px] font-bold tracking-tight text-white">Distraction Fighter</h1>
-              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45-second run</p>
+              <h1 className="font-display text-[32px] sm:text-[38px] text-white">Distraction Fighter</h1>
+              <p className="text-[9px] label-tiny text-slate-500 mt-1">Endurance run</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
-                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Read the RULE banner every round</>} />
-                <HowToRow icon={<Zap className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>It flips · tap the ink or the word</>} />
-                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Wrong taps cost a life · 5 lives</>} />
+                {/* Rules are capped at ~34 chars — the whitespace-nowrap in
+                    HowToRow is load-bearing, longer strings overflow the card. */}
+                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Tap the INK color, not the word</>} />
+                <HowToRow icon={<Zap className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Same rule every run · no flips</>} />
+                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Hits add time, misses cost it</>} />
               </div>
 
               <div className="grid grid-cols-3 gap-1.5 mt-3.5">
@@ -784,44 +922,25 @@ export default function DistractionFighterClient() {
         {(phase === 'playing' || phase === 'countdown') && (
           <>
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
-              <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
-              <div className="flex items-center gap-2 mt-1.5">
-                {isChallenge ? (
-                  <span className="text-[10px] font-black text-cyan-300 bg-cyan-500/15 border border-cyan-500/25 px-1.5 py-0.5 rounded">
-                    Lv.{speedLevel}
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-0.5">
-                    {Array.from({ length: MAX_LIVES }).map((_, i) => (
-                      <Heart key={i} className={`w-3 h-3 ${i < lives ? 'fill-red-500 text-red-500' : 'text-white/15'}`} />
-                    ))}
-                  </span>
-                )}
-              </div>
+              <span className="text-2xl font-hud font-bold text-white leading-none tabular-nums">{score}</span>
             </div>
 
             {/* Timer overlay at top-right */}
             <div className="absolute top-5 right-5 z-40 flex flex-col items-end pointer-events-none select-none">
-              <span className={`text-3xl font-black font-mono leading-none tabular-nums ${timeRemaining <= 10 ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}>
+              <span className={`text-3xl font-hud font-bold leading-none tabular-nums ${timeRemaining <= 10 ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}>
                 {Math.ceil(timeRemaining)}s
               </span>
-              <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest mt-1">Time Left</span>
+              <span className="text-[8px] label-tiny text-slate-500 mt-1">Time Left</span>
             </div>
 
             {/* Main Stroop Word Display Area */}
             <div className="relative w-full h-[100dvh] flex flex-col items-center justify-center p-4">
               <div className="flex-1 flex flex-col items-center justify-center">
-                {currentTrial && (
-                  <div
-                    className={`mb-4 px-3.5 py-1.5 rounded-full border text-[10px] font-black uppercase tracking-wider select-none ${
-                      currentTrial.ruleMode === 'ink'
-                        ? 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300'
-                        : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
-                    }`}
-                  >
-                    Rule: {currentTrial.ruleMode === 'ink' ? 'Select the Color of Text' : 'Select the Color'}
-                  </div>
-                )}
+                {/* No rule banner in the play area. The rule never varies now
+                    (see spawnTrial), so a permanent caption inside the board
+                    is one more thing competing with the word for attention and
+                    nothing to learn from it. It is stated on the start card
+                    instead. */}
                 {currentTrial && (
                   <span
                     className="text-6xl sm:text-7xl font-black uppercase tracking-widest transition-all drop-shadow-[0_2px_15px_rgba(0,0,0,0.6)] animate-pulse select-none"
@@ -832,15 +951,10 @@ export default function DistractionFighterClient() {
                 )}
               </div>
 
-
               {/* Color Options Grid */}
               <div className="w-full max-w-sm flex flex-col items-center select-none mb-2">
                 {currentTrial && (
-                  <div 
-                    className={`grid gap-2.5 w-full ${
-                      options.length === 4 ? 'grid-cols-2' : 'grid-cols-3'
-                    }`}
-                  >
+                  <div className="grid grid-cols-2 gap-2.5 w-full">
                     {options.map((opt) => (
                       <button
                         key={opt.name}
@@ -860,11 +974,11 @@ export default function DistractionFighterClient() {
 
         {/* ── COUNTDOWN ── */}
         {phase === 'countdown' && !isChallenge && (
-          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/55 backdrop-blur-[2px]">
+          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/55">
             <span className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">Get Ready</span>
             <div className="relative w-28 h-28 rounded-full border-[3px] border-cyan-500/20 flex items-center justify-center">
               <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-cyan-400 border-r-cyan-400 animate-spin" style={{ animationDuration: '0.7s' }} />
-              <span key={countdownValue} className="fx-pop-in text-5xl font-black bg-gradient-to-b from-white to-cyan-300 bg-clip-text text-transparent">
+              <span key={countdownValue} className="fx-pop-in text-5xl font-display bg-gradient-to-b from-white to-cyan-300 bg-clip-text text-transparent">
                 {countdownValue > 0 ? countdownValue : 'GO'}
               </span>
             </div>
@@ -874,7 +988,7 @@ export default function DistractionFighterClient() {
 
         {/* ── RESULT SCREEN ── */}
         {phase === 'ended' && endSummary && !isChallenge && (
-          <ResultScreen summary={endSummary} onPlayAgain={enterDrill} onShare={shareResult} />
+          <ResultScreen summary={endSummary} bestScore={bestScore} onPlayAgain={enterDrill} onShare={shareResult} />
         )}
       </div>
     </DrillWrapper>
@@ -897,13 +1011,13 @@ function HowToRow({ icon, node }) {
 function MiniStat({ label, value, color }) {
   return (
     <div className="rounded-[9px] border border-white/5 bg-white/[0.02] py-1.5 px-1 text-center">
-      <div className={`text-[12px] font-bold ${color}`}>{value}</div>
-      <div className="text-[7.5px] uppercase tracking-wide text-slate-500 font-bold mt-0.5">{label}</div>
+      <div className={`text-[12px] font-hud font-bold ${color}`}>{value}</div>
+      <div className="text-[7.5px] label-tiny text-slate-500 mt-0.5">{label}</div>
     </div>
   );
 }
 
-function ResultScreen({ summary, onPlayAgain, onShare }) {
+function ResultScreen({ summary, bestScore, onPlayAgain, onShare }) {
   const grade = getGrade(summary.accuracy);
   const gradeColor = grade.grade === 'S+' || grade.grade === 'S' ? '#fbbf24' : '#a78bfa';
 
@@ -911,28 +1025,28 @@ function ResultScreen({ summary, onPlayAgain, onShare }) {
     <div className="absolute inset-0 z-40 flex" style={{ background: 'rgba(5,5,8,0.97)' }}>
       <div className="w-[36%] flex flex-col items-center justify-center gap-1.5 border-r border-white/5" style={{ background: 'radial-gradient(ellipse 260px 200px at 50% 30%, rgba(250,204,21,.08), transparent 70%)' }}>
         {summary.isNewBest && (
-          <span className="text-[9.5px] font-bold text-yellow-400 bg-yellow-500/10 border border-yellow-500/25 px-2.5 py-0.5 rounded-full mb-1">NEW BEST</span>
+          <span className="text-[11px] font-display text-yellow-400 bg-yellow-500/10 border border-yellow-500/25 px-2.5 py-1 rounded-full mb-1">NEW BEST</span>
         )}
-        <div className="text-5xl sm:text-6xl font-black leading-none" style={{ color: gradeColor }}>{grade.grade}</div>
-        <div className="text-[10px] uppercase tracking-widest text-slate-500">{grade.label}</div>
-        <div className="text-3xl sm:text-4xl font-black text-white mt-1 tabular-nums">{summary.score.toLocaleString()}</div>
-        <div className="text-[9px] uppercase tracking-widest text-slate-500">Points</div>
+        <div className="text-5xl sm:text-6xl font-display leading-none" style={{ color: gradeColor }}>{grade.grade}</div>
+        <div className="text-[10px] label-tiny text-slate-500">{grade.label}</div>
+        <div className="text-3xl sm:text-4xl font-display text-white mt-1 tabular-nums">{summary.score.toLocaleString()}</div>
+        <div className="text-[9px] label-tiny text-slate-500">Points</div>
       </div>
 
       <div className="flex-1 flex flex-col justify-center gap-3 px-6 sm:px-8 py-4 min-w-0">
         <div className="grid grid-cols-3 gap-2">
+          <ResultStat label="Best Score" value={(bestScore ?? 0).toLocaleString()} color="text-yellow-400" />
           <ResultStat label="Accuracy" value={`${summary.accuracy}%`} color="text-blue-400" />
-          <ResultStat label="Combo" value={`${summary.bestCombo}x`} color="text-orange-400" />
           <ResultStat label="XP" value={`+${summary.xpEarned}`} color="text-violet-400" />
         </div>
         <div className="flex gap-2">
-          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-cyan-600 to-blue-600 text-white font-bold text-xs uppercase tracking-wide cursor-pointer">
+          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-cyan-600 to-blue-600 text-white font-extrabold text-xs uppercase tracking-wider cursor-pointer">
             Play Again
           </button>
-          <button onClick={onShare} className="w-11 flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer">
+          <button onClick={onShare} className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer">
             <Share2 className="w-4 h-4" />
           </button>
-          <Link href="/drills/cognitive" className="w-11 flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white">
+          <Link href="/drills/cognitive" className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white">
             <ArrowLeft className="w-4 h-4 text-slate-400" />
           </Link>
         </div>
@@ -944,8 +1058,8 @@ function ResultScreen({ summary, onPlayAgain, onShare }) {
 function ResultStat({ label, value, color }) {
   return (
     <div className="rounded-[11px] border border-white/5 bg-white/[0.03] py-2 px-1 text-center">
-      <div className={`text-sm font-black ${color} tabular-nums`}>{value}</div>
-      <div className="text-[7.5px] uppercase tracking-wide text-slate-500 font-bold mt-0.5">{label}</div>
+      <div className={`text-sm font-hud font-bold ${color} tabular-nums`}>{value}</div>
+      <div className="text-[7.5px] label-tiny text-slate-500 mt-0.5">{label}</div>
     </div>
   );
 }

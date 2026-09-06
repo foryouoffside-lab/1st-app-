@@ -17,21 +17,50 @@ service cloud.firestore {
     // status flip to 'completed' in the very same write that's also moving
     // both players' stats (see completeMatchInTx in lib/challengeEngine.js —
     // it updates the challenge doc and both user docs in one transaction).
+    // Both the document being written (uid) and the writer (request.auth.uid)
+    // must be parties to the same real, just-completed, non-self challenge.
+    //
+    // The two conditions are checked SEPARATELY on purpose. They used to be
+    // paired — `(c.fromUid == uid && c.toUid == request.auth.uid) || (c.toUid
+    // == uid && c.fromUid == request.auth.uid)` — which reads correctly for
+    // the opponent's doc but is unsatisfiable for a player's OWN doc: there
+    // uid == request.auth.uid, so both halves demand c.fromUid == c.toUid,
+    // which the line above explicitly forbids. completeMatchInTx writes BOTH
+    // players' docs in one transaction, and one of those is always the
+    // writer's own — so that half was denied every time, the transaction
+    // failed as a whole, and NO duel could ever complete. That is what put
+    // "Couldn't send your score" on both clients and left every player on the
+    // leaderboard sitting at 0 EIQ.
+    //
+    // Checking them separately keeps the security intent intact: a stranger
+    // still can't touch anyone's stats, because they'd have to be a party to
+    // the completed challenge that the target doc is also a party to.
     function matchupValid(uid, matchId) {
       let c = getAfter(/databases/$(database)/documents/challenges/$(matchId)).data;
       return c.status == 'completed' &&
         c.fromUid != c.toUid &&
-        ((c.fromUid == uid && c.toUid == request.auth.uid) ||
-         (c.toUid == uid && c.fromUid == request.auth.uid));
+        (c.fromUid == uid || c.toUid == uid) &&
+        (c.fromUid == request.auth.uid || c.toUid == request.auth.uid);
     }
 
     // Player profiles — public read (leaderboards/opponent cards need this),
     // but only the owning signed-in user may create or fully edit their own doc.
     match /users/{uid} {
-      // Public read — this doc IS the leaderboard/opponent-card data, so it
-      // must never contain email or any other non-public field. Enforced
-      // below on every create/full-update, not just trusted to app code.
-      allow read: if true;
+      // Readable by any SIGNED-IN player — this doc IS the leaderboard /
+      // opponent-card data, so it must never contain email or any other
+      // non-public field. That is enforced below on every create and every
+      // full-update, not just trusted to app code.
+      //
+      // `if true` (open to the whole internet) was strictly wider than the
+      // app has ever needed: every read of this collection happens after
+      // onAuthStateChanged hands back a real Firebase user (see
+      // resolveProfile in contexts/AuthContext.js) and the whole app sits
+      // behind AuthGate, so nothing legitimate reads it unauthenticated.
+      // Requiring auth costs the app nothing and takes away two things: the
+      // ability for anyone at all to scrape every player's name and inline
+      // base64 profile photo, and the ability for an unauthenticated script
+      // to burn the project's daily Firestore read quota at will.
+      allow read: if request.auth != null;
 
       // Every stat field must start at its zero value — a brand-new account
       // has played nothing yet, and this is what stops a forged create call
@@ -55,6 +84,16 @@ service cloud.firestore {
         (
           // Plain presence heartbeat — no stat movement at all, so no match
           // proof is needed. Always allowed, on anyone's doc, same as before.
+          //
+          // Deliberately still just these two keys. `busyUntil` (the "I am in
+          // a duel right now" claim that hides a player from everyone else's
+          // opponent list — see markInMatch in lib/challengeEngine.js) is NOT
+          // allowed here, precisely because this branch has no
+          // `request.auth.uid == uid` check: any signed-in player may stamp
+          // presence on any doc, so admitting busyUntil here would let anyone
+          // mark any other player as busy and quietly remove them from every
+          // opponent list in the app. It goes through the own-document branch
+          // below instead, which is the only writer that ever needs it.
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['online', 'lastSeen'])
         ) ||
         (
@@ -133,6 +172,13 @@ service cloud.firestore {
           // become unfindable, or worse, impersonate whoever the name is
           // handed off to next. The one-time reservation that keeps it
           // unique lives in usernames/{name} below.
+          //
+          // `busyUntil` passes through here by design (it is not in either
+          // list): it is presence, not a stat, and this branch already pins
+          // the write to the player's own document. Nothing is staked on the
+          // value — the worst a forged one does is hide the forger from the
+          // opponent list, or advertise them as free when they are mid-duel,
+          // and neither is worth a rule of its own.
           request.auth.uid == uid &&
           !('email' in request.resource.data) &&
           !request.resource.data.diff(resource.data).affectedKeys()
@@ -157,8 +203,27 @@ service cloud.firestore {
     // name was just taken, the whole batch fails and no profile is created
     // either, so the two documents can never disagree about who owns a name.
     match /usernames/{name} {
-      allow read: if true;
+      // Signed-in only, for the same reason as users/{uid} above: the only
+      // caller is completeSignup()'s availability check, which runs after
+      // Google sign-in has already succeeded. Open reads here let anyone
+      // enumerate every registered player name without an account.
+      allow read: if request.auth != null;
       allow create: if request.auth != null && request.resource.data.uid == request.auth.uid;
+
+      // A name is claimed for good. Once someone has used it, it is never
+      // handed to anybody else — not after they stop playing, and not after
+      // they delete their account. Deliberate product decision: the name is
+      // the identity a friend searches for to send a duel invite, so letting a
+      // dormant or deleted name be re-registered by a stranger would let them
+      // inherit that identity. The reservation therefore outlives the profile
+      // on purpose, and there is no path here that reassigns or frees one.
+      //
+      // The single exception lives in the CLIENT, not here: completeSignup()
+      // lets an account re-take a reservation that already carries its OWN
+      // uid, which is how someone who deleted their account and signed back in
+      // with the same Google account gets their own name back. That needs no
+      // rule of its own — the reservation already points at them, so nothing
+      // is written.
       allow update, delete: if false;
     }
 

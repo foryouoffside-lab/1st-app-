@@ -4,23 +4,25 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
-  Activity, AlertCircle, ArrowLeft, BarChart3, ChevronRight,
-  Clock, Eye, GraduationCap, Info, Lightbulb,
-  Maximize2, Minimize2, Play, RefreshCw, Target,
-  Timer, TrendingUp, Trophy, Volume2, VolumeX,
-  Share2, CheckCircle2, Zap, Users, Sparkles, XCircle, GitBranch, RotateCw, Heart
+  ArrowLeft, Eye, Target, Timer, Volume2, VolumeX, Share2, GitBranch,
+  RotateCw
 } from 'lucide-react';
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade, isValidReactionTime } from '../../../../../lib/scoringEngine';
+import {
+  applyHit, applyMistake,
+  scoringMaxLevel, scoringLives, stochasticRound,
+} from '../../../../../lib/drillRules';
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
-import { lockLandscape, unlockOrientation, onOrientationSettled } from '../../../../../lib/orientation';
+import { afterViewportSettled, lockLandscape, unlockOrientation, onOrientationSettled } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
 import { getPlayerName } from '../../../../../lib/progressStore';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
-import generateShareCard, { shareScoreCard } from '../../../../../components/ShareScoreCard';
+import { useShareCard } from '../../../../../components/ShareScoreCard';
 import DrillWrapper from '../../../../../components/DrillWrapper';
-import { useDuelMatchStart } from '../../../../../lib/challengeEngine';
+import { useDuelMatchStart, duelSecondsRemaining } from '../../../../../lib/challengeEngine';
 import { canvasDpr } from '../../../../../lib/canvasFx';
+import { APP_SHARE_URL } from '../../../../../lib/shareLinks';
 
 // ============================================================
 // ZERO-LATENCY AUDIO SYNTHESIZER
@@ -35,6 +37,13 @@ class AudioSynthesizer {
     if (!this.ctx && typeof window !== 'undefined') {
       this.ctx = new (window.AudioContext || window.webkitAudioContext)();
     }
+    // Resume here, on the START tap, the way every other drill's init() does.
+    // This one only created the context and left the resume to tone(), but
+    // resume() is asynchronous: the first tone or two fired while the context
+    // was still coming back from 'suspended' were scheduled against a clock
+    // that had not started, and were simply never heard. That is the "some
+    // taps make no sound" report.
+    if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
   }
 
   tone(freq, dur, type = 'sine', vol = 0.15, sweepTo = null) {
@@ -52,15 +61,94 @@ class AudioSynthesizer {
       gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + dur);
       osc.connect(gain); gain.connect(this.ctx.destination);
       osc.start(); osc.stop(this.ctx.currentTime + dur);
-    } catch(e) {}
+    } catch {}
   }
 
-  playHit() {
-    this.tone(1200, 0.08, 'sine', 0.1, 1500);
-  }
+  // Identical to every other drill's hit cue. This one was alone on
+  // tone(1200, 0.08, ..., 0.1, 1500) — higher, shorter and quieter than the
+  // rest of the app, which is why this drill sounded like a different game.
+  playHit() { this.tone(880, 0.12, 'sine', 0.16, 1760); }
 
   playCountdownTick() { this.tone(440, 0.09, 'sine', 0.12, 440); }
-  playGo() { this.tone(523.25, 0.18, 'triangle', 0.17, 784); }
+  // GO — a struck wooden bar. Warm rather than urgent: this is the last beat
+  // of 3-2-1, so it has to feel bigger than the 440Hz ticks without turning
+  // the start of a focus drill into an alarm.
+  //
+  // Earlier versions chased impact and got harshness instead — a bright A5
+  // mallet, a four-note arpeggio over a sub drop, a chord with a glide into
+  // it. Next to the ticks they all read as ARCADE.
+  //
+  // What works is a marimba tap. A 12ms noise burst bandpassed at 900Hz is
+  // the beater contacting wood — low and short enough that it never reads as
+  // a drum, but without it the tone has no onset and nothing feels struck.
+  // Behind it, three voices 5ms later: C5 as the bar, its octave for a little
+  // air, C4 underneath for warmth. Each is a pair of sines detuned four cents
+  // apart through a lowpass — the same construction as chimeVoice — which is
+  // why nothing here buzzes. C is a minor third above the 440Hz ticks, so it
+  // resolves upward and lands clearly without shouting. Decays over ~350ms.
+  //
+  // Scheduled on the AudioContext clock, not with setTimeout: the main thread
+  // is setting the round up at exactly this instant.
+  playGo() {
+    if (!this.enabled || !this.ctx) return;
+    try {
+      const ctx = this.ctx;
+      if (ctx.state === 'suspended') ctx.resume();
+      const t0 = ctx.currentTime;
+
+      // The beater. Linearly-decaying white noise through a bandpass — a
+      // wooden knock, not a snare.
+      const nLen = Math.max(1, Math.floor(ctx.sampleRate * 0.012));
+      const nBuf = ctx.createBuffer(1, nLen, ctx.sampleRate);
+      const nData = nBuf.getChannelData(0);
+      for (let i = 0; i < nLen; i++) {
+        nData[i] = (Math.random() * 2 - 1) * (1 - i / nLen);
+      }
+      const nSrc = ctx.createBufferSource();
+      nSrc.buffer = nBuf;
+      const nBand = ctx.createBiquadFilter();
+      nBand.type = 'bandpass';
+      nBand.frequency.setValueAtTime(900, t0);
+      nBand.Q.setValueAtTime(1.6, t0);
+      const nGain = ctx.createGain();
+      nGain.gain.setValueAtTime(0.042, t0);
+      nGain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.012);
+      nSrc.connect(nBand);
+      nBand.connect(nGain);
+      nGain.connect(ctx.destination);
+      nSrc.start(t0);
+      nSrc.stop(t0 + 0.012);
+
+      // The bar. 5ms behind the knock so the two read as one event.
+      [
+        // freq    at     dur   vol    cut   attack
+        [523.25,  0.005, 0.35, 0.120, 2000, 0.008], // body — C5
+        [1046.50, 0.005, 0.13, 0.034, 3200, 0.008], // octave — air
+        [261.63,  0.005, 0.30, 0.040, 1200, 0.012]  // foundation — C4
+      ].forEach(([freq, at, dur, vol, cut, attack]) => {
+        const startAt = t0 + at;
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(cut, startAt);
+        filter.Q.setValueAtTime(0.5, startAt);
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.0001, startAt);
+        gain.gain.linearRampToValueAtTime(vol, startAt + attack);
+        gain.gain.exponentialRampToValueAtTime(0.001, startAt + dur);
+        filter.connect(gain);
+        gain.connect(ctx.destination);
+        [-4, 4].forEach((cents) => {
+          const osc = ctx.createOscillator();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, startAt);
+          osc.detune.setValueAtTime(cents, startAt);
+          osc.connect(filter);
+          osc.start(startAt);
+          osc.stop(startAt + dur);
+        });
+      });
+    } catch {}
+  }
 
   playPenalty() {
     if (!this.enabled || !this.ctx) return;
@@ -83,7 +171,7 @@ class AudioSynthesizer {
         osc.start(t0 + delay);
         osc.stop(t0 + delay + 0.08);
       });
-    } catch (e) {}
+    } catch {}
   }
   playFail() { this.playPenalty(); }
   playWrongOrder() { this.playPenalty(); }
@@ -122,7 +210,7 @@ class AudioSynthesizer {
         this.chimeVoice(freq, t0 + i * 0.08, 0.24, 0.13, 3200);
       });
       this.chimeVoice(1046.50, t0 + 0.26, 0.6, 0.16, 4200);
-    } catch (e) {}
+    } catch {}
   }
 
   playHeartbeat(danger = 0) {
@@ -143,7 +231,7 @@ class AudioSynthesizer {
         osc.start(t0 + offset);
         osc.stop(t0 + offset + 0.15);
       });
-    } catch (e) {}
+    } catch {}
   }
 
   setEnabled(status) {
@@ -153,8 +241,24 @@ class AudioSynthesizer {
 
 const audioSynth = typeof window !== 'undefined' ? new AudioSynthesizer() : null;
 const GAME_DURATION = 45;
-const MAX_LIVES = 5;
-const MAX_LEVEL = 10;
+
+// How a solo run is won and lost — the clock as the only fail state, what a hit
+// earns, what a mistake costs — is defined once in lib/drillRules.js and shared
+// by every drill. Read that file for the model and the reasoning.
+//
+// Difficulty here is an ADAPTIVE TEMPO INDEX (0.1..1.0) derived from recent
+// accuracy, pace and consistency, which maps to a displayed level of 1..10. It
+// converges on the player's real limit, so it needs no level ramp of its own;
+// the decaying time-per-hit payout in drillRules is what ends the run.
+//
+// Because that index is ONE dial, every setting keyed off it has to fade rather
+// than switch — otherwise the chain length, the ordering hint and the trap node
+// all change on the same tempo value and the board lurches.
+const CUE_FADE_START = 0.20;   // ordering hint at full strength up to here
+const CUE_FADE_END = 0.55;     // ordering hint fully gone from here on
+const TRAP_FADE_IN_START = 0.45;
+const TRAP_FADE_IN_END = 0.85;
+
 const getComboMultiplier = (combo) => 1.0 + Math.floor(combo / 5) * 0.2;
 
 export default function FingerSequencingClient() {
@@ -165,10 +269,15 @@ export default function FingerSequencingClient() {
 
   // === UI & Viewport State ===
   const [phase, setPhase] = useState('start'); // 'start' | 'countdown' | 'playing' | 'rotate-hint' | 'ended'
+  // True from the instant START is tapped until the drill actually leaves the
+  // start phase. Tapping START kicks off a fullscreen request, a status-bar
+  // change, an await on the native landscape lock and then a settle timeout —
+  // several hundred ms during which `phase` is still 'start', so the start
+  // card stayed mounted and the user watched it get rotated into landscape
+  // before the countdown replaced it. This unmounts it on the tap itself.
+  const [launching, setLaunching] = useState(false);
   const [countdownValue, setCountdownValue] = useState(3);
-  const [isFullscreen, setIsFullscreen] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
-  const [isStarting, setIsStarting] = useState(false);
 
   // === Settings & Local Stats ===
   const [score, setScore] = useState(0);
@@ -179,16 +288,16 @@ export default function FingerSequencingClient() {
 
   // === Live Stats (UI Sync) ===
   const [timeLeft, setTimeLeft] = useState(totalTime);
-  const [nodeCombo, setNodeCombo] = useState(0);
-  const [readStreak, setReadStreak] = useState(0);
   const [level, setLevel] = useState(1);
-  const [lives, setLives] = useState(MAX_LIVES);
-  const [liveAccuracy, setLiveAccuracy] = useState(100);
   const [dangerLevel, setDangerLevel] = useState(0);
-  const [deviceType, setDeviceType] = useState('desktop');
 
   // === Overlays & Summary ===
   const [endSummary, setEndSummary] = useState(null);
+
+  // Mistake flashes. Same list-of-flashes pattern every other drill uses, so
+  // this one gets the shared centred .fx-flash-red wash instead of the flat
+  // full-canvas fill it used to paint itself (see triggerFlash).
+  const [flashes, setFlashes] = useState([]);
 
   // === Refs ===
   const canvasRef = useRef(null);
@@ -198,6 +307,7 @@ export default function FingerSequencingClient() {
   // Gameplay session registers
   const scoreRef = useRef(0);
   const timeLeftRef = useRef(totalTime);
+  const runOverRef = useRef(false);
   const elapsedRef = useRef(0);
   const nodeComboRef = useRef(0);
   const bestNodeComboRef = useRef(0);
@@ -206,7 +316,6 @@ export default function FingerSequencingClient() {
   const tempoIndexRef = useRef(0.2);
   const historyRef = useRef([]);
   const gameActiveRef = useRef(false);
-  const livesRef = useRef(MAX_LIVES);
 
   const chainRef = useRef([]);
   const activeIndexRef = useRef(0);
@@ -218,8 +327,7 @@ export default function FingerSequencingClient() {
   // Engine refs
   const particlesRef = useRef([]);
   const scorePopupsRef = useRef([]);
-  const screenShakeRef = useRef(0);
-  const flashRedRef = useRef(0);
+  const flashIdRef = useRef(0);
   const deviceTypeRef = useRef('desktop');
   const cueTierRef = useRef(1);
   const nodeWindowMsRef = useRef(2.5);
@@ -244,7 +352,7 @@ export default function FingerSequencingClient() {
     if (isChallenge) return;
     if (!gameActiveRef.current) return;
 
-    const dangerFromLives = livesRef.current <= 2 ? (MAX_LIVES - livesRef.current) / MAX_LIVES : 0;
+    const dangerFromLives = 0;   // lives are gone; time is the only danger now
     const dangerFromTime = timeLeftRef.current <= 10 ? (10.0 - timeLeftRef.current) / 10.0 : 0.0;
     const danger = Math.min(1, Math.max(dangerFromLives * 0.7, dangerFromTime));
 
@@ -276,6 +384,20 @@ export default function FingerSequencingClient() {
   }, []);
 
   // Spawn visual particles
+  // The shared mistake flash. This drill used to paint its own: a flat
+  // ctx.fillRect over the entire canvas, which washed the whole screen edge to
+  // edge instead of the soft centred bloom every other drill shows — it read as
+  // a different, much harsher effect, and being canvas paint it also meant a
+  // full-screen repaint on the exact frames the drill is busiest. The shared
+  // .fx-flash-red is a CSS radial gradient on its own layer, so it is one
+  // compositor node and identical in all 24 drills.
+  const triggerFlash = useCallback(() => {
+    const id = ++flashIdRef.current;
+    setFlashes((prev) => [...prev, { id }]);
+    // The CSS animation is 200ms; 350 clears the node well after it finishes.
+    setTimeout(() => setFlashes((prev) => prev.filter((f) => f.id !== id)), 350);
+  }, []);
+
   const spawnParticles = useCallback((x, y, color, count) => {
     const list = particlesRef.current;
     for (let i = 0; i < count; i++) {
@@ -340,9 +462,12 @@ export default function FingerSequencingClient() {
       // Solo keeps the adaptive ramp (up AND down with recent performance).
       // A duel must never let a −5 penalty ease the difficulty back down, so
       // tempoIndex only ratchets upward there — see ARENA_INTEGRATION.md rule 5.
-      tempoIndexRef.current = isChallenge
-        ? Math.max(tempoIndexRef.current, newTempoIndex)
-        : newTempoIndex;
+      // Ratchets UP only, in both modes. It used to fall again in solo when
+      // recent performance dipped — with lives gone that becomes a trap: a
+      // player who struggles gets an easier drill, which earns them time back,
+      // which keeps a run alive that should have ended. Difficulty reached is
+      // difficulty kept, which is also the rule everywhere else in the catalog.
+      tempoIndexRef.current = Math.max(tempoIndexRef.current, newTempoIndex);
 
       const derivedLevel = 1 + Math.floor(tempoIndexRef.current * 9);
       setLevel(derivedLevel);
@@ -367,8 +492,7 @@ export default function FingerSequencingClient() {
       bestCombo: bestNodeComboRef.current,
       totalActions: hitsRef.current,
       mistakes: totalMistakes,
-      livesRemaining: Math.max(0, livesRef.current),
-      maxLives: MAX_LIVES,
+      livesRemaining: scoringLives(0),
       category: 'cognitive'
     });
 
@@ -394,7 +518,7 @@ export default function FingerSequencingClient() {
           localStorage.setItem('sequenceAim_bestCombo', bestNodeComboRef.current.toString());
           localStorage.setItem('sequenceAim_bestReadStreak', bestReadStreakRef.current.toString());
           localStorage.setItem('sequenceAim_bestLevel', bestLevelRunRef.current.toString());
-        } catch(err){}
+        } catch{}
         return finalScore;
       }
       return prev;
@@ -416,6 +540,7 @@ export default function FingerSequencingClient() {
       bestReadStreak: bestReadStreakRef.current,
       xpEarned: xpData.xp,
       isNewBest: finalScore > bestScore,
+      prevBest: bestScore,
     });
 
     audioSynth?.playResultsReveal();
@@ -429,9 +554,11 @@ export default function FingerSequencingClient() {
       setScore(scoreRef.current);
       return;
     }
-    livesRef.current -= 1;
-    setLives(Math.max(0, livesRef.current));
-    if (livesRef.current <= 0) {
+    const after = applyMistake({ timeRemaining: timeLeftRef.current });
+    timeLeftRef.current = after.timeRemaining;
+    runOverRef.current = after.runOver;
+    setTimeLeft(Math.ceil(timeLeftRef.current));
+    if (runOverRef.current) {
       endGame();
     }
   }, [endGame, isChallenge]);
@@ -443,8 +570,7 @@ export default function FingerSequencingClient() {
     nodeComboRef.current = 0;
     readStreakRef.current = 0;
 
-    flashRedRef.current = 0.25;
-    screenShakeRef.current = 8;
+    triggerFlash();
     audioSynth?.playFail();
 
     recordEvent('timeout');
@@ -454,34 +580,85 @@ export default function FingerSequencingClient() {
       spawnChain(canvasSizeRef.current.width, canvasSizeRef.current.height);
     }
 
-    setNodeCombo(0);
-    setReadStreak(0);
-  }, [recordEvent, registerMiss, isChallenge]);
+  }, [recordEvent, registerMiss, isChallenge, triggerFlash]);
 
   // Anti-clustering chain spawner
   const spawnChain = useCallback((W, H) => {
     const currentTempo = tempoIndexRef.current;
     
-    let length = 3;
-    if (currentTempo >= 0.7) length = 5;
-    else if (currentTempo >= 0.35) length = 4;
-    
-    let tier = 1;
-    if (currentTempo >= 0.7) tier = 3;
-    else if (currentTempo >= 0.35) tier = 2;
-    cueTierRef.current = tier;
+    // Chain length used to jump 3 -> 4 at tempo 0.35 and 4 -> 5 at 0.7. Two
+    // cliffs, and the FIRST of them landed on the same threshold that deleted
+    // the ordering cue below — two step-ups at once, which is what made this
+    // drill lurch. It is now a fractional length rounded by coin flip per
+    // chain, so the average walks 3 -> 5 continuously and 4-node chains show up
+    // occasionally well before they become the norm.
+    const length = Math.max(3, Math.min(5, stochasticRound(3 + currentTempo * 2)));
 
-    const radius = Math.max(13, 25 - currentTempo * 16); // ~10% smaller for extra room to move
+    // How strongly the "which node is next" hint is drawn: 1 = the full taper
+    // and fade a beginner gets, 0 = no hint at all. This used to be the tier
+    // 1/tier 2 boundary, so the entire hint vanished between one chain and the
+    // next at tempo 0.35. It now dissolves gradually across a band.
+    const cueStrength = Math.max(0, Math.min(1,
+      (CUE_FADE_END - currentTempo) / (CUE_FADE_END - CUE_FADE_START)
+    ));
+    // cueTierRef still feeds the read-streak stat, which counts only chains
+    // played without the hint. Derived from the same fade so the stat keeps its
+    // meaning without reintroducing a difficulty step.
+    cueTierRef.current = cueStrength > 0.5 ? 1 : (currentTempo >= 0.7 ? 3 : 2);
+
+    // Node size tracks the CHAIN LENGTH, not the tempo.
+    //
+    // The distinction matters and this line has been both ways. It used to be
+    // `Math.max(13, 25 - currentTempo * 16)` — targets shrinking steadily as
+    // the clock ramped, which is difficulty arriving as a smaller thing to hit
+    // rather than as a harder task, and it was removed for that reason. What
+    // is left is a spatial fact: five nodes have to share the same board three
+    // nodes had, so at full size a long chain is a more crowded, less legible
+    // picture than a short one.
+    //
+    // So it steps only with the node count, and only a little — 25 at three
+    // nodes down to a hard floor of 18 at five. Nothing here can reach the
+    // 13px of the old tempo ramp; the tap window, the spread and the trap node
+    // still carry the actual difficulty.
+    const radius = Math.max(18, 25 - (length - 3) * 3.5);
     const windowTime = Math.max(0.6, 2.5 - currentTempo * 1.9);
     
     nodeWindowMsRef.current = windowTime;
 
     const spread = Math.min(500, 220 + currentTempo * 350);
-    const pad = Math.max(80, radius + 25);
-    const boundsW = Math.max(10, W - pad * 2);
-    const boundsH = Math.max(10, H - pad * 2);
-    const baseX = pad + Math.random() * boundsW;
-    const baseY = pad + Math.random() * boundsH;
+
+    // The play area is the WHOLE canvas, minus only what a node physically
+    // needs to stay on-screen.
+    //
+    // This used to be `pad = Math.max(80, radius + 25)` applied to all four
+    // sides. That 80px floor is most of a phone: in landscape the canvas is
+    // only ~360 CSS px tall, so 80 top + 80 bottom left ~200px of usable
+    // height — the drill spawned inside the middle ~55% of the screen and the
+    // edges were dead space. The inset only ever has to clear the node's own
+    // radius and its glow.
+    const padX = Math.min(radius + 14, W * 0.10);
+    const padY = Math.min(radius + 14, H * 0.10);
+    const boundsW = Math.max(10, W - padX * 2);
+    const boundsH = Math.max(10, H - padY * 2);
+
+    // The three HUD overlays are the real reason a blanket inset existed: the
+    // score (top-left), the clock (top-right) and the sound toggle
+    // (bottom-right, the only one that also swallows taps). They occupy
+    // CORNERS, not whole edges, so they're excluded as boxes — that keeps the
+    // entire top-centre of the board in play, which a uniform top inset threw
+    // away. A candidate landing in a corner is slid vertically clear of it
+    // rather than rejected, so the spawner can't run out of positions.
+    const HUD_W = 96, HUD_TOP = 74, HUD_BOTTOM = 54;
+    const clearHud = (cx, cy, r) => {
+      const nearLeft = cx - r < HUD_W;
+      const nearRight = cx + r > W - HUD_W;
+      if ((nearLeft || nearRight) && cy - r < HUD_TOP) return Math.min(H - padY, HUD_TOP + r);
+      if (nearRight && cy + r > H - HUD_BOTTOM) return Math.max(padY, H - HUD_BOTTOM - r);
+      return cy;
+    };
+
+    const baseX = padX + Math.random() * boundsW;
+    const baseY = clearHud(baseX, padY + Math.random() * boundsH, radius);
 
     const spawnedNodes = [];
 
@@ -493,8 +670,8 @@ export default function FingerSequencingClient() {
       for (let attempt = 0; attempt < 12; attempt++) {
         const dx = (Math.random() - 0.5) * spread;
         const dy = (Math.random() - 0.5) * spread;
-        const cx = Math.max(pad, Math.min(W - pad, baseX + dx));
-        const cy = Math.max(pad, Math.min(H - pad, baseY + dy));
+        const cx = Math.max(padX, Math.min(W - padX, baseX + dx));
+        const cy = clearHud(cx, Math.max(padY, Math.min(H - padY, baseY + dy)), radius);
 
         let minDist = 9999;
         spawnedNodes.forEach(n => {
@@ -510,12 +687,11 @@ export default function FingerSequencingClient() {
         if (minDist > radius * 3.5) break;
       }
 
-      let nodeR = radius;
-      let nodeOpacity = 1.0;
-      if (tier === 1) {
-        nodeR = Math.max(10, radius - i * (radius * 0.22));
-        nodeOpacity = 1.0 - i * 0.25;
-      }
+      // Scaled by cueStrength rather than gated on the tier: at full strength
+      // these are the exact old tier-1 values, at zero the exact old tier-2/3
+      // values, and everything between is a real in-between.
+      const nodeR = Math.max(10, radius - i * (radius * 0.22) * cueStrength);
+      const nodeOpacity = Math.max(0.15, 1.0 - i * 0.25 * cueStrength);
 
       spawnedNodes.push({
         x: bestX,
@@ -527,7 +703,13 @@ export default function FingerSequencingClient() {
       });
     }
 
-    if (currentTempo >= 0.65) {
+    // The trap node used to appear on every chain from tempo 0.65 and on none
+    // below it. Its odds now climb across a band, so the first traps arrive
+    // earlier and occasionally, then become the norm.
+    const trapChance = Math.max(0, Math.min(1,
+      (currentTempo - TRAP_FADE_IN_START) / (TRAP_FADE_IN_END - TRAP_FADE_IN_START)
+    ));
+    if (Math.random() < trapChance) {
       let bestX = baseX;
       let bestY = baseY;
       let bestMinDist = -1;
@@ -535,8 +717,8 @@ export default function FingerSequencingClient() {
       for (let attempt = 0; attempt < 15; attempt++) {
         const dx = (Math.random() - 0.5) * spread * 1.2;
         const dy = (Math.random() - 0.5) * spread * 1.2;
-        const cx = Math.max(pad, Math.min(W - pad, baseX + dx));
-        const cy = Math.max(pad, Math.min(H - pad, baseY + dy));
+        const cx = Math.max(padX, Math.min(W - padX, baseX + dx));
+        const cy = clearHud(cx, Math.max(padY, Math.min(H - padY, baseY + dy)), radius);
 
         let minDist = 9999;
         spawnedNodes.forEach(n => {
@@ -605,7 +787,20 @@ export default function FingerSequencingClient() {
       const reactionTime = now - nodeSpawnTimeRef.current;
       nodeSpawnTimeRef.current = now;
 
-      if (isValidReactionTime(reactionTime)) {
+      // The anti-cheat window used to gate the WHOLE hit: a gap outside
+      // 80-5000ms skipped the sound, the particles, the score and the index
+      // advance, and the handler returned. Two nodes tapped less than 80ms
+      // apart is not cheating — it is what drumming a memorised chain with two
+      // fingers looks like — so a correct tap in the middle of a set just
+      // vanished with no feedback at all. That is the "sometimes clicking
+      // makes no sound" report.
+      //
+      // The tap always registers now. The guard is applied where it actually
+      // belongs: an implausible gap earns no SPEED BONUS (reactionMs goes in
+      // as null) and is left out of the adaptive tempo stats, so it still
+      // cannot be farmed.
+      const plausible = isValidReactionTime(reactionTime);
+      {
         hitsRef.current++;
         nodeComboRef.current++;
         if (nodeComboRef.current > bestNodeComboRef.current) {
@@ -618,19 +813,25 @@ export default function FingerSequencingClient() {
         const nodeScore = scoreAction({
           category: 'cognitive',
           combo: nodeComboRef.current - 1,
-          reactionMs: reactionTime,
+          reactionMs: plausible ? reactionTime : null,
           timeRemaining: timeLeftRef.current,
           totalGameTime: totalTime,
-          livesRemaining: livesRef.current,
-          maxLives: MAX_LIVES,
+          livesRemaining: scoringLives(0),
           level: 1 + Math.floor(tempoIndexRef.current * 9),
-          maxLevel: MAX_LEVEL,
+          maxLevel: scoringMaxLevel(isChallenge),
         });
 
         scoreRef.current += nodeScore.total;
+        // Buy back a slice of the clock. Solo only - in a duel the clock comes from
+        // duelDeadlineRef (the match's shared absolute end instant), which nothing
+        // local may move. No state is set here; the existing tick redraws the
+        // seconds when the displayed number changes, so this costs nothing per hit.
+        if (!isChallenge) {
+          timeLeftRef.current = applyHit({ timeRemaining: timeLeftRef.current, level: 1 + Math.floor(tempoIndexRef.current * 9), hits: hitsRef.current });
+        }
         setScore(scoreRef.current);
         spawnScorePopup(activeNode.x, activeNode.y, `+${nodeScore.total}`);
-        recordEvent('hit', reactionTime);
+        if (plausible) recordEvent('hit', reactionTime);
 
         activeIndexRef.current++;
 
@@ -666,9 +867,6 @@ export default function FingerSequencingClient() {
         }
       }
 
-      setNodeCombo(nodeComboRef.current);
-      setReadStreak(readStreakRef.current);
-      setLiveAccuracy(Math.round((hitsRef.current / totalClicksRef.current) * 100));
       return;
     }
 
@@ -685,15 +883,12 @@ export default function FingerSequencingClient() {
         nodeComboRef.current = 0;
         readStreakRef.current = 0;
 
-        flashRedRef.current = 0.35;
+        triggerFlash();
         audioSynth?.playTrapTap();
         spawnParticles(trapNode.x, trapNode.y, '#ef4444', 12);
         recordEvent('trap');
         registerMiss();
 
-        setNodeCombo(0);
-        setReadStreak(0);
-        setLiveAccuracy(Math.round((hitsRef.current / totalClicksRef.current) * 100));
         return;
       }
     }
@@ -712,7 +907,7 @@ export default function FingerSequencingClient() {
         nodeComboRef.current = 0;
         readStreakRef.current = 0;
 
-        flashRedRef.current = 0.25;
+        triggerFlash();
         audioSynth?.playWrongOrder();
         spawnParticles(n.x, n.y, '#f59e0b', 8);
         recordEvent('wrong-order');
@@ -729,16 +924,13 @@ export default function FingerSequencingClient() {
       nodeComboRef.current = 0;
       readStreakRef.current = 0;
 
-      flashRedRef.current = 0.2;
+      triggerFlash();
       audioSynth?.playFail();
       recordEvent('whiff');
       registerMiss();
     }
 
-    setNodeCombo(0);
-    setReadStreak(0);
-    setLiveAccuracy(Math.round((hitsRef.current / totalClicksRef.current) * 100));
-  }, [spawnChain, spawnParticles, spawnScorePopup, recordEvent, registerMiss, isChallenge, totalTime]);
+  }, [spawnChain, spawnParticles, spawnScorePopup, recordEvent, registerMiss, isChallenge, totalTime, triggerFlash]);
 
   // Initial local stats extraction
   useEffect(() => {
@@ -751,10 +943,10 @@ export default function FingerSequencingClient() {
       if (savedStreak) setBestReadStreak(parseInt(savedStreak, 10));
       const savedBestLevel = localStorage.getItem('sequenceAim_bestLevel');
       if (savedBestLevel) setBestLevel(parseInt(savedBestLevel, 10));
-    } catch (e) {}
+    } catch {}
 
     return () => {
-      try { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); } catch (e) {}
+      try { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); } catch {}
       if (Capacitor.isNativePlatform()) {
         StatusBar.setOverlaysWebView({ overlay: false }).catch(() => {});
         StatusBar.show().catch(() => {});
@@ -773,7 +965,6 @@ export default function FingerSequencingClient() {
       if (width < 768 || (isTouch && width < 1024)) type = 'mobile';
       else if (width < 1280 && isTouch) type = 'tablet';
 
-      setDeviceType(type);
       deviceTypeRef.current = type;
     };
 
@@ -808,7 +999,15 @@ export default function FingerSequencingClient() {
         runCountdown(isChallenge ? 0 : 3);
       }
     };
-    return onOrientationSettled(onOrientationChange);
+    // Self-heal: if the device is ALREADY landscape, no further resize or
+    // orientationchange event will ever fire, so the listener below can never
+    // rescue this screen. That is reachable — the pre-countdown orientation check
+    // used to run on a blind timer and could read a mid-rotation viewport as
+    // portrait, leaving the drill parked on "Rotate your phone to play" with no
+    // way back. Re-check once against settled dimensions.
+    const cancelSettle = phase === 'rotate-hint' ? afterViewportSettled(onOrientationChange) : null;
+    const stopListening = onOrientationSettled(onOrientationChange);
+    return () => { if (cancelSettle) cancelSettle(); stopListening(); };
   }, [phase, runCountdown, isChallenge]);
 
   // Input listener registration
@@ -836,7 +1035,14 @@ export default function FingerSequencingClient() {
     if (phase !== 'playing') return;
 
     const timer = setInterval(() => {
-      timeLeftRef.current = Math.max(0, timeLeftRef.current - 0.2);
+      // Duel: read the clock from the match's shared absolute end instant
+      // rather than accumulating it locally — see duelSecondsRemaining. A
+      // tick that lands late (busy frame, GC pause, the OS throttling a
+      // backgrounded webview) has to cost this player frames, not extra
+      // seconds of play their opponent never got.
+      timeLeftRef.current = duelDeadlineRef.current
+        ? duelSecondsRemaining(duelDeadlineRef.current)
+        : Math.max(0, timeLeftRef.current - 0.2);
       elapsedRef.current += 200;
 
       // Push to React state only when the DISPLAYED whole second changes. The
@@ -859,39 +1065,38 @@ export default function FingerSequencingClient() {
 
   // Play initiator
   const startGame = useCallback(async () => {
+    // Unmount the start card on the tap itself, before the rotation begins.
+    setLaunching(true);
     if (audioSynth) audioSynth.init();
 
-    setIsStarting(true);
-    setTimeout(() => setIsStarting(false), 800);
 
     if (!isChallenge && containerRef.current && !document.fullscreenElement) {
-      try { await containerRef.current.requestFullscreen(); } catch (e) {}
+      try { await containerRef.current.requestFullscreen(); } catch {}
     }
     if (Capacitor.isNativePlatform()) {
       StatusBar.setOverlaysWebView({ overlay: true }).catch(() => {});
       StatusBar.hide().catch(() => {});
     }
 
-    try { await lockLandscape(); } catch (e) {}
+    try { await lockLandscape(); } catch {}
 
-    // Duels always start every player at the same, lowest difficulty — no
-    // personal-best seeding — so scores are pure skill (ARENA_INTEGRATION.md
-    // rule 5 / matchmaking fairness).
-    const startLevel = isChallenge ? 1 : Math.max(1, Math.min(MAX_LEVEL, Math.round((bestLevel || 1) * 0.55)));
-    const startTempoIndex = Math.max(0.1, Math.min(1.0, (startLevel - 0.5) / 9));
+    // Every run starts at the lowest difficulty. It used to start at 55% of the
+    // player's best level, so improving once permanently raised the speed every
+    // future run opened at - a silent spike with nothing on screen explaining it.
+    // That head-start only existed because a fixed 45s was too short to climb the
+    // ramp; the endurance clock replaces it.
+    const runStartLevel = 1;
+    const startTempoIndex = Math.max(0.1, Math.min(1.0, (runStartLevel - 0.5) / 9));
 
     setScore(0);
     setTimeLeft(totalTime);
-    setNodeCombo(0);
-    setReadStreak(0);
-    setLevel(startLevel);
-    setLives(MAX_LIVES);
-    setLiveAccuracy(100);
+    setLevel(runStartLevel);
     setDangerLevel(0);
     setEndSummary(null);
 
     scoreRef.current = 0;
     timeLeftRef.current = totalTime;
+    runOverRef.current = false;
     elapsedRef.current = 0;
     nodeComboRef.current = 0;
     bestNodeComboRef.current = 0;
@@ -900,7 +1105,6 @@ export default function FingerSequencingClient() {
     tempoIndexRef.current = startTempoIndex;
     historyRef.current = [];
     gameActiveRef.current = true;
-    livesRef.current = MAX_LIVES;
     chainMistakeCountRef.current = 0;
     lastResolveTimeRef.current = 0;
 
@@ -911,21 +1115,31 @@ export default function FingerSequencingClient() {
     trapHitsRef.current = 0;
     timeoutsRef.current = 0;
     chainsCompletedRef.current = 0;
-    bestLevelRunRef.current = startLevel;
+    bestLevelRunRef.current = runStartLevel;
 
-    setTimeout(() => {
+    // Wait for the viewport to actually stop moving before showing the countdown,
+    // instead of guessing with a fixed delay — see afterViewportSettled in
+    // lib/orientation.js. A blind timeout let the "3" mount mid-resize and jump.
+    afterViewportSettled(() => {
       if (window.innerHeight > window.innerWidth && ('ontouchstart' in window || navigator.maxTouchPoints > 0)) {
         setPhase('rotate-hint');
       } else {
         runCountdown(isChallenge ? 0 : 3);
       }
-    }, 350);
+    });
   }, [runCountdown, bestLevel, isChallenge, totalTime]);
 
   // Duel auto-start — both clients begin at the exact same wall-clock
   // instant via the shared matchStartAt timestamp (ARENA_INTEGRATION.md rule 2).
   const matchStartAt = useDuelMatchStart(challengeId);
   const duelAutoStartedRef = useRef(false);
+  // The duel's shared start instant, on this device's clock. Held in a ref so
+  // the match clock can read it without rebuilding its interval, and null
+  // outside a duel so solo play keeps its own local countdown.
+  const duelDeadlineRef = useRef(null);
+  useEffect(() => {
+    duelDeadlineRef.current = isChallenge ? matchStartAt : null;
+  }, [isChallenge, matchStartAt]);
   useEffect(() => {
     if (!isChallenge || !matchStartAt || phase !== 'start' || duelAutoStartedRef.current) return;
     const delay = Math.max(0, matchStartAt - Date.now());
@@ -966,38 +1180,28 @@ export default function FingerSequencingClient() {
     prevChallengeIdRef.current = challengeId;
     duelAutoStartedRef.current = false;
     setPhase('start');
+    setLaunching(false);
     setScore(0);
-    setLives(MAX_LIVES);
     setEndSummary(null);
     setTimeLeft(totalTime);
   }, [challengeId, totalTime]);
 
-  const shareScore = useCallback(async () => {
-    if (!endSummary) return;
-    const url = 'https://skilldrills.online/drills/cognitive/processing-speed/finger-sequencing';
-    try {
-      const grade = getGrade(endSummary.accuracy);
-      const canvas = generateShareCard({
-        score: endSummary.score,
-        bestScore,
-        accuracy: endSummary.accuracy,
-        bestCombo: endSummary.bestCombo,
-        rating: { letter: grade.grade, label: grade.label, emoji: grade.emoji },
-        newBest: endSummary.isNewBest,
-        drillName: 'Sequence Aim Trainer',
-        playerName: getPlayerName(),
-      });
-      await shareScoreCard(url, canvas);
-    } catch (e) {
-      const text = `🎯 I scored ${score} PTS (Level ${level}) in the Sequence Aim Trainer! Accuracy: ${endSummary.accuracy}%, Max Combo: ${endSummary.bestCombo}x, Streak: ${endSummary.bestReadStreak}. Practice on mobile at skilldrills.online!`;
-      if (typeof navigator !== 'undefined' && navigator.share) {
-        navigator.share({ title: 'My Mobile Aim Sequence Score', text, url }).catch(() => {});
-      } else if (typeof navigator !== 'undefined' && navigator.clipboard) {
-        navigator.clipboard.writeText(text);
-        alert('Score card copied to clipboard!');
-      }
-    }
-  }, [score, level, endSummary, bestScore]);
+  // Score card. Drawn and encoded while the result screen sits idle,
+  // not on the tap - see useShareCard in components/ShareScoreCard.js.
+  const shareScore = useShareCard(endSummary ? {
+    score: endSummary.score,
+    bestScore: endSummary.prevBest ?? bestScore,
+    accuracy: endSummary.accuracy,
+    bestCombo: endSummary.bestCombo,
+    rating: getGrade(endSummary.accuracy),
+    newBest: endSummary.isNewBest,
+    drillName: 'Sequence Aim Trainer',
+    playerName: getPlayerName(),
+  } : null, {
+    url: APP_SHARE_URL,
+    title: 'My Mobile Aim Sequence Score',
+    text: endSummary ? `🎯 I scored ${score} PTS (Level ${level}) in the Sequence Aim Trainer! Accuracy: ${endSummary.accuracy}%, Max Combo: ${endSummary.bestCombo}x, Streak: ${endSummary.bestReadStreak}. Get SkillDrills:` : '',
+  });
 
   // RAF rendering loop.
   //
@@ -1045,10 +1249,15 @@ export default function FingerSequencingClient() {
     };
 
     const render = (ts = performance.now()) => {
-      // ~60fps cap — an uncapped loop makes 90-120Hz phones redraw more
-      // than needed for the same visual result. The timeout check below
-      // reads performance.now() directly, so it stays accurate regardless.
-      if (ts - lastDrawTs < 32) {
+      // Adaptive cap: 14ms (~60fps) while particles are on screen, 32ms
+      // (~30fps) otherwise. Gameplay objects here are static tap targets, so
+      // 30 is right for the bulk of the run — but the tap burst is a real
+      // animation and 31fps is visible on it. An uncapped loop would make
+      // 90-120Hz phones redraw more than needed for the same visual result.
+      // The timeout check below reads performance.now() directly, so it stays
+      // accurate regardless.
+      const capParticles = particlesRef.current && particlesRef.current.length > 0;
+      if (ts - lastDrawTs < (capParticles ? 14 : 32)) {
         animationFrameId = requestAnimationFrame(render);
         return;
       }
@@ -1073,7 +1282,16 @@ export default function FingerSequencingClient() {
       const chain = chainRef.current;
       const isPlaying = gameActiveRef.current && phase === 'playing';
 
-      // 3. Draw lines between remaining sequence nodes
+      // 3. Draw the dashed route line between the remaining sequence nodes.
+      //
+      // Shown on EVERY set now, at the owner's request — it used to be tier 1
+      // only. Worth knowing what that costs: this line joins the nodes in
+      // order, so it gives the whole route away exactly as plainly as the
+      // numbers that used to be stamped on them, and the drill becomes tracing
+      // a pre-drawn path rather than recalling a sequence. Tier 1 kept it
+      // because tier 1 is the teaching set. If the reveal ever needs pulling
+      // back without losing the line entirely, the middle ground is to stroke
+      // only the segment from the active node to the next one.
       if (isPlaying && chain.length > 0) {
         ctx.beginPath();
         ctx.strokeStyle = 'rgba(168, 85, 247, 0.25)';
@@ -1143,14 +1361,18 @@ export default function FingerSequencingClient() {
             ctx.lineWidth = 3;
             ctx.stroke();
 
-            const showNumber = cueTierRef.current !== 3 || elapsedSinceSpawn < 800;
-            if (showNumber) {
-              ctx.fillStyle = '#ffffff';
-              ctx.font = `bold ${Math.round(node.r * 0.85)}px sans-serif`;
-              ctx.textAlign = 'center';
-              ctx.textBaseline = 'middle';
-              ctx.fillText((idx - activeIdx + 1).toString(), node.x, node.y);
-            }
+            // The live node is ALWAYS labelled, and it is always a 1.
+            //
+            // `idx - activeIdx + 1` is 1 by definition here (idx === activeIdx);
+            // it is written out because the label is now the whole cue. It used
+            // to vanish after 800ms at tier 3, which left the player with no
+            // marker at all on the hardest tier — the number is the one thing
+            // that should never blink out.
+            ctx.fillStyle = '#ffffff';
+            ctx.font = `bold ${Math.round(node.r * 0.85)}px sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('1', node.x, node.y);
           } else {
             ctx.fillStyle = 'rgba(255, 255, 255, 0.02)';
             ctx.fill();
@@ -1158,14 +1380,15 @@ export default function FingerSequencingClient() {
             ctx.lineWidth = 1;
             ctx.stroke();
 
-            const showNumber = cueTierRef.current === 1 || cueTierRef.current === 2;
-            if (showNumber) {
-              ctx.fillStyle = `rgba(255, 255, 255, ${node.opacity * 0.7})`;
-              ctx.font = `bold ${Math.round(node.r * 0.8)}px sans-serif`;
-              ctx.textAlign = 'center';
-              ctx.textBaseline = 'middle';
-              ctx.fillText((idx - activeIdx + 1).toString(), node.x, node.y);
-            }
+            // Upcoming nodes carry NO number.
+            //
+            // Tiers 1 and 2 used to stamp 2, 3, 4... on the whole chain the
+            // moment it spawned, so the entire route was readable up front and
+            // the drill degraded into tracing a pre-drawn path. The order is
+            // revealed one step at a time now: whichever node is live shows a
+            // 1, you tap it, and the 1 appears on the next one. Nothing on
+            // screen tells you where that will be until it happens, which is
+            // the point of a sequencing drill.
           }
         });
       }
@@ -1206,12 +1429,9 @@ export default function FingerSequencingClient() {
         ctx.globalAlpha = 1.0;
       }
 
-      // 6. Draw red overlay flash on damage
-      if (flashRedRef.current > 0) {
-        ctx.fillStyle = `rgba(239, 68, 68, ${flashRedRef.current})`;
-        ctx.fillRect(0, 0, w, h);
-        flashRedRef.current = Math.max(0, flashRedRef.current - 0.035);
-      }
+      // The mistake flash used to be painted here, as a full-canvas fillRect.
+      // It is a CSS layer now (see triggerFlash), so the draw loop no longer
+      // touches every pixel on the frames right after a miss.
 
       ctx.restore();
       animationFrameId = requestAnimationFrame(render);
@@ -1305,10 +1525,16 @@ export default function FingerSequencingClient() {
         {/* Live Gameplay Canvas — draws its own opaque background + grid
             every frame (see the render() effect below), so a separate CSS
             grid layer underneath would always be fully hidden. */}
-        <canvas 
+        <canvas
           ref={canvasRef}
           className="block absolute top-0 left-0 w-full h-full touch-none z-10"
         />
+
+        {/* Mistake flash. Above the canvas (z-55 in the shared class) so it
+            washes the board rather than being painted into it. */}
+        {flashes.map((f) => (
+          <div key={f.id} className="fx-flash fx-flash-red" />
+        ))}
 
         {/* Rotate Gating Screen */}
         {phase === 'rotate-hint' && !isChallenge && (
@@ -1320,20 +1546,20 @@ export default function FingerSequencingClient() {
         )}
 
         {/* START SCREEN */}
-        {phase === 'start' && !isChallenge && (
+        {phase === 'start' && !launching && !isChallenge && (
           <div className="relative h-full flex items-center justify-center p-5 overflow-y-auto z-30 select-none">
             <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(16,185,129,.16), transparent 70%)' }} />
             <div className="relative w-full max-w-[290px] rounded-[20px] border border-white/5 bg-[#0c0c16]/90 backdrop-blur-lg px-5 pt-5 pb-[18px] text-center shadow-[0_16px_40px_rgba(0,0,0,.5)] my-6">
               <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-emerald-600 to-teal-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(16,185,129,.35)]">
                 <GitBranch className="w-[22px] h-[22px] text-white" />
               </div>
-              <h1 className="text-[17px] font-bold tracking-tight">Sequence Aim Trainer</h1>
-              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45-second run</p>
+              <h1 className="font-display text-[32px] sm:text-[38px]">Sequence Aim Trainer</h1>
+              <p className="text-[9px] label-tiny text-slate-500 mt-1">Endurance run</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5 mb-3.5">
                 <HowToRow icon={<Target className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Tap the targets in <b className="text-white">number order</b></>} />
                 <HowToRow icon={<Eye className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<><b className="text-white">Numbers hide</b> as you level up</>} />
-                <HowToRow icon={<Timer className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Chains <b className="text-white">buy time</b> · 5 lives</>} />
+                <HowToRow icon={<Timer className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Chains <b className="text-white">buy time</b>, slips cost it</>} />
               </div>
 
               <div className="grid grid-cols-3 gap-1.5 mb-3.5">
@@ -1356,23 +1582,15 @@ export default function FingerSequencingClient() {
         {phase === 'playing' && (
           <>
             {/* Live Stats Overlay (Top-Left) */}
-            <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none font-mono select-none">
-              <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
-              {/* No level badge in duels — see the note in ConcentrationGrid. */}
-              {!isChallenge && (
-                <span className="flex items-center gap-0.5 mt-1.5">
-                  {Array.from({ length: MAX_LIVES }).map((_, i) => (
-                    <Heart key={i} className={`w-3 h-3 ${i < lives ? 'fill-red-500 text-red-500' : 'text-white/15'}`} />
-                  ))}
-                </span>
-              )}
+            <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
+              <span className="text-2xl font-hud font-bold text-white leading-none tabular-nums">{score}</span>
             </div>
 
             <div className="absolute top-5 right-5 z-40 flex flex-col items-end pointer-events-none select-none">
-              <span className={`text-3xl font-black font-mono leading-none tabular-nums ${timeLeft <= 10 ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}>
+              <span className={`text-3xl font-hud font-bold leading-none tabular-nums ${timeLeft <= 10 ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}>
                 {Math.ceil(timeLeft)}s
               </span>
-              <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest mt-1">Time Left</span>
+              <span className="text-[8px] label-tiny text-slate-500 mt-1">Time Left</span>
             </div>
 
             {/* Sound toggle */}
@@ -1388,11 +1606,11 @@ export default function FingerSequencingClient() {
 
         {/* COUNTDOWN SCREEN */}
         {phase === 'countdown' && !isChallenge && (
-          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/55 backdrop-blur-[2px] select-none">
+          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/55 select-none">
             <span className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">Get Ready</span>
             <div className="relative w-28 h-28 rounded-full border-[3px] border-emerald-500/20 flex items-center justify-center">
               <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-emerald-400 border-r-emerald-400 animate-spin" style={{ animationDuration: '0.7s' }} />
-              <span key={countdownValue} className="fx-pop-in text-5xl font-black bg-gradient-to-b from-white to-emerald-300 bg-clip-text text-transparent">
+              <span key={countdownValue} className="fx-pop-in text-5xl font-display bg-gradient-to-b from-white to-emerald-300 bg-clip-text text-transparent">
                 {countdownValue > 0 ? countdownValue : 'GO'}
               </span>
             </div>
@@ -1404,6 +1622,7 @@ export default function FingerSequencingClient() {
         {phase === 'ended' && endSummary && !isChallenge && (
           <ResultScreen 
             summary={endSummary} 
+            bestScore={bestScore} 
             onPlayAgain={startGame} 
             onShare={shareScore} 
           />
@@ -1425,51 +1644,51 @@ function HowToRow({ icon, node }) {
 
 function MiniStat({ label, value, color }) {
   return (
-    <div className="rounded-[9px] border border-white/5 bg-white/[0.02] py-1.5 px-1 text-center font-mono">
-      <div className={`text-[12px] font-bold ${color}`}>{value}</div>
-      <div className="text-[7.5px] uppercase tracking-wide text-slate-500 font-bold mt-0.5">{label}</div>
+    <div className="rounded-[9px] border border-white/5 bg-white/[0.02] py-1.5 px-1 text-center">
+      <div className={`text-[12px] font-hud font-bold ${color}`}>{value}</div>
+      <div className="text-[7.5px] label-tiny text-slate-500 mt-0.5">{label}</div>
     </div>
   );
 }
 
-function ResultScreen({ summary, onPlayAgain, onShare }) {
+function ResultScreen({ summary, bestScore, onPlayAgain, onShare }) {
   const grade = getGrade(summary.accuracy);
   const gradeColor = grade.grade === 'S+' || grade.grade === 'S' ? '#fbbf24' : '#a78bfa';
 
   return (
-    <div className="absolute inset-0 z-40 flex select-none font-mono" style={{ background: 'rgba(5,5,8,0.97)' }}>
+    <div className="absolute inset-0 z-40 flex select-none" style={{ background: 'rgba(5,5,8,0.97)' }}>
       {/* Grade Side */}
       <div className="w-[36%] flex flex-col items-center justify-center gap-1.5 border-r border-white/5" style={{ background: 'radial-gradient(ellipse 260px 200px at 50% 30%, rgba(250,204,21,.08), transparent 70%)' }}>
         {summary.isNewBest && (
-          <span className="text-[9.5px] font-bold text-yellow-400 bg-yellow-500/10 border border-yellow-500/25 px-2.5 py-0.5 rounded-full mb-1">NEW BEST</span>
+          <span className="text-[11px] font-display text-yellow-400 bg-yellow-500/10 border border-yellow-500/25 px-2.5 py-1 rounded-full mb-1">NEW BEST</span>
         )}
-        <div className="text-5xl sm:text-6xl font-black leading-none" style={{ color: gradeColor }}>{grade.grade}</div>
-        <div className="text-[10px] uppercase tracking-widest text-slate-500">{grade.label}</div>
-        <div className="text-3xl sm:text-4xl font-black text-white mt-1 tabular-nums">{summary.score.toLocaleString()}</div>
-        <div className="text-[9px] uppercase tracking-widest text-slate-500">Points</div>
+        <div className="text-5xl sm:text-6xl font-display leading-none" style={{ color: gradeColor }}>{grade.grade}</div>
+        <div className="text-[10px] label-tiny text-slate-500">{grade.label}</div>
+        <div className="text-3xl sm:text-4xl font-display text-white mt-1 tabular-nums">{summary.score.toLocaleString()}</div>
+        <div className="text-[9px] label-tiny text-slate-500">Points</div>
       </div>
 
       {/* Details Side */}
       <div className="flex-1 flex flex-col justify-center gap-3 px-6 sm:px-8 py-4 min-w-0">
         <div className="grid grid-cols-3 gap-2">
+          <ResultStat label="Best Score" value={(bestScore ?? 0).toLocaleString()} color="text-yellow-400" />
           <ResultStat label="Accuracy" value={`${summary.accuracy}%`} color="text-blue-400" />
-          <ResultStat label="Combo" value={`${summary.bestCombo}x`} color="text-orange-400" />
           <ResultStat label="XP" value={`+${summary.xpEarned}`} color="text-violet-400" />
         </div>
         <div className="flex gap-2">
           <button 
             onClick={onPlayAgain} 
-            className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-bold text-xs uppercase tracking-wide cursor-pointer hover:shadow-lg active:scale-95 transition-transform"
+            className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-extrabold text-xs uppercase tracking-wider cursor-pointer hover:shadow-lg active:scale-95 transition-transform"
           >
             Play Again
           </button>
           <button 
             onClick={onShare} 
-            className="w-11 flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer active:scale-95 transition-transform"
+            className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer active:scale-95 transition-transform"
           >
             <Share2 className="w-4 h-4" />
           </button>
-          <Link href="/drills/cognitive" className="w-11 flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white active:scale-95 transition-transform">
+          <Link href="/drills/cognitive" className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white active:scale-95 transition-transform">
             <ArrowLeft className="w-4 h-4 text-slate-400" />
           </Link>
         </div>
@@ -1480,9 +1699,9 @@ function ResultScreen({ summary, onPlayAgain, onShare }) {
 
 function ResultStat({ label, value, color }) {
   return (
-    <div className="rounded-[11px] border border-white/5 bg-white/[0.03] py-2 px-1 text-center font-mono">
-      <div className={`text-sm font-black ${color} tabular-nums`}>{value}</div>
-      <div className="text-[7.5px] uppercase tracking-wide text-slate-500 font-bold mt-0.5">{label}</div>
+    <div className="rounded-[11px] border border-white/5 bg-white/[0.03] py-2 px-1 text-center">
+      <div className={`text-sm font-hud font-bold ${color} tabular-nums`}>{value}</div>
+      <div className="text-[7.5px] label-tiny text-slate-500 mt-0.5">{label}</div>
     </div>
   );
 }

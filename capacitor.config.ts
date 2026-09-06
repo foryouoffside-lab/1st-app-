@@ -14,7 +14,14 @@ const config: CapacitorConfig = {
     backgroundColor: '#050508',
     // Hardware back button uses native browser history
     captureInput: true,
-    webContentsDebuggingEnabled: false, // set true during development
+    // Derived, never hand-set. true exposes the WebView to chrome://inspect
+    // from any machine that can reach the device over adb — which means the
+    // signed-in user's session can be read straight out of localStorage by
+    // anyone with physical access. Tying it to CAP_DEV_URL means it is on
+    // only during a `npm run mobile:live` session and is structurally
+    // impossible to leave on in a release build, which `mobile:release`
+    // produces with no CAP_DEV_URL set.
+    webContentsDebuggingEnabled: !!devUrl,
   },
 
   plugins: {

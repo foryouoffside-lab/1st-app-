@@ -5,27 +5,85 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
   Compass, Volume2, VolumeX, Eye, Zap, Ban,
-  Share2, ArrowLeft, Heart
+  Share2, ArrowLeft
 } from 'lucide-react';
 
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade } from '../../../../../lib/scoringEngine';
+import {
+  levelForHits, rampMs, rampToFloor, applyHit, applyMistake, startLevel,
+  scoringMaxLevel, scoringLives,
+} from '../../../../../lib/drillRules';
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { lockPortrait, unlockOrientation } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
 import { getPlayerName } from '../../../../../lib/progressStore';
-import generateShareCard, { shareScoreCard } from '../../../../../components/ShareScoreCard';
+import { useShareCard } from '../../../../../components/ShareScoreCard';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
 import DrillWrapper from '../../../../../components/DrillWrapper';
 import { useDuelMatchStart } from '../../../../../lib/challengeEngine';
+import { APP_SHARE_URL } from '../../../../../lib/shareLinks';
 
 // ============================================================
 // TUNING CONSTANTS
 // ============================================================
 const TOTAL_TIME = 45.0;
-const MAX_LIVES = 5;
-const MAX_LEVEL = 15;
+
+// How a solo run is won and lost — the clock as the only fail state, what a hit
+// earns, what a mistake costs — is defined once in lib/drillRules.js and shared
+// by every drill. Read that file for the model and the reasoning.
+//
+// Drill-local dials below. Both were `start - (level-1)/(MAX_LEVEL-1) * range`,
+// only valid while a ceiling existed; uncapped that fraction runs past 1 and
+// walks each value through its floor into negative. Decay curves instead.
+const WINDOW_START_MS = 3000;
+const WINDOW_FLOOR_MS = 1250;
+const SHADE_DELTA_FLOOR = 4.5;  // below this the two shades are indistinguishable
+// This drill used to run a steeper curve than the rest of the catalogue (0.91
+// against a 0.94 default) because it has only two dials that can move and both
+// bottom out at values chosen for fairness rather than comfort. Under the
+// shared front-loaded runway that override is gone: every drill now moves the same %
+// per level, and a drill being "steeper" than its neighbours is exactly the
+// inconsistency the pass set out to remove. If Shade Finder specifically ends
+// up feeling flat, widen its range below — do not reintroduce a private curve.
 const SHADE_DELTA = 9; // Base lightness percentage difference
+
+// The board itself grows now — it was pinned at 7x7 for the whole run, so the
+// only thing that ever got harder was the contrast. More cells is the honest
+// way to make a visual search task harder: it lengthens the scan without
+// pushing the two shades closer than the eye can actually separate.
+//
+// 9 is the ceiling because of the cell size, not the difficulty: the board is a
+// square capped at min(100vw-32px, 100vh-220px), so on a ~390px-wide phone a
+// 9x9 leaves ~34px cells and a 10x10 drops under 30px, which starts costing
+// mis-taps rather than testing eyesight.
+// Correct finds per level. 2, not the shared 4: one find per round is roughly
+// 0.45 actions/sec, so the shared value would leave level 40 unreachable.
+const HITS_PER_LEVEL = 2;
+
+// Seconds a correct find buys, overriding the shared TIME_PER_HIT.
+//
+// The shared 1.0s is calibrated for a drill you can act on about twice a
+// second. This one gives you a whole visual search per round — about 0.45
+// actions/sec — and against a clock that drains 1s per second that made
+// refilling arithmetically impossible at ANY accuracy. Every run was therefore
+// exactly TOTAL_TIME long and skill could not extend it, which is the endurance
+// model silently not running.
+//
+// 2.1, derived from the drill's own round window (~1.48s between finds mid-run),
+// which puts break-even at 80% like every other drill. 3.0 was over-generous:
+// it dropped the bar to 71% and stretched a good run past seven minutes.
+const TIME_PER_HIT = 2.1;
+const GRID_START = 7;
+const GRID_MAX = 9;
+// 15, not 3. The board is the one dial here that can only arrive whole, so it
+// is the only step a player can feel. At 3 the grid hit its 9x9 ceiling by level
+// 7 and never moved again; 15 spreads the two growth steps across the run.
+const LEVELS_PER_GRID_STEP = 15;
+
+const gridSizeForLevel = (level) =>
+  Math.min(GRID_MAX, GRID_START + Math.floor(Math.max(0, level - 1) / LEVELS_PER_GRID_STEP));
+
 const STORAGE_KEY = 'skilldrills_shade_finder_v1';
 
 // ============================================================
@@ -41,7 +99,7 @@ class AudioSynthesizer {
     if (!this.ctx) {
       try {
         this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-      } catch (e) {}
+      } catch {}
     }
     if (this.ctx && this.ctx.state === 'suspended') {
       this.ctx.resume();
@@ -65,7 +123,7 @@ class AudioSynthesizer {
       gainNode.connect(this.ctx.destination);
       osc.start();
       osc.stop(this.ctx.currentTime + dur);
-    } catch (e) {}
+    } catch {}
   }
 
   // 1. Hit sound
@@ -74,8 +132,85 @@ class AudioSynthesizer {
   // 2. Countdown tick sound
   playCountdownTick() { this.tone(440, 0.09, 'sine', 0.12, 440); }
 
-  // 3. "GO" start sound
-  playGo() { this.tone(523.25, 0.18, 'triangle', 0.17, 784); }
+  // GO — a struck wooden bar. Warm rather than urgent: this is the last beat
+  // of 3-2-1, so it has to feel bigger than the 440Hz ticks without turning
+  // the start of a focus drill into an alarm.
+  //
+  // Earlier versions chased impact and got harshness instead — a bright A5
+  // mallet, a four-note arpeggio over a sub drop, a chord with a glide into
+  // it. Next to the ticks they all read as ARCADE.
+  //
+  // What works is a marimba tap. A 12ms noise burst bandpassed at 900Hz is
+  // the beater contacting wood — low and short enough that it never reads as
+  // a drum, but without it the tone has no onset and nothing feels struck.
+  // Behind it, three voices 5ms later: C5 as the bar, its octave for a little
+  // air, C4 underneath for warmth. Each is a pair of sines detuned four cents
+  // apart through a lowpass — the same construction as chimeVoice — which is
+  // why nothing here buzzes. C is a minor third above the 440Hz ticks, so it
+  // resolves upward and lands clearly without shouting. Decays over ~350ms.
+  //
+  // Scheduled on the AudioContext clock, not with setTimeout: the main thread
+  // is setting the round up at exactly this instant.
+  playGo() {
+    if (!this.enabled || !this.ctx) return;
+    try {
+      const ctx = this.ctx;
+      if (ctx.state === 'suspended') ctx.resume();
+      const t0 = ctx.currentTime;
+
+      // The beater. Linearly-decaying white noise through a bandpass — a
+      // wooden knock, not a snare.
+      const nLen = Math.max(1, Math.floor(ctx.sampleRate * 0.012));
+      const nBuf = ctx.createBuffer(1, nLen, ctx.sampleRate);
+      const nData = nBuf.getChannelData(0);
+      for (let i = 0; i < nLen; i++) {
+        nData[i] = (Math.random() * 2 - 1) * (1 - i / nLen);
+      }
+      const nSrc = ctx.createBufferSource();
+      nSrc.buffer = nBuf;
+      const nBand = ctx.createBiquadFilter();
+      nBand.type = 'bandpass';
+      nBand.frequency.setValueAtTime(900, t0);
+      nBand.Q.setValueAtTime(1.6, t0);
+      const nGain = ctx.createGain();
+      nGain.gain.setValueAtTime(0.042, t0);
+      nGain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.012);
+      nSrc.connect(nBand);
+      nBand.connect(nGain);
+      nGain.connect(ctx.destination);
+      nSrc.start(t0);
+      nSrc.stop(t0 + 0.012);
+
+      // The bar. 5ms behind the knock so the two read as one event.
+      [
+        // freq    at     dur   vol    cut   attack
+        [523.25,  0.005, 0.35, 0.120, 2000, 0.008], // body — C5
+        [1046.50, 0.005, 0.13, 0.034, 3200, 0.008], // octave — air
+        [261.63,  0.005, 0.30, 0.040, 1200, 0.012]  // foundation — C4
+      ].forEach(([freq, at, dur, vol, cut, attack]) => {
+        const startAt = t0 + at;
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(cut, startAt);
+        filter.Q.setValueAtTime(0.5, startAt);
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.0001, startAt);
+        gain.gain.linearRampToValueAtTime(vol, startAt + attack);
+        gain.gain.exponentialRampToValueAtTime(0.001, startAt + dur);
+        filter.connect(gain);
+        gain.connect(ctx.destination);
+        [-4, 4].forEach((cents) => {
+          const osc = ctx.createOscillator();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, startAt);
+          osc.detune.setValueAtTime(cents, startAt);
+          osc.connect(filter);
+          osc.start(startAt);
+          osc.stop(startAt + dur);
+        });
+      });
+    } catch {}
+  }
 
   // 4. Penalty / Miss sound
   playPenalty() {
@@ -99,7 +234,7 @@ class AudioSynthesizer {
         osc.start(t0 + delay);
         osc.stop(t0 + delay + 0.08);
       });
-    } catch (e) {}
+    } catch {}
   }
   playMiss() { this.playPenalty(); }
   playWrongBoom() { this.playPenalty(); }
@@ -123,7 +258,7 @@ class AudioSynthesizer {
         osc.start(t0 + offset);
         osc.stop(t0 + offset + 0.15);
       });
-    } catch (e) {}
+    } catch {}
   }
 
   chimeVoice(freq, startAt, dur, vol, filterFreq = 2600) {
@@ -161,7 +296,7 @@ class AudioSynthesizer {
         this.chimeVoice(freq, t0 + i * 0.08, 0.24, 0.13, 3200);
       });
       this.chimeVoice(1046.50, t0 + 0.26, 0.6, 0.16, 4200);
-    } catch (e) {}
+    } catch {}
   }
 
   setEnabled(status) {
@@ -179,7 +314,7 @@ const getSavedData = () => {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
     return { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0 };
-  } catch (e) {
+  } catch {
     return { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0 };
   }
 };
@@ -187,7 +322,7 @@ const getSavedData = () => {
 const saveData = (data) => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch (e) {}
+  } catch {}
 };
 
 // ============================================================
@@ -213,13 +348,14 @@ export default function ShadeFinderClient() {
   const [bestLevel, setBestLevel] = useState(1);
 
   const [score, setScore] = useState(0);
-  const [lives, setLives] = useState(MAX_LIVES);
-  const [combo, setCombo] = useState(0);
-  const [level, setLevel] = useState(1);
+  // The live "Lv." HUD badge was the only thing that ever READ this, so the
+  // React state went with it. The ramp itself runs off levelRef, which the
+  // game loop already uses; keeping a useState in step with it only bought a
+  // re-render of the whole drill on every level-up, mid-play, for nothing.
   const [timeRemaining, setTimeRemaining] = useState(totalTime);
   const [dangerLevel, setDangerLevel] = useState(0);
 
-  const [gridSize, setGridSize] = useState(7);
+  const [gridSize, setGridSize] = useState(GRID_START);
   const [gridCells, setGridCells] = useState([]);
 
   const [flashes, setFlashes] = useState([]);
@@ -230,7 +366,6 @@ export default function ShadeFinderClient() {
   const gameActiveRef = useRef(false);
 
   const scoreRef = useRef(0);
-  const livesRef = useRef(MAX_LIVES);
   const comboRef = useRef(0);
   const bestComboRef = useRef(0);
   const levelRef = useRef(1);
@@ -239,6 +374,7 @@ export default function ShadeFinderClient() {
   const correctActionsRef = useRef(0);
   const totalActionsRef = useRef(0);
   const timeRemainingRef = useRef(totalTime);
+  const runOverRef = useRef(false);
 
   const roundStartAtRef = useRef(0);
   const heartbeatTempoRef = useRef(1100);
@@ -249,10 +385,16 @@ export default function ShadeFinderClient() {
   const roundTimerRef = useRef(null);
 
   const flashIdRef = useRef(0);
-  const phaseRef = useRef('start');
 
   useEffect(() => {
     setIsClient(true);
+
+    // Take the status-bar area now, behind the 200ms loading screen, rather
+    // than when the player taps START. overlaysWebView:true makes the window
+    // layout size independent of whether the bar is showing, so this drill's
+    // StatusBar.hide() no longer resizes the WebView under the "3 · 2 · 1 · GO"
+    // overlay — which is what made the first digit shift into place.
+    if (Capacitor.isNativePlatform()) StatusBar.setOverlaysWebView({ overlay: true }).catch(() => {});
     mountedRef.current = true;
     lockPortrait();
     try {
@@ -260,7 +402,7 @@ export default function ShadeFinderClient() {
       setBestScore(saved.bestScore);
       setBestCombo(saved.bestCombo);
       setBestLevel(saved.bestLevel);
-    } catch (e) {}
+    } catch {}
     setTimeout(() => { if (mountedRef.current) setLoading(false); }, 200);
 
     return () => {
@@ -268,26 +410,13 @@ export default function ShadeFinderClient() {
       gameActiveRef.current = false;
       [heartbeatTimerRef, countdownTimerRef, roundTimerRef].forEach((r) => { if (r.current) clearTimeout(r.current); });
       if (gameTimerRef.current) clearInterval(gameTimerRef.current);
-      if (Capacitor.isNativePlatform()) StatusBar.show().catch(() => {});
+      if (Capacitor.isNativePlatform()) {
+        StatusBar.setOverlaysWebView({ overlay: false }).catch(() => {});
+        StatusBar.show().catch(() => {});
+      }
       unlockOrientation();
     };
   }, []);
-
-  // Hide floating controls during play
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      if (phase === 'playing' || phase === 'countdown') {
-        document.body.classList.add('hide-drill-controls');
-      } else {
-        document.body.classList.remove('hide-drill-controls');
-      }
-    }
-    return () => {
-      if (typeof window !== 'undefined') {
-        document.body.classList.remove('hide-drill-controls');
-      }
-    };
-  }, [phase]);
 
   useEffect(() => { if (audioSynth) audioSynth.setEnabled(soundEnabled); }, [soundEnabled]);
 
@@ -299,11 +428,11 @@ export default function ShadeFinderClient() {
   }, []);
 
   const updateDifficulty = useCallback(() => {
-    const calculatedLevel = Math.min(MAX_LEVEL, Math.floor(scoreRef.current / 50) + 1);
+    const calculatedLevel = levelForHits(correctActionsRef.current, HITS_PER_LEVEL);
     if (calculatedLevel > levelRef.current) {
       levelRef.current = calculatedLevel;
       bestLevelRunRef.current = Math.max(bestLevelRunRef.current, calculatedLevel);
-      setLevel(calculatedLevel);
+
     }
   }, []);
 
@@ -318,15 +447,21 @@ export default function ShadeFinderClient() {
       reactionMs,
       timeRemaining: timeRemainingRef.current,
       totalGameTime: totalTime,
-      livesRemaining: livesRef.current,
-      maxLives: MAX_LIVES,
+      livesRemaining: scoringLives(0),
       level: levelRef.current,
-      maxLevel: MAX_LEVEL,
+      maxLevel: scoringMaxLevel(isChallenge),
     });
 
     let total = pts.total;
 
     scoreRef.current += total;
+    // Buy back a slice of the clock. Solo only - challenge/Arena keeps its fixed
+    // 30s deadline, which both duel players share and nothing may move. No state
+    // is set here: the existing clock interval redraws the seconds when the
+    // displayed number changes, so this costs nothing per hit.
+    if (!isChallenge) {
+      timeRemainingRef.current = applyHit({ timeRemaining: timeRemainingRef.current, level: levelRef.current, hits: correctActionsRef.current, reward: TIME_PER_HIT });
+    }
     comboRef.current = comboBefore + 1;
     bestComboRef.current = Math.max(bestComboRef.current, comboRef.current);
     correctActionsRef.current += 1;
@@ -337,7 +472,6 @@ export default function ShadeFinderClient() {
     audioSynth?.playHit();
 
     setScore(scoreRef.current);
-    setCombo(comboRef.current);
     updateDifficulty();
   }, [updateDifficulty, triggerFlash, totalTime]);
 
@@ -354,19 +488,22 @@ export default function ShadeFinderClient() {
     if (isChallenge) {
       scoreRef.current = Math.max(0, scoreRef.current - 5);
     } else {
-      livesRef.current = Math.max(0, livesRef.current - 1);
+      const after = applyMistake({ timeRemaining: timeRemainingRef.current });
+      timeRemainingRef.current = after.timeRemaining;
+      runOverRef.current = after.runOver;
+      setTimeRemaining(Math.ceil(timeRemainingRef.current));
     }
 
     triggerFlash('red');
 
     setScore(scoreRef.current);
-    setCombo(0);
-    setLives(Math.max(0, livesRef.current));
 
-    if (!isChallenge && livesRef.current <= 0) endGameRef.current?.('lives');
+    if (!isChallenge && runOverRef.current) endGameRef.current?.();
   }, [triggerFlash, isChallenge]);
 
-  const endGame = useCallback(async (reason) => {
+  // No `reason` argument — running out of time is the only way a solo run can
+  // end now, so there is nothing left to distinguish.
+  const endGame = useCallback(async () => {
     if (!gameActiveRef.current) return;
     gameActiveRef.current = false;
 
@@ -378,7 +515,7 @@ export default function ShadeFinderClient() {
 
     const correct = correctActionsRef.current;
     const total = totalActionsRef.current;
-    const accuracy = total > 0 ? Math.round((correct / total) * 100) : 100;
+    const accuracy = total > 0 ? Math.round((correct / total) * 100) : 0;
 
     const bonuses = calcEndBonuses({
       rawScore: scoreRef.current,
@@ -386,8 +523,7 @@ export default function ShadeFinderClient() {
       bestCombo: bestComboRef.current,
       totalActions: total,
       mistakes: mistakesRef.current,
-      livesRemaining: Math.max(0, livesRef.current),
-      maxLives: MAX_LIVES,
+      livesRemaining: scoringLives(0),
       category: 'cognitive',
     });
     const finalScore = bonuses.finalScore;
@@ -424,12 +560,16 @@ export default function ShadeFinderClient() {
       score: finalScore,
       accuracy,
       bestCombo: bestComboRef.current,
-      lives: Math.max(0, livesRef.current),
+      level: bestLevelRunRef.current,
       isNewBest,
       xpEarned: xpResult.xp,
+      prevBest: prevSaved.bestScore,
     });
 
-    if (Capacitor.isNativePlatform()) StatusBar.show().catch(() => {});
+    // The status bar deliberately stays hidden here. Re-showing it resized the
+    // WebView at the exact moment the result screen mounted, so the results
+    // visibly jumped into place. It is restored on unmount instead (see the
+    // mount effect), alongside unlockOrientation().
     setPhase('ended');
   }, []);
 
@@ -438,19 +578,20 @@ export default function ShadeFinderClient() {
   const spawnRound = useCallback(() => {
     if (!gameActiveRef.current) return;
 
-    setGridSize(7);
+    const n = gridSizeForLevel(levelRef.current);
+    setGridSize(n);
 
     const H = Math.floor(Math.random() * 360);
     const S = Math.floor(Math.random() * 20) + 65;
     const L = Math.floor(Math.random() * 20) + 40;
 
-    const delta = Math.max(4.5, SHADE_DELTA - ((levelRef.current - 1) / (MAX_LEVEL - 1)) * 4.5);
+    const delta = rampToFloor(levelRef.current, SHADE_DELTA, SHADE_DELTA_FLOOR);
     const targetL = L + delta <= 82 ? L + delta : L - delta;
 
     const baseColor = `hsl(${H}, ${S}%, ${L}%)`;
     const targetColor = `hsl(${H}, ${S}%, ${targetL}%)`;
 
-    const totalCells = 49;
+    const totalCells = n * n;
     const targetIndex = Math.floor(Math.random() * totalCells);
 
     const cells = [];
@@ -466,7 +607,7 @@ export default function ShadeFinderClient() {
     roundStartAtRef.current = Date.now();
 
     if (roundTimerRef.current) clearTimeout(roundTimerRef.current);
-    const windowMs = Math.round(3000 - ((levelRef.current - 1) / (MAX_LEVEL - 1)) * 1400);
+    const windowMs = rampMs(levelRef.current, WINDOW_START_MS, WINDOW_FLOOR_MS);
     roundTimerRef.current = setTimeout(() => {
       if (!gameActiveRef.current || !mountedRef.current) return;
       resolveWrong('timeout');
@@ -493,11 +634,11 @@ export default function ShadeFinderClient() {
   const scheduleHeartbeat = useCallback(() => {
     if (isChallenge) return;
     if (!gameActiveRef.current) return;
-    const dangerFromLives = (MAX_LIVES - livesRef.current) / MAX_LIVES;
+    // Time is the only danger there is now — the lives term went with the lives.
     const dangerFromTime = timeRemainingRef.current <= 10 ? (10 - timeRemainingRef.current) / 10 : 0;
-    const danger = Math.max(dangerFromLives * 0.7, dangerFromTime);
-    // Clamped: an unclamped tempo goes NEGATIVE once danger exceeds ~1.69 (which
-    // negative lives can produce), and a setTimeout with a negative delay fires
+    const danger = Math.min(1, Math.max(0, dangerFromTime));
+    // Clamped: an unclamped tempo goes NEGATIVE once danger exceeds ~1.69, and
+    // a setTimeout with a negative delay fires
     // immediately — turning this self-rescheduling callback into a tight loop
     // spawning audio nodes at full CPU. That was the "phone heats up and makes
     // noise" bug already fixed in the other drills; this brings the rest in line.
@@ -518,7 +659,18 @@ export default function ShadeFinderClient() {
         setTimeRemaining(0);
         endGameRef.current?.('time');
       } else {
-        setTimeRemaining(timeRemainingRef.current);
+        // Quantised to the second it is DISPLAYED at.
+        //
+        // Every consumer of this state reads it through Math.ceil — the HUD
+        // clock and DrillWrapper's timeLeft prop — so the fraction is never
+        // shown. But a raw float differs from the previous one on every single
+        // tick, so React could never bail out of the render, and this timer
+        // re-rendered the entire play field several times a second for the
+        // whole run just to repaint a number that had not changed. Rounded
+        // first, the value is identical on most ticks and React skips the
+        // render outright. Same pixels, a fraction of the main-thread work.
+        const shown = Math.ceil(timeRemainingRef.current);
+        setTimeRemaining((v) => (v === shown ? v : shown));
       }
     }, 200);
     scheduleHeartbeat();
@@ -546,14 +698,19 @@ export default function ShadeFinderClient() {
     [heartbeatTimerRef, countdownTimerRef, roundTimerRef].forEach((r) => { if (r.current) { clearTimeout(r.current); r.current = null; } });
     if (gameTimerRef.current) { clearInterval(gameTimerRef.current); gameTimerRef.current = null; }
 
-    const savedForStart = getSavedData();
-    const startLevel = isChallenge ? 1 : Math.max(1, Math.min(MAX_LEVEL, Math.round((savedForStart.bestLevel || 1) * 0.55)));
+    // Every run starts at the lowest difficulty. It used to start at 55% of the
+    // player's best level, so improving once permanently raised the speed every
+    // future run opened at - a silent spike with nothing on screen explaining it.
+    // That head-start only existed because a fixed 45s was too short to climb the
+    // ramp; the endurance clock replaces it.
+    const runStartLevel = isChallenge ? 1 : startLevel(bestLevel);
 
-    scoreRef.current = 0; livesRef.current = MAX_LIVES; comboRef.current = 0; bestComboRef.current = 0;
-    levelRef.current = startLevel; bestLevelRunRef.current = startLevel; mistakesRef.current = 0; correctActionsRef.current = 0; totalActionsRef.current = 0;
+    scoreRef.current = 0; comboRef.current = 0; bestComboRef.current = 0;
+    levelRef.current = runStartLevel; bestLevelRunRef.current = runStartLevel; mistakesRef.current = 0; correctActionsRef.current = 0; totalActionsRef.current = 0;
     timeRemainingRef.current = totalTime;
+    runOverRef.current = false;
 
-    setScore(0); setLives(MAX_LIVES); setCombo(0); setLevel(startLevel); setTimeRemaining(totalTime);
+    setScore(0); setTimeRemaining(totalTime);
     setDangerLevel(0);
     setGridCells([]);
     setEndSummary(null); setFlashes([]);
@@ -585,38 +742,28 @@ export default function ShadeFinderClient() {
     gameActiveRef.current = false;
     setPhase('start');
     setScore(0);
-    setLives(MAX_LIVES);
     setEndSummary(null);
     setTimeRemaining(totalTime);
     timeRemainingRef.current = totalTime;
+    runOverRef.current = false;
   }, [challengeId, totalTime]);
 
-  const shareResult = useCallback(async () => {
-    if (!endSummary) return;
-    const url = 'https://skilldrills.online/drills/cognitive/focus/shade-finder';
-
-    try {
-      const grade = getGrade(endSummary.accuracy);
-      const canvas = generateShareCard({
-        score: endSummary.score,
-        bestScore,
-        accuracy: endSummary.accuracy,
-        bestCombo: endSummary.bestCombo,
-        rating: { letter: grade.grade, label: grade.label, emoji: grade.emoji },
-        newBest: endSummary.isNewBest,
-        drillName: 'Shade Finder',
-        playerName: getPlayerName(),
-      });
-      await shareScoreCard(url, canvas);
-    } catch (e) {
-      const text = `Scored ${endSummary.score} on Shade Finder (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — SkillDrills`;
-      if (typeof navigator !== 'undefined' && navigator.share) {
-        navigator.share({ title: 'Shade Finder — SkillDrills', text, url }).catch(() => {});
-      } else if (typeof navigator !== 'undefined' && navigator.clipboard) {
-        navigator.clipboard.writeText(`${text} ${url}`);
-      }
-    }
-  }, [endSummary, bestScore]);
+  // Score card. Drawn and encoded while the result screen sits idle,
+  // not on the tap - see useShareCard in components/ShareScoreCard.js.
+  const shareResult = useShareCard(endSummary ? {
+    score: endSummary.score,
+    bestScore: endSummary.prevBest ?? bestScore,
+    accuracy: endSummary.accuracy,
+    bestCombo: endSummary.bestCombo,
+    rating: getGrade(endSummary.accuracy),
+    newBest: endSummary.isNewBest,
+    drillName: 'Shade Finder',
+    playerName: getPlayerName(),
+  } : null, {
+    url: APP_SHARE_URL,
+    title: 'Shade Finder — SkillDrills',
+    text: endSummary ? `Scored ${endSummary.score} on Shade Finder (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — SkillDrills` : '',
+  });
 
   if (loading || !isClient) {
     return (
@@ -674,13 +821,13 @@ export default function ShadeFinderClient() {
               <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(139,92,246,.35)]">
                 <Compass className="w-[22px] h-[22px] text-white" />
               </div>
-              <h1 className="text-[17px] font-bold tracking-tight text-white">Shade Finder</h1>
-              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45-second run</p>
+              <h1 className="font-display text-[32px] sm:text-[38px] text-white">Shade Finder</h1>
+              <p className="text-[9px] label-tiny text-slate-500 mt-1">Endurance run</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
                 <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Find the odd square out</>} />
-                <HowToRow icon={<Zap className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Contrast shrinks every level</>} />
-                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Wrong taps cost a life · 3 lives</>} />
+                <HowToRow icon={<Zap className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Grid grows, contrast shrinks</>} />
+                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Hits add time, misses cost it</>} />
               </div>
 
               <div className="grid grid-cols-3 gap-1.5 mt-3.5">
@@ -703,28 +850,15 @@ export default function ShadeFinderClient() {
         {(phase === 'playing' || phase === 'countdown') && (
           <>
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
-              <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
-              <div className="flex items-center gap-2 mt-1.5">
-                {isChallenge ? (
-                  <span className="text-[10px] font-black text-violet-300 bg-violet-500/15 border border-violet-500/25 px-1.5 py-0.5 rounded">
-                    Lv.{level}
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-0.5">
-                    {Array.from({ length: MAX_LIVES }).map((_, i) => (
-                      <Heart key={i} className={`w-3 h-3 ${i < lives ? 'fill-red-500 text-red-500' : 'text-white/15'}`} />
-                    ))}
-                  </span>
-                )}
-              </div>
+              <span className="text-2xl font-hud font-bold text-white leading-none tabular-nums">{score}</span>
             </div>
 
             {/* Timer overlay top-right */}
             <div className="absolute top-5 right-5 z-40 flex flex-col items-end pointer-events-none select-none">
-              <span className={`text-3xl font-black font-mono leading-none tabular-nums ${timeRemaining <= 10 ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}>
+              <span className={`text-3xl font-hud font-bold leading-none tabular-nums ${timeRemaining <= 10 ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}>
                 {Math.ceil(timeRemaining)}s
               </span>
-              <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest mt-1">Time Left</span>
+              <span className="text-[8px] label-tiny text-slate-500 mt-1">Time Left</span>
             </div>
 
             {/* Playing Grid Container */}
@@ -736,7 +870,10 @@ export default function ShadeFinderClient() {
                     style={{
                       gridTemplateColumns: `repeat(${gridSize}, 1fr)`,
                       gridTemplateRows: `repeat(${gridSize}, 1fr)`,
-                      gap: '4px'
+                      // Tightens as the board grows. A fixed 4px eats 32px of a
+                      // 7x7 board but 36px of a 10x10, so holding it constant
+                      // would shrink the cells twice over.
+                      gap: gridSize >= 9 ? '2px' : gridSize >= 8 ? '3px' : '4px'
                     }}
                   >
                     {gridCells.map((cell, idx) => (
@@ -758,11 +895,11 @@ export default function ShadeFinderClient() {
 
         {/* ── COUNTDOWN ── */}
         {phase === 'countdown' && !isChallenge && (
-          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/55 backdrop-blur-[2px]">
+          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/55">
             <span className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">Get Ready</span>
             <div className="relative w-28 h-28 rounded-full border-[3px] border-violet-500/20 flex items-center justify-center">
               <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-violet-400 border-r-violet-400 animate-spin" style={{ animationDuration: '0.7s' }} />
-              <span key={countdownValue} className="fx-pop-in text-5xl font-black bg-gradient-to-b from-white to-violet-300 bg-clip-text text-transparent">
+              <span key={countdownValue} className="fx-pop-in text-5xl font-display bg-gradient-to-b from-white to-violet-300 bg-clip-text text-transparent">
                 {countdownValue > 0 ? countdownValue : 'GO'}
               </span>
             </div>
@@ -772,7 +909,7 @@ export default function ShadeFinderClient() {
 
         {/* ── RESULT SCREEN ── */}
         {phase === 'ended' && endSummary && !isChallenge && (
-          <ResultScreen summary={endSummary} onPlayAgain={enterDrill} onShare={shareResult} />
+          <ResultScreen summary={endSummary} bestScore={bestScore} onPlayAgain={enterDrill} onShare={shareResult} />
         )}
       </div>
     </DrillWrapper>
@@ -794,13 +931,13 @@ function HowToRow({ icon, node }) {
 function MiniStat({ label, value, color }) {
   return (
     <div className="rounded-[9px] border border-white/5 bg-white/[0.02] py-1.5 px-1 text-center">
-      <div className={`text-[12px] font-bold ${color}`}>{value}</div>
-      <div className="text-[7.5px] uppercase tracking-wide text-slate-500 font-bold mt-0.5">{label}</div>
+      <div className={`text-[12px] font-hud font-bold ${color}`}>{value}</div>
+      <div className="text-[7.5px] label-tiny text-slate-500 mt-0.5">{label}</div>
     </div>
   );
 }
 
-function ResultScreen({ summary, onPlayAgain, onShare }) {
+function ResultScreen({ summary, bestScore, onPlayAgain, onShare }) {
   const grade = getGrade(summary.accuracy);
   const gradeColor = grade.grade === 'S+' || grade.grade === 'S' ? '#fbbf24' : '#a78bfa';
 
@@ -808,28 +945,28 @@ function ResultScreen({ summary, onPlayAgain, onShare }) {
     <div className="absolute inset-0 z-40 flex" style={{ background: 'rgba(5,5,8,0.97)' }}>
       <div className="w-[36%] flex flex-col items-center justify-center gap-1.5 border-r border-white/5" style={{ background: 'radial-gradient(ellipse 260px 200px at 50% 30%, rgba(250,204,21,.08), transparent 70%)' }}>
         {summary.isNewBest && (
-          <span className="text-[9.5px] font-bold text-yellow-400 bg-yellow-500/10 border border-yellow-500/25 px-2.5 py-0.5 rounded-full mb-1">NEW BEST</span>
+          <span className="text-[11px] font-display text-yellow-400 bg-yellow-500/10 border border-yellow-500/25 px-2.5 py-1 rounded-full mb-1">NEW BEST</span>
         )}
-        <div className="text-5xl sm:text-6xl font-black leading-none" style={{ color: gradeColor }}>{grade.grade}</div>
-        <div className="text-[10px] uppercase tracking-widest text-slate-500">{grade.label}</div>
-        <div className="text-3xl sm:text-4xl font-black text-white mt-1 tabular-nums">{summary.score.toLocaleString()}</div>
-        <div className="text-[9px] uppercase tracking-widest text-slate-500">Points</div>
+        <div className="text-5xl sm:text-6xl font-display leading-none" style={{ color: gradeColor }}>{grade.grade}</div>
+        <div className="text-[10px] label-tiny text-slate-500">{grade.label}</div>
+        <div className="text-3xl sm:text-4xl font-display text-white mt-1 tabular-nums">{summary.score.toLocaleString()}</div>
+        <div className="text-[9px] label-tiny text-slate-500">Points</div>
       </div>
 
       <div className="flex-1 flex flex-col justify-center gap-3 px-6 sm:px-8 py-4 min-w-0">
         <div className="grid grid-cols-3 gap-2">
+          <ResultStat label="Best Score" value={(bestScore ?? 0).toLocaleString()} color="text-yellow-400" />
           <ResultStat label="Accuracy" value={`${summary.accuracy}%`} color="text-blue-400" />
-          <ResultStat label="Combo" value={`${summary.bestCombo}x`} color="text-orange-400" />
           <ResultStat label="XP" value={`+${summary.xpEarned}`} color="text-violet-400" />
         </div>
         <div className="flex gap-2">
-          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-bold text-xs uppercase tracking-wide cursor-pointer">
+          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-extrabold text-xs uppercase tracking-wider cursor-pointer">
             Play Again
           </button>
-          <button onClick={onShare} className="w-11 flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer">
+          <button onClick={onShare} className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer">
             <Share2 className="w-4 h-4" />
           </button>
-          <Link href="/drills/cognitive" className="w-11 flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white">
+          <Link href="/drills/cognitive" className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white">
             <ArrowLeft className="w-4 h-4 text-slate-400" />
           </Link>
         </div>
@@ -841,8 +978,8 @@ function ResultScreen({ summary, onPlayAgain, onShare }) {
 function ResultStat({ label, value, color }) {
   return (
     <div className="rounded-[11px] border border-white/5 bg-white/[0.03] py-2 px-1 text-center">
-      <div className={`text-sm font-black ${color} tabular-nums`}>{value}</div>
-      <div className="text-[7.5px] uppercase tracking-wide text-slate-500 font-bold mt-0.5">{label}</div>
+      <div className={`text-sm font-hud font-bold ${color} tabular-nums`}>{value}</div>
+      <div className="text-[7.5px] label-tiny text-slate-500 mt-0.5">{label}</div>
     </div>
   );
 }

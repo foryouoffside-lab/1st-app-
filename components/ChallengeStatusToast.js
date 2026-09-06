@@ -25,7 +25,7 @@ export default function ChallengeStatusToast() {
 
   useEffect(() => {
     if (!outgoingChallenge) return;
-    const { id, status, drillSlug, toName, createdAt } = outgoingChallenge;
+    const { id, status, drillSlug, toName, createdAt, withdrawnBySender } = outgoingChallenge;
 
     const previousStatus = seenStatusRef.current.get(id);
     if (previousStatus === status) return;
@@ -51,7 +51,12 @@ export default function ChallengeStatusToast() {
 
     if (status === 'accepted') {
       router.push(`/drills/${drillSlug}?challengeId=${id}`);
-    } else if (status === 'declined') {
+    } else if (status === 'declined' && !withdrawnBySender) {
+      // `withdrawnBySender` means WE cancelled this invite — see
+      // withdrawChallenge. A cancellation and a decline both land as
+      // status:'declined', so without this check the sender's own Cancel
+      // Request came back to them as "Global Arena Pool declined your duel"
+      // a moment later, which is the opposite of what happened.
       setDeclinedNotice({ id, toName });
     }
   }, [outgoingChallenge, router]);

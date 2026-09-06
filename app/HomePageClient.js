@@ -5,21 +5,14 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { collection, limit, onSnapshot, query, where } from 'firebase/firestore';
 import {
-  ArrowRight, BarChart3, Brain, CheckCircle2, ChevronRight, Crown,
-  Flame, Play, Sparkles, Swords, Target, Timer, Trophy, Zap,
-  Database, Eye, Activity, BookOpen, Dumbbell, Hand
+  ArrowRight, CheckCircle2, Crown, Flag, Play, Swords,
+  Target
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { acceptChallenge } from '../lib/challengeEngine';
 import { ARENA_ENABLED } from '../lib/featureFlags';
 import { getDailyChallenge } from '../lib/dailyChallenge';
-import {
-  getAllDrillProgress, getDrillsPlayed, getPlayerLevel, getStreak,
-  getTotalSessions,
-} from '../lib/progressStore';
-import { getDailyMission, getTrainingFocus, setTrainingFocus, TRAINING_FOCUSES } from '../lib/playerJourney';
-import { Storage } from '../lib/storage';
-import { DRILL_INDEX } from '../lib/drillIndex';
+import { DRILL_INDEX, byEngagement } from '../lib/drillIndex';
 import { DRILL_GROUPS, getDrillGroup, getGroupIcon } from '../lib/drillGroups';
 
 const HOMEPAGE_CATEGORIES = DRILL_GROUPS.map(g => ({
@@ -31,77 +24,45 @@ const HOMEPAGE_CATEGORIES = DRILL_GROUPS.map(g => ({
   href: `/drills/cognitive?group=${g.id}`,
 }));
 
-function useMidnightCountdown() {
-  const [countdown, setCountdown] = useState('');
+// Category chips for the home-screen drill browser. "All" leads (it covers
+// the whole catalogue, so the old "All Drills" wayfinding link is gone), then
+// the five real categories. These chips filter the drill rail in place — they
+// no longer navigate to the hub.
+const CATEGORY_TABS = [
+  { slug: 'all', name: 'All', icon: Target, accent: 'var(--c-cognitive)' },
+  ...HOMEPAGE_CATEGORIES,
+];
 
-  useEffect(() => {
-    const update = () => {
-      const now = new Date();
-      const midnight = new Date(now);
-      midnight.setHours(24, 0, 0, 0);
-      const seconds = Math.max(0, Math.floor((midnight - now) / 1000));
-      const hours = String(Math.floor(seconds / 3600)).padStart(2, '0');
-      const minutes = String(Math.floor((seconds % 3600) / 60)).padStart(2, '0');
-      setCountdown(`${hours}:${minutes}`);
-    };
-    update();
-    const interval = window.setInterval(update, 30000);
-    return () => window.clearInterval(interval);
-  }, []);
+// Drill ids that have bespoke home-rail art at /public/drill-art/<id>.webp.
+// ADD AN ID HERE when you drop its image in — anything not listed uses the
+// auto-captured gameplay frame from /previews/cards/<id>.webp instead.
+// (A static export can't reliably catch an <img> onError before hydration,
+// so the choice is made up front rather than on load failure.)
+const DRILL_ART = new Set([
+  'quick-dodge',
+]);
 
-  return countdown;
-}
-
-function prettyDrillName(drillId) {
-  return drillId.replace(/-/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
-}
+// Same mapping the /drills hub uses for its difficulty pill, so a drill's
+// badge reads identically in both places.
+const DIFFICULTY_CLASS = {
+  easy: 'beginner', beginner: 'beginner',
+  medium: 'intermediate', intermediate: 'intermediate',
+  hard: 'advanced', advanced: 'advanced',
+  impossible: 'impossible', elite: 'elite',
+};
 
 export default function HomePageClient() {
   const { user, db } = useAuth();
   const router = useRouter();
   const [daily, setDaily] = useState(null);
-  const [level, setLevel] = useState({ level: 1, xpInLevel: 0, xpToNext: 1000 });
-  const [streak, setStreak] = useState({ current: 0, longest: 0 });
-  const [stats, setStats] = useState({ sessions: 0, drills: 0 });
-  const [recent, setRecent] = useState([]);
   const [arenaChallenges, setArenaChallenges] = useState([]);
-  const [bestCombo, setBestCombo] = useState(0);
-  const [trainingFocus, setTrainingFocusState] = useState(null);
-  const [mission, setMission] = useState(null);
-  const [progress, setProgress] = useState({});
   const [dashboardReady, setDashboardReady] = useState(false);
-  const countdown = useMidnightCountdown();
 
   useEffect(() => {
     async function loadDashboard() {
       try {
-        const [today, playerLevel, playerStreak, sessions, drills, allProgress, history] = await Promise.all([
-          getDailyChallenge(), getPlayerLevel(), getStreak(), getTotalSessions(), getDrillsPlayed(), getAllDrillProgress(),
-          Storage.getJSON('sd_history', {}),
-        ]);
+        const today = await getDailyChallenge();
         setDaily(today);
-        setLevel(playerLevel);
-        setStreak(playerStreak);
-        setStats({ sessions, drills });
-        setProgress(allProgress);
-        const savedFocus = getTrainingFocus();
-        setTrainingFocusState(savedFocus);
-        if (savedFocus) setMission(getDailyMission(allProgress, savedFocus));
-        
-        // Calculate best combo from history
-        const maxCombo = Object.values(history || {}).reduce((max, list) => {
-          const listMax = list.reduce((m, item) => Math.max(m, item.combo || 0), 0);
-          return Math.max(max, listMax);
-        }, 0);
-        setBestCombo(maxCombo);
-
-        setRecent(
-          Object.entries(allProgress)
-            .map(([id, value]) => ({ id, ...value }))
-            .filter(item => item.lastPlayed)
-            .sort((a, b) => new Date(b.lastPlayed) - new Date(a.lastPlayed))
-            .slice(0, 4), // Spec asks for up to 4 in continue training
-        );
       } catch (error) {
         console.error('Unable to load home dashboard', error);
       } finally {
@@ -140,19 +101,11 @@ export default function HomePageClient() {
     };
   }, [db, user]);
 
-  const xpProgress = useMemo(() => {
-    const total = level.xpInLevel + level.xpToNext;
-    return total ? Math.round((level.xpInLevel / total) * 100) : 0;
-  }, [level]);
-
-  // Themes the Daily Challenge card off whichever category today's drill
-  // belongs to, so it reads as a premium category-branded card (matching
-  // the Cognitive hub's .cat-hero) instead of a fixed purple/pink gradient.
-  const dailyTheme = useMemo(() => {
-    if (!daily?.drill) return null;
-    return HOMEPAGE_CATEGORIES.find(c => c.slug === getDrillGroup(daily.drill)) || null;
-  }, [daily]);
-  const DailyIcon = dailyTheme?.icon || Sparkles;
+  // `allComplete` is `0 === 0` for an empty set, so it reads true if the day's
+  // picks ever fail to build. Only a set that actually has drills can be done.
+  const dailyTotal = daily?.total || 3;
+  const dailyDone = !!daily?.allComplete && (daily?.total || 0) > 0;
+  const dailyStarted = (daily?.completedCount || 0) > 0 && !dailyDone;
 
   async function joinArenaChallenge(challenge) {
     if (!user) {
@@ -168,15 +121,20 @@ export default function HomePageClient() {
     }
   }
 
-  function chooseTrainingFocus(id) {
-    const selectedFocus = setTrainingFocus(id);
-    if (!selectedFocus) return;
-    setTrainingFocusState(selectedFocus);
-    setMission(getDailyMission(progress, selectedFocus));
-  }
-
   const displayName = user?.displayName?.split(' ')[0] || 'Player';
-  const isNewUser = stats.drills === 0;
+
+  // Which category the home-screen drill rail is showing. Chip taps set this;
+  // nothing here navigates away.
+  const [activeCategory, setActiveCategory] = useState('all');
+
+  const railDrills = useMemo(() => {
+    const list = activeCategory === 'all'
+      ? DRILL_INDEX
+      : DRILL_INDEX.filter(d => getDrillGroup(d) === activeCategory);
+    return [...list].sort(byEngagement);
+  }, [activeCategory]);
+
+  const activeCategoryName = CATEGORY_TABS.find(c => c.slug === activeCategory)?.name || 'All';
 
   const getDrillCount = (groupSlug) => {
     return DRILL_INDEX.filter(d => getDrillGroup(d) === groupSlug).length;
@@ -204,167 +162,125 @@ export default function HomePageClient() {
             (mounted once in AppShellClient) so there's a single notification surface
             instead of a duplicate inline card competing with it here. */}
 
-        {/* 2. Daily Challenge — full width. Level/XP detail lives on /progress only. */}
-        <div className="daily-card mb-6" style={dailyTheme ? { '--a': dailyTheme.accent } : undefined}>
-          {dashboardReady ? (
-            <>
-              <div className="top">
-                <div className="ic">
-                  <DailyIcon className="w-5 h-5" />
-                </div>
-                <span className="k">
-                  <Sparkles className="w-3 h-3 animate-pulse" />
-                  {isNewUser ? 'Your First Daily Challenge' : 'Daily Challenge'}
-                </span>
-              </div>
-              <h2 className="t">{daily?.drill?.name || 'Daily Challenge'}</h2>
-              <p className="d">
-                {isNewUser
-                  ? 'Two minutes to your first score — every streak starts with drill one.'
-                  : 'Complete it today for double XP.'}
-              </p>
-              {daily?.completed ? (
-                <div className="mt-4 flex items-center justify-center gap-2 rounded-2xl bg-emerald-400/10 py-3 text-sm font-bold text-emerald-300">
-                  <CheckCircle2 className="h-4 w-4" /> Challenge complete
-                </div>
+        {/* 2. Daily Challenge — a compact entry banner, not a dashboard.
+             The three-drill breakdown, streak detail and everything else
+             now lives on /daily (see app/daily/DailyClient.js); this is
+             only the doorway to it, and the whole card is the link. Its
+             copy tracks the real daily state (not started / in progress /
+             done) but never lists the individual drills. */}
+        <Link href="/daily" className={`daily-banner group mb-6 ${dailyDone ? 'is-done' : ''}`}>
+          <svg className="daily-banner-bg" viewBox="0 0 170 80" preserveAspectRatio="xMaxYMid slice" aria-hidden="true">
+            {/* A rising ridgeline to a small planted flag — "finish the
+                day's set, move forward". Kept faint by the CSS. */}
+            <path d="M0 72 L38 56 L70 63 L104 32 L138 44 L170 30" fill="none" stroke="currentColor" strokeWidth="1.5" />
+            <path d="M104 32 L104 14 L120 19 L104 24 Z" fill="currentColor" />
+          </svg>
+
+          <span className="daily-banner-ic">
+            {dailyDone ? <CheckCircle2 className="h-5 w-5" /> : <Flag className="h-5 w-5" />}
+          </span>
+
+          <span className="daily-banner-body">
+            <span className="daily-banner-k">Daily Challenge</span>
+            <span className="daily-banner-title">
+              {!dashboardReady
+                ? `Today's ${dailyTotal} drills`
+                : dailyDone
+                  ? `${dailyTotal} / ${dailyTotal} complete`
+                  : dailyStarted
+                    ? `${daily.completedCount} / ${dailyTotal} complete`
+                    : `Complete today's ${dailyTotal} drills`}
+            </span>
+            <span className="daily-banner-sub">
+              {dashboardReady && dailyDone ? (
+                'Daily challenge complete ✓'
               ) : (
-                <Link
-                  href={daily?.drill?.path || '/drills'}
-                  className="go cursor-pointer"
-                >
-                  {isNewUser ? 'Start now' : 'Play daily challenge'}
-                  <ArrowRight className="h-4 w-4" />
-                </Link>
+                <>
+                  <b className="font-hud">2&times;</b> XP · {dashboardReady && dailyStarted ? 'Continue' : 'Keep your streak'}
+                </>
               )}
-            </>
-          ) : (
-            // Real progress hasn't loaded from device storage yet (an async
-            // native call on Android). Holding a neutral skeleton here — instead
-            // of the isNewUser/"Loading Daily..." defaults — avoids painting
-            // content that's about to be replaced a few ms later.
-            <div className="animate-pulse">
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-xl bg-white/10" />
-                <div className="h-3 w-28 rounded-full bg-white/10" />
-              </div>
-              <div className="mt-3 h-6 w-40 rounded-md bg-white/10" />
-              <div className="mt-2 h-3.5 w-52 rounded-md bg-white/10" />
-              <div className="mt-4 h-11 w-44 rounded-[11px] bg-white/10" />
-            </div>
-          )}
-        </div>
+            </span>
+          </span>
 
-        {/* 3. Daily mission row (if configured) */}
-        {trainingFocus && mission && (
-          <section className="mb-8 rounded-3xl border border-violet-300/20 bg-[#101526] p-5">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <span className="text-[10px] font-black uppercase tracking-[0.16em] text-violet-300">Today’s mission</span>
-                <h2 className="mt-1 text-lg font-black text-white">{mission.focus.label}</h2>
-              </div>
-              <button onClick={() => setTrainingFocusState(null)} className="text-xs font-bold text-slate-400 transition hover:text-white">Change</button>
-            </div>
-            <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/[.06]">
-              <div className="h-full rounded-full bg-gradient-to-r from-violet-400 to-cyan-300 transition-all" style={{ width: `${Math.round((mission.completeCount / mission.total) * 100)}%` }} />
-            </div>
-            <p className="mt-2 text-xs text-slate-400">{mission.completeCount} of {mission.total} focused drills complete today.</p>
-            <div className="mt-3 space-y-2">
-              {mission.drills.map((drill, index) => (
-                <Link key={drill.id} href={drill.path} className="flex items-center gap-3 rounded-2xl border border-white/[.06] bg-white/[.025] px-3 py-2.5 transition hover:bg-white/[.06]">
-                  <span className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-black ${drill.complete ? 'bg-emerald-400/15 text-emerald-300' : 'bg-violet-400/10 text-violet-300'}`}>
-                    {drill.complete ? <CheckCircle2 className="h-4 w-4" /> : index + 1}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-sm font-semibold text-white">{drill.name}</span>
-                  <ArrowRight className="h-4 w-4 text-slate-500" />
-                </Link>
-              ))}
-            </div>
-          </section>
-        )}
+          <ArrowRight className="daily-banner-arrow" />
+        </Link>
 
-        {/* 4. Category Grid */}
+        {/* 3. Category browser.
+             The chips filter the drill rail directly beneath them, in place —
+             no hop to the hub. "All" leads and covers the whole catalogue,
+             which is why the old "All Drills — browse all N" wayfinding link
+             that used to sit here is gone. */}
         <div className="section-label">Categories</div>
-        <div className="cat-grid m md:!grid-cols-3 mb-6">
-          {HOMEPAGE_CATEGORIES.map(cat => {
+        <div className="cat-rail home-scroll mb-3">
+          {CATEGORY_TABS.map(cat => {
             const Icon = cat.icon;
-            const count = getDrillCount(cat.slug);
+            const count = cat.slug === 'all' ? DRILL_INDEX.length : getDrillCount(cat.slug);
             return (
-              <Link
+              <button
                 key={cat.slug}
-                href={cat.href}
-                className="cat-tile"
+                type="button"
+                onClick={() => setActiveCategory(cat.slug)}
+                className={`cat-chip ${activeCategory === cat.slug ? 'active' : ''}`}
                 style={{ '--a': cat.accent }}
               >
-                <div className="ic">
-                  <Icon className="w-5 h-5" />
-                </div>
-                <div className="nm">{cat.name}</div>
-                <div className="cnt">{count} drills</div>
+                <span className="ic">
+                  <Icon className="w-4 h-4" />
+                </span>
+                <span className="nm">{cat.name}</span>
+                <span className="cnt">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* 5. Drill rail — the selected category's drills as picture cards,
+             the same "little video thumbnail" language as the /drills hub
+             (artwork + difficulty + duration + play). Roughly two per screen
+             so the row carries real weight, and it scrolls to the rest.
+             Keyed on the active category so switching chips remounts the row
+             and replays the slide-in (see .rail-swap in globals.css). */}
+        <div className="section-label">
+          {activeCategory === 'all' ? 'All drills' : `${activeCategoryName} drills`}
+        </div>
+        <div key={activeCategory} className="drill-rail home-scroll rail-swap mb-6">
+          {railDrills.map(drill => {
+            const group = getDrillGroup(drill);
+            const DrillIcon = getGroupIcon(group);
+            const accent = HOMEPAGE_CATEGORIES.find(c => c.slug === group)?.accent || 'var(--c-cognitive)';
+            const diffId = DIFFICULTY_CLASS[String(drill.difficulty || '').toLowerCase()] || 'elite';
+            const diffLabel = diffId.charAt(0).toUpperCase() + diffId.slice(1);
+            return (
+              <Link
+                key={drill.id}
+                href={drill.path || '/drills'}
+                className="drill-rail-card"
+                style={{ '--a': accent }}
+              >
+                <span className="thumb">
+                  <span className={`diff-pill ${diffId}`}>{diffLabel}</span>
+                  <img
+                    src={DRILL_ART.has(drill.id)
+                      ? `/drill-art/${drill.id}.webp`
+                      : `/previews/cards/${drill.id}.webp`}
+                    alt=""
+                    width={640}
+                    height={480}
+                    loading="lazy"
+                    decoding="async"
+                  />
+                  <span className="dur">{drill.duration || '45s'}</span>
+                  <span className="play"><Play className="h-3 w-3 fill-current" /></span>
+                </span>
+                <span className="body">
+                  <span className="ic"><DrillIcon className="h-3.5 w-3.5" /></span>
+                  <span className="nm">{drill.name}</span>
+                </span>
               </Link>
             );
           })}
         </div>
 
-        {/* 5. Quiet Wayfinding Link */}
-        <Link href="/drills" className="quiet-link mb-6">
-          <Target className="icon w-4 h-4" />
-          <span>All Drills — browse all <b className="tabular">{DRILL_INDEX.length}</b> across every category</span>
-          <ChevronRight className="chev icon w-4 h-4" />
-        </Link>
-
-        {/* 6. Continue Training / Onboarding Empty State */}
-        <div className="section-label">Continue training</div>
-        {!dashboardReady ? (
-          // Neutral placeholder cards — we don't yet know if this is the
-          // empty-state or the real list, so avoid flashing the wrong one.
-          <div className="cont-row home-scroll mb-8">
-            {[0, 1].map(i => (
-              <div key={i} className="cont-card animate-pulse" style={{ '--a': 'rgba(255,255,255,.15)' }}>
-                <div className="mb-2 h-[34px] w-[34px] rounded-md bg-white/10" />
-                <div className="h-3 w-20 rounded bg-white/10" />
-                <div className="mt-2.5 h-1 w-full rounded-full bg-white/10" />
-                <div className="mt-1.5 h-2.5 w-16 rounded bg-white/10" />
-              </div>
-            ))}
-          </div>
-        ) : isNewUser ? (
-          <div className="empty-block mb-8">
-            <div className="ic">
-              <Target className="icon w-5 h-5" />
-            </div>
-            <b>No drills played yet</b>
-            <span>Finish your first drill to start tracking progress here.</span>
-          </div>
-        ) : (
-          <div className="cont-row home-scroll mb-8">
-            {recent.map(item => {
-              const drill = DRILL_INDEX.find(d => d.id === item.id) || { name: prettyDrillName(item.id), path: '/drills' };
-              const theme = HOMEPAGE_CATEGORIES.find(c => c.slug === getDrillGroup(drill)) || { accent: 'var(--c-cognitive)' };
-              const DrillIcon = getGroupIcon(getDrillGroup(drill));
-              const attempts = item.attempts || 0;
-              const pct = Math.min(100, Math.round((attempts / 10) * 100));
-              return (
-                <Link
-                  key={item.id}
-                  href={drill.path || '/drills'}
-                  className="cont-card viewfinder-box"
-                  style={{ '--a': theme.accent }}
-                >
-                  <div className="viewfinder-corner tl" />
-                  <div className="viewfinder-corner tr" />
-                  <div className="lab-ic mb-2"><DrillIcon className="w-5 h-5" /></div>
-                  <b>{drill.name}</b>
-                  <div className="bar">
-                    <i style={{ width: `${pct}%` }} />
-                  </div>
-                  <div className="pct">{attempts} attempts · Best: {item.best?.toLocaleString() || 0}</div>
-                </Link>
-              );
-            })}
-          </div>
-        )}
-
-        {/* 7. Live Arena Matches — full-width flat cards (spans the same width as a
+        {/* 6. Live Arena Matches — full-width flat cards (spans the same width as a
              2-column category row), stacked when there's more than one challenge.
              Arena is off for now (see lib/featureFlags.js) — shows a Coming Soon
              card instead of the live-duel list/join flow. */}
@@ -380,7 +296,7 @@ export default function HomePageClient() {
                       <span className="inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.14em] text-fuchsia-200">
                         <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" /> Live duel
                       </span>
-                      <h3 className="mt-2 truncate text-base font-black text-white">{challenge.drillName || 'Arena Challenge'}</h3>
+                      <h3 className="mt-2 truncate font-display text-xl text-white">{challenge.drillName || 'Arena Challenge'}</h3>
                       <p className="mt-0.5 truncate text-xs text-slate-300">Posted by {challenge.fromName || 'a player'}</p>
                     </div>
                     <button

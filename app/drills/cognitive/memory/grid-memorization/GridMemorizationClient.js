@@ -5,30 +5,43 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { 
   Compass, Volume2, VolumeX, Eye, Zap, Ban,
-  Share2, ArrowLeft, Heart
+  Share2, ArrowLeft
 } from 'lucide-react';
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade } from '../../../../../lib/scoringEngine';
+import { applyHit, applyMistake, scoringLives } from '../../../../../lib/drillRules';
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { lockPortrait, unlockOrientation } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
 import { getPlayerName } from '../../../../../lib/progressStore';
-import generateShareCard, { shareScoreCard } from '../../../../../components/ShareScoreCard';
+import { useShareCard } from '../../../../../components/ShareScoreCard';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
 import DrillWrapper from '../../../../../components/DrillWrapper';
-import { useDuelMatchStart } from '../../../../../lib/challengeEngine';
+import { useDuelMatchStart, duelSecondsRemaining } from '../../../../../lib/challengeEngine';
+import { APP_SHARE_URL } from '../../../../../lib/shareLinks';
 
 // ============================================================
 // TUNING CONSTANTS
 // ============================================================
 const TOTAL_TIME = 45.0;
-const MAX_LIVES = 5;
+
+// How a solo run is won and lost — the clock as the only fail state, what a hit
+// earns, what a mistake costs — is defined once in lib/drillRules.js and shared
+// by every drill. Read that file for the model and the reasoning.
+
 const BASE_GRID_SIZE = 5;
 const GRID_STEP_UP_THRESHOLD = 12;
 const EXPANDED_GRID_SIZE = 6;
 const MAX_LIT_CELLS = 20;
 const MIN_LIT_CELLS = 5;
-const MAX_LEVEL = 15;
+// The DISPLAYED level is the pattern size, which is capped by MAX_LIT_CELLS —
+// a grid only has so many cells, and a phone only has so much screen. That
+// ceiling is physical, so difficulty genuinely stops rising there.
+//
+// roundsRef is the level that does NOT stop: it counts boards cleared, and it
+// is what the decaying time-per-hit payout keys off. Without it a player who
+// could hold the biggest pattern would refill the clock forever at a difficulty
+// that had stopped increasing, and the run would never end.
 const STORAGE_KEY = 'skilldrills_grid_memorization_v1';
 
 function sizeForLitCells(litCells) {
@@ -48,7 +61,7 @@ class AudioSynthesizer {
     if (!this.ctx) {
       try {
         this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-      } catch (e) {}
+      } catch {}
     }
     if (this.ctx && this.ctx.state === 'suspended') {
       this.ctx.resume();
@@ -72,7 +85,7 @@ class AudioSynthesizer {
       gainNode.connect(this.ctx.destination);
       osc.start();
       osc.stop(this.ctx.currentTime + dur);
-    } catch (e) {}
+    } catch {}
   }
 
   // 1. Hit sound
@@ -81,8 +94,85 @@ class AudioSynthesizer {
   // 2. Countdown tick sound
   playCountdownTick() { this.tone(440, 0.09, 'sine', 0.12, 440); }
 
-  // 3. "GO" start sound
-  playGo() { this.tone(523.25, 0.18, 'triangle', 0.17, 784); }
+  // GO — a struck wooden bar. Warm rather than urgent: this is the last beat
+  // of 3-2-1, so it has to feel bigger than the 440Hz ticks without turning
+  // the start of a focus drill into an alarm.
+  //
+  // Earlier versions chased impact and got harshness instead — a bright A5
+  // mallet, a four-note arpeggio over a sub drop, a chord with a glide into
+  // it. Next to the ticks they all read as ARCADE.
+  //
+  // What works is a marimba tap. A 12ms noise burst bandpassed at 900Hz is
+  // the beater contacting wood — low and short enough that it never reads as
+  // a drum, but without it the tone has no onset and nothing feels struck.
+  // Behind it, three voices 5ms later: C5 as the bar, its octave for a little
+  // air, C4 underneath for warmth. Each is a pair of sines detuned four cents
+  // apart through a lowpass — the same construction as chimeVoice — which is
+  // why nothing here buzzes. C is a minor third above the 440Hz ticks, so it
+  // resolves upward and lands clearly without shouting. Decays over ~350ms.
+  //
+  // Scheduled on the AudioContext clock, not with setTimeout: the main thread
+  // is setting the round up at exactly this instant.
+  playGo() {
+    if (!this.enabled || !this.ctx) return;
+    try {
+      const ctx = this.ctx;
+      if (ctx.state === 'suspended') ctx.resume();
+      const t0 = ctx.currentTime;
+
+      // The beater. Linearly-decaying white noise through a bandpass — a
+      // wooden knock, not a snare.
+      const nLen = Math.max(1, Math.floor(ctx.sampleRate * 0.012));
+      const nBuf = ctx.createBuffer(1, nLen, ctx.sampleRate);
+      const nData = nBuf.getChannelData(0);
+      for (let i = 0; i < nLen; i++) {
+        nData[i] = (Math.random() * 2 - 1) * (1 - i / nLen);
+      }
+      const nSrc = ctx.createBufferSource();
+      nSrc.buffer = nBuf;
+      const nBand = ctx.createBiquadFilter();
+      nBand.type = 'bandpass';
+      nBand.frequency.setValueAtTime(900, t0);
+      nBand.Q.setValueAtTime(1.6, t0);
+      const nGain = ctx.createGain();
+      nGain.gain.setValueAtTime(0.042, t0);
+      nGain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.012);
+      nSrc.connect(nBand);
+      nBand.connect(nGain);
+      nGain.connect(ctx.destination);
+      nSrc.start(t0);
+      nSrc.stop(t0 + 0.012);
+
+      // The bar. 5ms behind the knock so the two read as one event.
+      [
+        // freq    at     dur   vol    cut   attack
+        [523.25,  0.005, 0.35, 0.120, 2000, 0.008], // body — C5
+        [1046.50, 0.005, 0.13, 0.034, 3200, 0.008], // octave — air
+        [261.63,  0.005, 0.30, 0.040, 1200, 0.012]  // foundation — C4
+      ].forEach(([freq, at, dur, vol, cut, attack]) => {
+        const startAt = t0 + at;
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(cut, startAt);
+        filter.Q.setValueAtTime(0.5, startAt);
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.0001, startAt);
+        gain.gain.linearRampToValueAtTime(vol, startAt + attack);
+        gain.gain.exponentialRampToValueAtTime(0.001, startAt + dur);
+        filter.connect(gain);
+        gain.connect(ctx.destination);
+        [-4, 4].forEach((cents) => {
+          const osc = ctx.createOscillator();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, startAt);
+          osc.detune.setValueAtTime(cents, startAt);
+          osc.connect(filter);
+          osc.start(startAt);
+          osc.stop(startAt + dur);
+        });
+      });
+    } catch {}
+  }
 
   // 4. Penalty / Miss sound
   playPenalty() {
@@ -106,7 +196,7 @@ class AudioSynthesizer {
         osc.start(t0 + delay);
         osc.stop(t0 + delay + 0.08);
       });
-    } catch (e) {}
+    } catch {}
   }
   playMiss() { this.playPenalty(); }
   playWrongBoom() { this.playPenalty(); }
@@ -130,7 +220,7 @@ class AudioSynthesizer {
         osc.start(t0 + offset);
         osc.stop(t0 + offset + 0.15);
       });
-    } catch (e) {}
+    } catch {}
   }
 
   chimeVoice(freq, startAt, dur, vol, filterFreq = 2600) {
@@ -168,7 +258,7 @@ class AudioSynthesizer {
         this.chimeVoice(freq, t0 + i * 0.08, 0.24, 0.13, 3200);
       });
       this.chimeVoice(1046.50, t0 + 0.26, 0.6, 0.16, 4200);
-    } catch (e) {}
+    } catch {}
   }
 
   setEnabled(status) {
@@ -193,7 +283,7 @@ const getSavedData = () => {
       bestLevel: 1,
       totalSessions: 0
     };
-  } catch (e) {
+  } catch {
     return { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0 };
   }
 };
@@ -201,7 +291,7 @@ const getSavedData = () => {
 const saveData = (data) => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch (e) {}
+  } catch {}
 };
 
 // ============================================================
@@ -220,14 +310,15 @@ export default function GridMemorizationClient() {
   // === Game State ===
   const [gameState, setGameState] = useState('start'); // 'start' | 'countdown' | 'playing' | 'ended'
   const [score, setScore] = useState(0);
-  const [combo, setCombo] = useState(0);
+  // The live "Lv." HUD badge was the only thing that ever READ this, so the
+  // React state went with it. The ramp itself runs off levelRef, which the
+  // game loop already uses; keeping a useState in step with it only bought a
+  // re-render of the whole drill on every level-up, mid-play, for nothing.
   const [bestScore, setBestScore] = useState(0);
   const [bestCombo, setBestCombo] = useState(0);
   const [bestLevel, setBestLevel] = useState(1);
 
   const [localTimeRemaining, setLocalTimeRemaining] = useState(totalTime);
-  const [accuracy, setAccuracy] = useState(100);
-  const [lives, setLives] = useState(MAX_LIVES);
   const [countdownVal, setCountdownVal] = useState(null);
   const [dangerLevel, setDangerLevel] = useState(0);
   const [wrongCellIndex, setWrongCellIndex] = useState(null);
@@ -252,7 +343,8 @@ export default function GridMemorizationClient() {
   const timeRef = useRef(totalTime);
   const streakRef = useRef(0);
   const bestStreakRef = useRef(0);
-  const livesRef = useRef(MAX_LIVES);
+  const roundsRef = useRef(1);
+  const runOverRef = useRef(false);
   const levelRef = useRef(1);
   const bestLevelRunRef = useRef(1);
 
@@ -303,7 +395,7 @@ export default function GridMemorizationClient() {
     const finalScore = scoreRef.current;
     const finalAccuracy = totalAttemptsRef.current > 0 
       ? Math.round((totalCorrectClicksRef.current / totalAttemptsRef.current) * 100)
-      : 100;
+      : 0;
 
     const bonuses = calcEndBonuses({
       rawScore: finalScore,
@@ -311,8 +403,7 @@ export default function GridMemorizationClient() {
       bestCombo: bestStreakRef.current,
       totalActions: totalCorrectClicksRef.current,
       mistakes: totalAttemptsRef.current - totalCorrectClicksRef.current,
-      livesRemaining: Math.max(0, livesRef.current),
-      maxLives: MAX_LIVES,
+      livesRemaining: scoringLives(0),
       category: 'cognitive',
     });
 
@@ -360,9 +451,13 @@ export default function GridMemorizationClient() {
       bestCombo: bestStreakRef.current,
       xpEarned: xpResult.xp,
       isNewBest: isNew,
+      prevBest: saved.bestScore,
     });
 
-    if (Capacitor.isNativePlatform()) StatusBar.show().catch(() => {});
+    // The status bar deliberately stays hidden here. Re-showing it resized the
+    // WebView at the exact moment the result screen mounted, so the results
+    // visibly jumped into place. It is restored on unmount instead (see the
+    // mount effect), alongside unlockOrientation().
   }, [clearTimers]);
 
   const generatePattern = useCallback((size, litCount) => {
@@ -421,7 +516,10 @@ export default function GridMemorizationClient() {
 
   const advanceRound = useCallback(() => {
     const nextLitCells = Math.min(MAX_LIT_CELLS, litCellsRef.current + 1);
-    levelRef.current = Math.min(MAX_LEVEL, nextLitCells - MIN_LIT_CELLS + 1);
+    // Counts boards cleared, so it keeps rising after the pattern size caps.
+    roundsRef.current += 1;
+    levelRef.current = nextLitCells - MIN_LIT_CELLS + 1;
+
     bestLevelRunRef.current = Math.max(bestLevelRunRef.current, levelRef.current);
     generateRound(sizeForLitCells(nextLitCells), nextLitCells);
   }, [generateRound]);
@@ -448,13 +546,14 @@ export default function GridMemorizationClient() {
         scoreRef.current = Math.max(0, scoreRef.current - 5);
         setScore(scoreRef.current);
       } else {
-        livesRef.current = Math.max(0, livesRef.current - 1);
-        setLives(livesRef.current);
+        const after = applyMistake({ timeRemaining: timeRef.current });
+        timeRef.current = after.timeRemaining;
+        runOverRef.current = after.runOver;
+        setLocalTimeRemaining(timeRef.current);
       }
 
       totalAttemptsRef.current += 1;
       streakRef.current = 0;
-      setCombo(0);
 
       setWrongCellIndex(index);
       triggerFlash('red');
@@ -462,7 +561,7 @@ export default function GridMemorizationClient() {
       setPhase("result");
       phaseRef.current = "result";
 
-      if ((!isChallenge && livesRef.current <= 0) || timeRef.current <= 0) {
+      if ((!isChallenge && runOverRef.current) || timeRef.current <= 0) {
         endGame();
       } else {
         setTimeout(() => {
@@ -496,8 +595,7 @@ export default function GridMemorizationClient() {
       reactionMs,
       timeRemaining: timeRef.current,
       totalGameTime: totalTime,
-      livesRemaining: livesRef.current,
-      maxLives: MAX_LIVES,
+      livesRemaining: scoringLives(0),
       level: litCellsRef.current,
       maxLevel: MAX_LIT_CELLS
     });
@@ -505,6 +603,12 @@ export default function GridMemorizationClient() {
     let pointsEarned = scoreResult.total;
 
     scoreRef.current += pointsEarned;
+    // Buy back a slice of the clock. Solo only - a duel's clock is the match's
+    // shared window and nothing local may move it. No state is set here; the
+    // existing tick redraws the seconds when the displayed number changes.
+    if (!isChallenge) {
+      timeRef.current = applyHit({ timeRemaining: timeRef.current, level: roundsRef.current });
+    }
     setScore(scoreRef.current);
 
     totalCorrectClicksRef.current += 1;
@@ -522,7 +626,6 @@ export default function GridMemorizationClient() {
       setScore(scoreRef.current);
       
       streakRef.current += 1;
-      setCombo(streakRef.current);
       if (streakRef.current > bestStreakRef.current) {
         bestStreakRef.current = streakRef.current;
         setBestCombo(streakRef.current);
@@ -540,7 +643,7 @@ export default function GridMemorizationClient() {
   const scheduleHeartbeat = useCallback(() => {
     if (isChallenge) return;
     if (!gameActiveRef.current) return;
-    const dangerFromLives = (MAX_LIVES - livesRef.current) / MAX_LIVES;
+    const dangerFromLives = 0;   // lives are gone; time is the only danger now
     const dangerFromTime = timeRef.current <= 10 ? (10 - timeRef.current) / 10 : 0;
     const danger = Math.max(dangerFromLives * 0.7, dangerFromTime);
     // Clamped: an unclamped tempo goes NEGATIVE once danger exceeds ~1.69 (which
@@ -582,12 +685,13 @@ export default function GridMemorizationClient() {
     audioSynth?.init(); 
     clearTimers();
 
-    const saved = getSavedData();
-    // Duels always start every player at the same, lowest difficulty — no
-    // personal-best seeding — so scores are pure skill (ARENA_INTEGRATION.md
-    // rule 5 / matchmaking fairness).
-    const startLevel = isChallenge ? 1 : Math.max(1, Math.min(MAX_LEVEL, Math.round((saved.bestLevel || 1) * 0.55)));
-    const startLitCells = MIN_LIT_CELLS + (startLevel - 1);
+    // Every run starts at the lowest difficulty. It used to start at 55% of the
+    // player's best level, so improving once permanently raised the speed every
+    // future run opened at - a silent spike with nothing on screen explaining it.
+    // That head-start only existed because a fixed 45s was too short to climb the
+    // ramp; the endurance clock replaces it.
+    const runStartLevel = 1;
+    const startLitCells = MIN_LIT_CELLS + (runStartLevel - 1);
 
     scoreRef.current = 0;
     setScore(0);
@@ -595,18 +699,17 @@ export default function GridMemorizationClient() {
     setLocalTimeRemaining(totalTime);
     streakRef.current = 0;
     bestStreakRef.current = 0;
-    setCombo(0);
-    livesRef.current = MAX_LIVES;
-    setLives(MAX_LIVES);
-    levelRef.current = startLevel;
-    bestLevelRunRef.current = startLevel;
+    roundsRef.current = 1;
+    runOverRef.current = false;
+    levelRef.current = runStartLevel;
+
+    bestLevelRunRef.current = runStartLevel;
     setDangerLevel(0);
     setWrongCellIndex(null);
     setFlashes([]);
 
     totalCorrectClicksRef.current = 0;
     totalAttemptsRef.current = 0;
-    setAccuracy(100);
 
     lockPortrait().catch(() => {});
     if (Capacitor.isNativePlatform()) {
@@ -617,10 +720,39 @@ export default function GridMemorizationClient() {
       let lastTick = Date.now();
 
       globalTimerIntervalRef.current = setInterval(() => {
+        // Duel: read the clock from the match's shared absolute end instant
+        // rather than accumulating it locally — see duelSecondsRemaining.
+        // The gameActive check is deliberately skipped in a duel: this
+        // drill pauses its clock between rounds, and each player's round
+        // boundaries fall at different moments, so a paused clock meant the
+        // two duelists' 30 seconds covered different amounts of real time.
+        // In a duel the match window is fixed and shared, and it keeps
+        // running through the round transitions.
+        if (duelDeadlineRef.current) {
+          const duelTime = duelSecondsRemaining(duelDeadlineRef.current);
+          timeRef.current = duelTime;
+          setLocalTimeRemaining((prev) => (Math.ceil(prev) === Math.ceil(duelTime) ? prev : duelTime));
+          // gameStateRef, not gameActiveRef: gameActiveRef also goes false
+          // during a normal round transition, and the match still has to end
+          // at the deadline if the clock runs out mid-transition. endGame
+          // clears this interval, so this only ever fires once.
+          if (duelTime <= 0 && gameStateRef.current !== 'ended') endGame();
+          return;
+        }
         if (!gameActiveRef.current) return;
         const now = Date.now();
         const deltaMs = now - lastTick;
         lastTick = now;
+
+        // The clock FREEZES while the pattern is being shown. During
+        // "memorize" the player is watching and physically cannot act, so
+        // draining then charges them for the drill's own animation. Survivable
+        // when lives were the main fail state; now that time is the ONLY
+        // resource it would decide runs. `lastTick` still advances above, so
+        // unfreezing doesn't dump the paused seconds in at once. Duels return
+        // earlier from their own branch and are unaffected — both players share
+        // one absolute deadline that nothing local may pause.
+        if (phaseRef.current === 'memorize') return;
 
         const nextTime = Math.max(0, timeRef.current - (deltaMs / 1000));
         timeRef.current = nextTime;
@@ -642,50 +774,32 @@ export default function GridMemorizationClient() {
     });
   }, [clearTimers, runCountdown, generateRound, endGame, scheduleHeartbeat, isChallenge, totalTime]);
 
-  const shareDrillLink = useCallback(async () => {
-    if (!endSummary) return;
-    const url = 'https://skilldrills.online/drills/cognitive/memory/grid-memorization';
-    try {
-      const grade = getGrade(endSummary.accuracy);
-      const canvas = generateShareCard({
-        score: endSummary.score,
-        bestScore,
-        accuracy: endSummary.accuracy,
-        bestCombo: endSummary.bestCombo,
-        rating: { letter: grade.grade, label: grade.label, emoji: grade.emoji },
-        newBest: endSummary.isNewBest,
-        drillName: 'Grid Memorization',
-        playerName: getPlayerName(),
-      });
-      await shareScoreCard(url, canvas);
-    } catch (e) {
-      const text = `Scored ${endSummary.score} on Grid Memorization (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — SkillDrills`;
-      if (typeof navigator !== 'undefined' && navigator.share) {
-        navigator.share({ title: 'Grid Memorization — SkillDrills', text, url }).catch(() => {});
-      } else if (typeof navigator !== 'undefined' && navigator.clipboard) {
-        navigator.clipboard.writeText(`${text} ${url}`);
-      }
-    }
-  }, [endSummary, bestScore]);
-
-  // Hide floating close/rotate controls during play
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      if (gameState === 'playing' || gameState === 'countdown') {
-        document.body.classList.add('hide-drill-controls');
-      } else {
-        document.body.classList.remove('hide-drill-controls');
-      }
-    }
-    return () => {
-      if (typeof window !== 'undefined') {
-        document.body.classList.remove('hide-drill-controls');
-      }
-    };
-  }, [gameState]);
+  // Score card. Drawn and encoded while the result screen sits idle,
+  // not on the tap - see useShareCard in components/ShareScoreCard.js.
+  const shareDrillLink = useShareCard(endSummary ? {
+    score: endSummary.score,
+    bestScore: endSummary.prevBest ?? bestScore,
+    accuracy: endSummary.accuracy,
+    bestCombo: endSummary.bestCombo,
+    rating: getGrade(endSummary.accuracy),
+    newBest: endSummary.isNewBest,
+    drillName: 'Grid Memorization',
+    playerName: getPlayerName(),
+  } : null, {
+    url: APP_SHARE_URL,
+    title: 'Grid Memorization — SkillDrills',
+    text: endSummary ? `Scored ${endSummary.score} on Grid Memorization (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — SkillDrills` : '',
+  });
 
   useEffect(() => {
     setIsClient(true);
+
+    // Take the status-bar area now, behind the 200ms loading screen, rather
+    // than when the player taps START. overlaysWebView:true makes the window
+    // layout size independent of whether the bar is showing, so this drill's
+    // StatusBar.hide() no longer resizes the WebView under the "3 · 2 · 1 · GO"
+    // overlay — which is what made the first digit shift into place.
+    if (Capacitor.isNativePlatform()) StatusBar.setOverlaysWebView({ overlay: true }).catch(() => {});
     mountedRef.current = true;
     
     const saved = getSavedData();
@@ -702,7 +816,10 @@ export default function GridMemorizationClient() {
       gameActiveRef.current = false;
       clearTimers();
       unlockOrientation();
-      if (Capacitor.isNativePlatform()) StatusBar.show().catch(() => {});
+      if (Capacitor.isNativePlatform()) {
+        StatusBar.setOverlaysWebView({ overlay: false }).catch(() => {});
+        StatusBar.show().catch(() => {});
+      }
     };
   }, [clearTimers]);
 
@@ -710,6 +827,13 @@ export default function GridMemorizationClient() {
   // instant via the shared matchStartAt timestamp (ARENA_INTEGRATION.md rule 2).
   const matchStartAt = useDuelMatchStart(challengeId);
   const duelAutoStartedRef = useRef(false);
+  // The duel's shared start instant, on this device's clock. Held in a ref so
+  // the match clock can read it without rebuilding its interval, and null
+  // outside a duel so solo play keeps its own local countdown.
+  const duelDeadlineRef = useRef(null);
+  useEffect(() => {
+    duelDeadlineRef.current = isChallenge ? matchStartAt : null;
+  }, [isChallenge, matchStartAt]);
   useEffect(() => {
     if (!isChallenge || !matchStartAt || gameState !== 'start' || duelAutoStartedRef.current) return;
     const delay = Math.max(0, matchStartAt - Date.now());
@@ -730,7 +854,6 @@ export default function GridMemorizationClient() {
     setGameState('start');
     gameStateRef.current = 'start';
     setScore(0);
-    setLives(MAX_LIVES);
     setEndSummary(null);
     setLocalTimeRemaining(totalTime);
   }, [challengeId, totalTime]);
@@ -817,13 +940,13 @@ export default function GridMemorizationClient() {
               <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(99,102,241,.35)]">
                 <Compass className="w-[22px] h-[22px] text-white" />
               </div>
-              <h1 className="text-[17px] font-bold tracking-tight text-white">Grid Memorization</h1>
-              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45-second run</p>
+              <h1 className="font-display text-[32px] sm:text-[38px] text-white">Grid Memorization</h1>
+              <p className="text-[9px] label-tiny text-slate-500 mt-1">Endurance run</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
                 <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Memorize the lit cells</>} />
                 <HowToRow icon={<Zap className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Grid grows every round</>} />
-                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Wrong taps cost a life · 5 lives</>} />
+                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Hits add time, misses cost it</>} />
               </div>
 
               <div className="grid grid-cols-3 gap-1.5 mt-3.5">
@@ -844,11 +967,11 @@ export default function GridMemorizationClient() {
 
         {/* ── COUNTDOWN SCREEN ── */}
         {gameState === 'countdown' && !isChallenge && (
-          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/55 backdrop-blur-[2px]">
+          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/55">
             <span className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">Get Ready</span>
             <div className="relative w-28 h-28 rounded-full border-[3px] border-indigo-500/20 flex items-center justify-center">
               <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-indigo-400 border-r-indigo-400 animate-spin" style={{ animationDuration: '0.7s' }} />
-              <span key={countdownVal} className="fx-pop-in text-5xl font-black bg-gradient-to-b from-white to-indigo-300 bg-clip-text text-transparent">
+              <span key={countdownVal} className="fx-pop-in text-5xl font-display bg-gradient-to-b from-white to-indigo-300 bg-clip-text text-transparent">
                 {countdownVal}
               </span>
             </div>
@@ -860,25 +983,15 @@ export default function GridMemorizationClient() {
         {gameState === 'playing' && (
           <>
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
-              <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
-              <div className="flex items-center gap-2 mt-1.5">
-                {/* No level badge in duels — see the note in ConcentrationGrid. */}
-                {!isChallenge && (
-                  <span className="flex items-center gap-0.5">
-                    {Array.from({ length: MAX_LIVES }).map((_, i) => (
-                      <Heart key={i} className={`w-3 h-3 ${i < lives ? 'fill-red-500 text-red-500' : 'text-white/15'}`} />
-                    ))}
-                  </span>
-                )}
-              </div>
+              <span className="text-2xl font-hud font-bold text-white leading-none tabular-nums">{score}</span>
             </div>
 
             {/* Timer overlay at top-right */}
             <div className="absolute top-5 right-5 z-40 flex flex-col items-end pointer-events-none select-none">
-              <span className={`text-3xl font-black font-mono leading-none tabular-nums ${localTimeRemaining <= 10 ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}>
+              <span className={`text-3xl font-hud font-bold leading-none tabular-nums ${localTimeRemaining <= 10 ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}>
                 {Math.ceil(localTimeRemaining)}s
               </span>
-              <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest mt-1">Time Left</span>
+              <span className="text-[8px] label-tiny text-slate-500 mt-1">Time Left</span>
             </div>
 
             {/* GAMEPLAY CANVAS */}
@@ -909,14 +1022,20 @@ export default function GridMemorizationClient() {
                 }}
               >
                 {cellStates.map((isLit, i) => {
-                  let cellStyle = "bg-neutral-900/60 border border-white/[0.03]";
+                  // Idle cells were bg-neutral-900/60 over a #050508 page with a
+                  // white/[0.03] edge — about #101010 on #050508, so the board read as a
+                  // black void and the player could not see where the cells were until one
+                  // lit up. These are opaque and carry a visibly lighter edge, so the grid
+                  // is legible before anything flashes, while still sitting far enough
+                  // below the indigo/green/red flash colours that a lit cell is unmistakable.
+                  let cellStyle = "bg-[#161d2c] border border-[#2f3b52]";
                   
                   if (phase === "memorize") {
                     if (isLit) cellStyle = "bg-indigo-500 shadow-[0_0_12px_rgba(99,102,241,0.5)] border-indigo-400 scale-[0.98]";
                   } 
                   else if (phase === "recall") {
                     if (userSelections.has(i)) cellStyle = "bg-cyan-500 shadow-[0_0_12px_rgba(6,182,212,0.5)] border-cyan-400 scale-[0.96]";
-                    else cellStyle = "bg-neutral-900/80 border border-white/[0.04] active:scale-95 active:bg-neutral-800 transition-all pointer-events-auto cursor-pointer";
+                    else cellStyle = "bg-[#1c2537] border border-[#3d4c66] active:scale-95 active:bg-[#2a3650] transition-all pointer-events-auto cursor-pointer";
                   } 
                   else if (phase === "result") {
                     if (isLit) cellStyle = "bg-green-500 shadow-[0_0_12px_rgba(34,197,94,0.5)] border-green-400 scale-[0.98]";
@@ -941,7 +1060,7 @@ export default function GridMemorizationClient() {
 
         {/* ── RESULT SCREEN ── */}
         {gameState === 'ended' && endSummary && !isChallenge && (
-          <ResultScreen summary={endSummary} onPlayAgain={startGame} onShare={shareDrillLink} />
+          <ResultScreen summary={endSummary} bestScore={bestScore} onPlayAgain={startGame} onShare={shareDrillLink} />
         )}
       </div>
     </DrillWrapper>
@@ -962,13 +1081,13 @@ function HowToRow({ icon, node }) {
 function MiniStat({ label, value, color }) {
   return (
     <div className="rounded-[9px] border border-white/5 bg-white/[0.02] py-1.5 px-1 text-center">
-      <div className={`text-[12px] font-bold ${color}`}>{value}</div>
-      <div className="text-[7.5px] uppercase tracking-wide text-slate-500 font-bold mt-0.5">{label}</div>
+      <div className={`text-[12px] font-hud font-bold ${color}`}>{value}</div>
+      <div className="text-[7.5px] label-tiny text-slate-500 mt-0.5">{label}</div>
     </div>
   );
 }
 
-function ResultScreen({ summary, onPlayAgain, onShare }) {
+function ResultScreen({ summary, bestScore, onPlayAgain, onShare }) {
   const grade = getGrade(summary.accuracy);
   const gradeColor = grade.grade === 'S+' || grade.grade === 'S' ? '#fbbf24' : '#a78bfa';
 
@@ -976,28 +1095,28 @@ function ResultScreen({ summary, onPlayAgain, onShare }) {
     <div className="absolute inset-0 z-40 flex" style={{ background: 'rgba(5,5,8,0.97)' }}>
       <div className="w-[36%] flex flex-col items-center justify-center gap-1.5 border-r border-white/5" style={{ background: 'radial-gradient(ellipse 260px 200px at 50% 30%, rgba(250,204,21,.08), transparent 70%)' }}>
         {summary.isNewBest && (
-          <span className="text-[9.5px] font-bold text-yellow-400 bg-yellow-500/10 border border-yellow-500/25 px-2.5 py-0.5 rounded-full mb-1">NEW BEST</span>
+          <span className="text-[11px] font-display text-yellow-400 bg-yellow-500/10 border border-yellow-500/25 px-2.5 py-1 rounded-full mb-1">NEW BEST</span>
         )}
-        <div className="text-5xl sm:text-6xl font-black leading-none" style={{ color: gradeColor }}>{grade.grade}</div>
-        <div className="text-[10px] uppercase tracking-widest text-slate-500">{grade.label}</div>
-        <div className="text-3xl sm:text-4xl font-black text-white mt-1 tabular-nums">{summary.score.toLocaleString()}</div>
-        <div className="text-[9px] uppercase tracking-widest text-slate-500">Points</div>
+        <div className="text-5xl sm:text-6xl font-display leading-none" style={{ color: gradeColor }}>{grade.grade}</div>
+        <div className="text-[10px] label-tiny text-slate-500">{grade.label}</div>
+        <div className="text-3xl sm:text-4xl font-display text-white mt-1 tabular-nums">{summary.score.toLocaleString()}</div>
+        <div className="text-[9px] label-tiny text-slate-500">Points</div>
       </div>
 
       <div className="flex-1 flex flex-col justify-center gap-3 px-6 sm:px-8 py-4 min-w-0">
         <div className="grid grid-cols-3 gap-2">
+          <ResultStat label="Best Score" value={(bestScore ?? 0).toLocaleString()} color="text-yellow-400" />
           <ResultStat label="Accuracy" value={`${summary.accuracy}%`} color="text-blue-400" />
-          <ResultStat label="Combo" value={`${summary.bestCombo}x`} color="text-orange-400" />
           <ResultStat label="XP" value={`+${summary.xpEarned}`} color="text-violet-400" />
         </div>
         <div className="flex gap-2">
-          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold text-xs uppercase tracking-wide cursor-pointer">
+          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-extrabold text-xs uppercase tracking-wider cursor-pointer">
             Play Again
           </button>
-          <button onClick={onShare} className="w-11 flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer">
+          <button onClick={onShare} className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer">
             <Share2 className="w-4 h-4" />
           </button>
-          <Link href="/drills/cognitive" className="w-11 flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white">
+          <Link href="/drills/cognitive" className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white">
             <ArrowLeft className="w-4 h-4 text-slate-400" />
           </Link>
         </div>
@@ -1009,8 +1128,8 @@ function ResultScreen({ summary, onPlayAgain, onShare }) {
 function ResultStat({ label, value, color }) {
   return (
     <div className="rounded-[11px] border border-white/5 bg-white/[0.03] py-2 px-1 text-center">
-      <div className={`text-sm font-black ${color} tabular-nums`}>{value}</div>
-      <div className="text-[7.5px] uppercase tracking-wide text-slate-500 font-bold mt-0.5">{label}</div>
+      <div className={`text-sm font-hud font-bold ${color} tabular-nums`}>{value}</div>
+      <div className="text-[7.5px] label-tiny text-slate-500 mt-0.5">{label}</div>
     </div>
   );
 }

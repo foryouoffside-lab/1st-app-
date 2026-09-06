@@ -9,14 +9,15 @@ import {
 } from 'lucide-react';
 import { calcEndBonuses, calcSessionXP, getGrade, getComboMultiplier } from '../../../../../lib/scoringEngine';
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
-import { lockLandscape, unlockOrientation, onOrientationSettled } from '../../../../../lib/orientation';
+import { afterViewportSettled, lockLandscape, unlockOrientation, onOrientationSettled } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
 import { getPlayerName } from '../../../../../lib/progressStore';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
-import generateShareCard, { shareScoreCard } from '../../../../../components/ShareScoreCard';
+import { useShareCard } from '../../../../../components/ShareScoreCard';
 import DrillWrapper from '../../../../../components/DrillWrapper';
-import { useDuelMatchStart } from '../../../../../lib/challengeEngine';
+import { useDuelMatchStart, duelSecondsRemaining } from '../../../../../lib/challengeEngine';
+import { APP_SHARE_URL } from '../../../../../lib/shareLinks';
 
 // ============================================================
 // TUNING
@@ -80,7 +81,7 @@ class AudioSynthesizer {
       gain.connect(this.ctx.destination);
       osc.start();
       osc.stop(this.ctx.currentTime + dur);
-    } catch (e) {}
+    } catch {}
   }
 
   // 1. Hit / Move sound
@@ -89,8 +90,85 @@ class AudioSynthesizer {
   // 2. Countdown tick sound
   playCountdownTick() { this.tone(440, 0.09, 'sine', 0.12, 440); }
 
-  // 3. "GO" start sound
-  playGo() { this.tone(523.25, 0.18, 'triangle', 0.17, 784); }
+  // GO — a struck wooden bar. Warm rather than urgent: this is the last beat
+  // of 3-2-1, so it has to feel bigger than the 440Hz ticks without turning
+  // the start of a focus drill into an alarm.
+  //
+  // Earlier versions chased impact and got harshness instead — a bright A5
+  // mallet, a four-note arpeggio over a sub drop, a chord with a glide into
+  // it. Next to the ticks they all read as ARCADE.
+  //
+  // What works is a marimba tap. A 12ms noise burst bandpassed at 900Hz is
+  // the beater contacting wood — low and short enough that it never reads as
+  // a drum, but without it the tone has no onset and nothing feels struck.
+  // Behind it, three voices 5ms later: C5 as the bar, its octave for a little
+  // air, C4 underneath for warmth. Each is a pair of sines detuned four cents
+  // apart through a lowpass — the same construction as chimeVoice — which is
+  // why nothing here buzzes. C is a minor third above the 440Hz ticks, so it
+  // resolves upward and lands clearly without shouting. Decays over ~350ms.
+  //
+  // Scheduled on the AudioContext clock, not with setTimeout: the main thread
+  // is setting the round up at exactly this instant.
+  playGo() {
+    if (!this.enabled || !this.ctx) return;
+    try {
+      const ctx = this.ctx;
+      if (ctx.state === 'suspended') ctx.resume();
+      const t0 = ctx.currentTime;
+
+      // The beater. Linearly-decaying white noise through a bandpass — a
+      // wooden knock, not a snare.
+      const nLen = Math.max(1, Math.floor(ctx.sampleRate * 0.012));
+      const nBuf = ctx.createBuffer(1, nLen, ctx.sampleRate);
+      const nData = nBuf.getChannelData(0);
+      for (let i = 0; i < nLen; i++) {
+        nData[i] = (Math.random() * 2 - 1) * (1 - i / nLen);
+      }
+      const nSrc = ctx.createBufferSource();
+      nSrc.buffer = nBuf;
+      const nBand = ctx.createBiquadFilter();
+      nBand.type = 'bandpass';
+      nBand.frequency.setValueAtTime(900, t0);
+      nBand.Q.setValueAtTime(1.6, t0);
+      const nGain = ctx.createGain();
+      nGain.gain.setValueAtTime(0.042, t0);
+      nGain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.012);
+      nSrc.connect(nBand);
+      nBand.connect(nGain);
+      nGain.connect(ctx.destination);
+      nSrc.start(t0);
+      nSrc.stop(t0 + 0.012);
+
+      // The bar. 5ms behind the knock so the two read as one event.
+      [
+        // freq    at     dur   vol    cut   attack
+        [523.25,  0.005, 0.35, 0.120, 2000, 0.008], // body — C5
+        [1046.50, 0.005, 0.13, 0.034, 3200, 0.008], // octave — air
+        [261.63,  0.005, 0.30, 0.040, 1200, 0.012]  // foundation — C4
+      ].forEach(([freq, at, dur, vol, cut, attack]) => {
+        const startAt = t0 + at;
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(cut, startAt);
+        filter.Q.setValueAtTime(0.5, startAt);
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.0001, startAt);
+        gain.gain.linearRampToValueAtTime(vol, startAt + attack);
+        gain.gain.exponentialRampToValueAtTime(0.001, startAt + dur);
+        filter.connect(gain);
+        gain.connect(ctx.destination);
+        [-4, 4].forEach((cents) => {
+          const osc = ctx.createOscillator();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, startAt);
+          osc.detune.setValueAtTime(cents, startAt);
+          osc.connect(filter);
+          osc.start(startAt);
+          osc.stop(startAt + dur);
+        });
+      });
+    } catch {}
+  }
 
   // 4. Penalty / Invalid move sound
   playPenalty() {
@@ -114,7 +192,7 @@ class AudioSynthesizer {
         osc.start(t0 + delay);
         osc.stop(t0 + delay + 0.08);
       });
-    } catch (e) {}
+    } catch {}
   }
   playMiss() { this.playPenalty(); }
 
@@ -137,7 +215,7 @@ class AudioSynthesizer {
         osc.start(t0 + offset);
         osc.stop(t0 + offset + 0.15);
       });
-    } catch (e) {}
+    } catch {}
   }
 
   chimeVoice(freq, startAt, dur, vol, filterFreq = 2600) {
@@ -175,7 +253,7 @@ class AudioSynthesizer {
         this.chimeVoice(freq, t0 + i * 0.08, 0.24, 0.13, 3200);
       });
       this.chimeVoice(1046.50, t0 + 0.26, 0.6, 0.16, 4200);
-    } catch (e) {}
+    } catch {}
   }
 
   setEnabled(status) { this.enabled = status; }
@@ -193,11 +271,11 @@ const getSavedData = () => {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0, totalOverdrives: 0, totalPerfectSolves: 0 };
     return { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0, totalOverdrives: 0, totalPerfectSolves: 0, ...JSON.parse(raw) };
-  } catch (e) {
+  } catch {
     return { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0, totalOverdrives: 0, totalPerfectSolves: 0 };
   }
 };
-const saveData = (data) => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch (e) {} };
+const saveData = (data) => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {} };
 
 // ============================================================
 // MAIN COMPONENT
@@ -213,6 +291,13 @@ export default function TowerOfHanoiClient() {
   const [soundEnabled, setSoundEnabled] = useState(true);
 
   const [phase, setPhase] = useState('start');
+  // True from the instant START is tapped until the drill actually leaves the
+  // start phase. Tapping START kicks off a fullscreen request, a status-bar
+  // change, an await on the native landscape lock and then a settle timeout —
+  // several hundred ms during which `phase` is still 'start', so the start
+  // card stayed mounted and the user watched it get rotated into landscape
+  // before the countdown replaced it. This unmounts it on the tap itself.
+  const [launching, setLaunching] = useState(false);
   const [countdownValue, setCountdownValue] = useState(3);
 
   const [bestScore, setBestScore] = useState(0);
@@ -220,7 +305,6 @@ export default function TowerOfHanoiClient() {
   const [bestLevel, setBestLevel] = useState(1);
 
   const [score, setScore] = useState(0);
-  const [combo, setCombo] = useState(0);
   const [level, setLevel] = useState(1);
   const [timeRemaining, setTimeRemaining] = useState(totalTime);
   const [dangerLevel, setDangerLevel] = useState(0);
@@ -232,7 +316,6 @@ export default function TowerOfHanoiClient() {
 
   const [flashes, setFlashes] = useState([]);
   const [bursts, setBursts] = useState([]);
-  const [shakeCls, setShakeCls] = useState('');
   const [endSummary, setEndSummary] = useState(null);
 
   const mountedRef = useRef(false);
@@ -259,7 +342,6 @@ export default function TowerOfHanoiClient() {
   const movesSumRef = useRef(0);
   const perfectSolvesRef = useRef(0);
 
-  const shakeToggleRef = useRef(0);
   const clickCooldownRef = useRef(false);
   const heartbeatTempoRef = useRef(1100);
 
@@ -277,7 +359,7 @@ export default function TowerOfHanoiClient() {
       setBestScore(saved.bestScore);
       setBestCombo(saved.bestCombo);
       setBestLevel(saved.bestLevel);
-    } catch (e) {}
+    } catch {}
     setTimeout(() => { if (mountedRef.current) setLoading(false); }, 200);
 
     return () => {
@@ -285,7 +367,7 @@ export default function TowerOfHanoiClient() {
       gameActiveRef.current = false;
       [overdriveTimeoutRef, countdownTimerRef, advanceTimerRef, heartbeatTimerRef].forEach((r) => { if (r.current) clearTimeout(r.current); });
       if (gameTimerRef.current) clearInterval(gameTimerRef.current);
-      try { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); } catch (e) {}
+      try { if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); } catch {}
       if (Capacitor.isNativePlatform()) {
         StatusBar.setOverlaysWebView({ overlay: false }).catch(() => {});
         StatusBar.show().catch(() => {});
@@ -300,10 +382,6 @@ export default function TowerOfHanoiClient() {
     setTimeout(() => { if (mountedRef.current) setFlashes((f) => f.filter((x) => x.id !== id)); }, 480);
   }, []);
 
-  const triggerShake = useCallback((intensity) => {
-    shakeToggleRef.current = shakeToggleRef.current === 0 ? 1 : 0;
-    setShakeCls(`fx-shake-${intensity}-${shakeToggleRef.current === 0 ? 'a' : 'b'}`);
-  }, []);
 
   const spawnBurst = useCallback((x, y, color) => {
     const id = Date.now() + Math.random();
@@ -361,7 +439,7 @@ export default function TowerOfHanoiClient() {
 
     const correct = correctActionsRef.current;
     const total = totalActionsRef.current;
-    const accuracy = total > 0 ? Math.round((correct / total) * 100) : 100;
+    const accuracy = total > 0 ? Math.round((correct / total) * 100) : 0;
 
     const bonuses = calcEndBonuses({
       rawScore: scoreRef.current,
@@ -411,6 +489,7 @@ export default function TowerOfHanoiClient() {
       bestCombo: bestComboRef.current,
       isNewBest,
       xpEarned: xpResult.xp,
+      prevBest: prevSaved.bestScore,
     });
     setPhase('ended');
   }, [triggerFlash]);
@@ -454,7 +533,6 @@ export default function TowerOfHanoiClient() {
     if (perfect) perfectSolvesRef.current += 1;
 
     setScore(scoreRef.current);
-    setCombo(comboRef.current);
 
     audioSynth?.playHit();
     triggerFlash(perfect ? 'gold' : 'cyan');
@@ -509,19 +587,17 @@ export default function TowerOfHanoiClient() {
       setScore(scoreRef.current);
     }
 
-    triggerShake('hard');
     triggerFlash('red');
     audioSynth?.playPenalty();
 
-    setCombo(0);
-  }, [triggerShake, triggerFlash, isChallenge]);
+  }, [triggerFlash, isChallenge]);
 
   const handleTowerClick = useCallback((towerIndex, e) => {
     if (e) {
       e.stopPropagation();
       e.preventDefault();
       if (e.target.setPointerCapture && e.pointerId != null) {
-        try { e.target.setPointerCapture(e.pointerId); } catch (err) {}
+        try { e.target.setPointerCapture(e.pointerId); } catch {}
       }
     }
     if (!gameActiveRef.current) return;
@@ -583,7 +659,14 @@ export default function TowerOfHanoiClient() {
 
     gameTimerRef.current = setInterval(() => {
       if (!gameActiveRef.current) { clearInterval(gameTimerRef.current); return; }
-      timeRemainingRef.current -= 0.2;
+      // Duel: read the clock from the match's shared absolute end instant
+      // rather than accumulating it locally — see duelSecondsRemaining. A
+      // tick that lands late (busy frame, GC pause, the OS throttling a
+      // backgrounded webview) has to cost this player frames, not extra
+      // seconds of play their opponent never got.
+      timeRemainingRef.current = duelDeadlineRef.current
+        ? duelSecondsRemaining(duelDeadlineRef.current)
+        : timeRemainingRef.current - 0.2;
       if (timeRemainingRef.current <= 0) {
         timeRemainingRef.current = 0;
         setTimeRemaining(0);
@@ -616,16 +699,20 @@ export default function TowerOfHanoiClient() {
   }, [beginPlaying, isChallenge]);
 
   const enterDrill = useCallback(async () => {
-    try { audioSynth?.init(); } catch (e) {}
+    // Unmount the start card on the tap itself, before the rotation begins.
+    setLaunching(true);
+    try { audioSynth?.init(); } catch {}
 
     gameActiveRef.current = false;
     [overdriveTimeoutRef, countdownTimerRef, advanceTimerRef, heartbeatTimerRef].forEach((r) => { if (r.current) { clearTimeout(r.current); r.current = null; } });
     if (gameTimerRef.current) { clearInterval(gameTimerRef.current); gameTimerRef.current = null; }
 
-    // Duels always start every player at the same, lowest difficulty — no
-    // personal-best seeding — so scores are pure skill (ARENA_INTEGRATION.md
-    // rule 5 / matchmaking fairness).
-    const startLevel = isChallenge ? MIN_LEVEL : Math.max(1, Math.min(MAX_LEVEL, Math.round((bestLevel || 1) * 0.55)));
+    // Every run starts at the lowest difficulty. It used to start at 55% of the
+    // player's best level, so improving once permanently raised the speed every
+    // future run opened at - a silent spike with nothing on screen explaining it.
+    // That head-start only existed because a fixed 45s was too short to climb the
+    // ramp; the endurance clock replaces it.
+    const startLevel = MIN_LEVEL;
 
     scoreRef.current = 0; comboRef.current = 0; bestComboRef.current = 0;
     levelRef.current = startLevel; bestLevelRunRef.current = startLevel; mistakesRef.current = 0; correctActionsRef.current = 0; totalActionsRef.current = 0;
@@ -633,30 +720,33 @@ export default function TowerOfHanoiClient() {
     timeRemainingRef.current = totalTime;
     sessionMovesRef.current = 0; parMovesSumRef.current = 0; movesSumRef.current = 0; perfectSolvesRef.current = 0;
 
-    setScore(0); setCombo(0); setLevel(startLevel); setTimeRemaining(totalTime);
+    setScore(0); setLevel(startLevel); setTimeRemaining(totalTime);
     setDangerLevel(0); setEndSummary(null); setFlashes([]); setBursts([]);
     setCountdownValue(3);
 
     initializeLevel(startLevel);
 
     if (!isChallenge && !document.fullscreenElement && containerRef.current) {
-      try { await containerRef.current.requestFullscreen(); } catch (e) {}
+      try { await containerRef.current.requestFullscreen(); } catch {}
     }
     if (Capacitor.isNativePlatform()) {
       StatusBar.setOverlaysWebView({ overlay: true }).catch(() => {});
       StatusBar.hide().catch(() => {});
     }
 
-    try { await lockLandscape(); } catch (e) {}
+    try { await lockLandscape(); } catch {}
 
-    setTimeout(() => {
+    // Wait for the viewport to actually stop moving before showing the countdown,
+    // instead of guessing with a fixed delay — see afterViewportSettled in
+    // lib/orientation.js. A blind timeout let the "3" mount mid-resize and jump.
+    afterViewportSettled(() => {
       if (!mountedRef.current) return;
       if (window.innerHeight > window.innerWidth) {
         setPhase('rotate-hint');
       } else {
         runCountdown(isChallenge ? 0 : 3);
       }
-    }, 350);
+    });
   }, [runCountdown, isChallenge, initializeLevel, bestLevel, totalTime]);
 
   useEffect(() => {
@@ -666,13 +756,28 @@ export default function TowerOfHanoiClient() {
         runCountdown(isChallenge ? 0 : 3);
       }
     };
-    return onOrientationSettled(onOrientationChange);
+    // Self-heal: if the device is ALREADY landscape, no further resize or
+    // orientationchange event will ever fire, so the listener below can never
+    // rescue this screen. That is reachable — the pre-countdown orientation check
+    // used to run on a blind timer and could read a mid-rotation viewport as
+    // portrait, leaving the drill parked on "Rotate your phone to play" with no
+    // way back. Re-check once against settled dimensions.
+    const cancelSettle = phase === 'rotate-hint' ? afterViewportSettled(onOrientationChange) : null;
+    const stopListening = onOrientationSettled(onOrientationChange);
+    return () => { if (cancelSettle) cancelSettle(); stopListening(); };
   }, [phase, runCountdown, isChallenge]);
 
   // Duel auto-start — both clients begin at the exact same wall-clock
   // instant via the shared matchStartAt timestamp (ARENA_INTEGRATION.md rule 2).
   const matchStartAt = useDuelMatchStart(challengeId);
   const duelAutoStartedRef = useRef(false);
+  // The duel's shared start instant, on this device's clock. Held in a ref so
+  // the match clock can read it without rebuilding its interval, and null
+  // outside a duel so solo play keeps its own local countdown.
+  const duelDeadlineRef = useRef(null);
+  useEffect(() => {
+    duelDeadlineRef.current = isChallenge ? matchStartAt : null;
+  }, [isChallenge, matchStartAt]);
   useEffect(() => {
     if (!isChallenge || !matchStartAt || phase !== 'start' || duelAutoStartedRef.current) return;
     const delay = Math.max(0, matchStartAt - Date.now());
@@ -713,37 +818,28 @@ export default function TowerOfHanoiClient() {
     prevChallengeIdRef.current = challengeId;
     duelAutoStartedRef.current = false;
     setPhase('start');
+    setLaunching(false);
     setScore(0);
     setEndSummary(null);
     setTimeRemaining(totalTime);
   }, [challengeId, totalTime]);
 
-  const shareResult = useCallback(async () => {
-    if (!endSummary) return;
-    const url = 'https://skilldrills.online/drills/cognitive/problem-solving/tower-of-hanoi';
-
-    try {
-      const grade = getGrade(endSummary.accuracy);
-      const canvas = generateShareCard({
-        score: endSummary.score,
-        bestScore,
-        accuracy: endSummary.accuracy,
-        bestCombo: endSummary.bestCombo,
-        rating: { letter: grade.grade, label: grade.label, emoji: grade.emoji },
-        newBest: endSummary.isNewBest,
-        drillName: 'Tower of Hanoi',
-        playerName: getPlayerName(),
-      });
-      await shareScoreCard(url, canvas);
-    } catch (e) {
-      const text = `Scored ${endSummary.score} pts on Tower of Hanoi (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — SkillDrills`;
-      if (typeof navigator !== 'undefined' && navigator.share) {
-        navigator.share({ title: 'Tower of Hanoi — SkillDrills', text, url }).catch(() => {});
-      } else if (typeof navigator !== 'undefined' && navigator.clipboard) {
-        navigator.clipboard.writeText(`${text} ${url}`);
-      }
-    }
-  }, [endSummary, bestScore]);
+  // Score card. Drawn and encoded while the result screen sits idle,
+  // not on the tap - see useShareCard in components/ShareScoreCard.js.
+  const shareResult = useShareCard(endSummary ? {
+    score: endSummary.score,
+    bestScore: endSummary.prevBest ?? bestScore,
+    accuracy: endSummary.accuracy,
+    bestCombo: endSummary.bestCombo,
+    rating: getGrade(endSummary.accuracy),
+    newBest: endSummary.isNewBest,
+    drillName: 'Tower of Hanoi',
+    playerName: getPlayerName(),
+  } : null, {
+    url: APP_SHARE_URL,
+    title: 'Tower of Hanoi — SkillDrills',
+    text: endSummary ? `Scored ${endSummary.score} pts on Tower of Hanoi (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — SkillDrills` : '',
+  });
 
   const getDiskWidth = useCallback((ds, md) => {
     const mw = 132, miw = 36;
@@ -778,7 +874,7 @@ export default function TowerOfHanoiClient() {
       <div
         ref={containerRef}
         onContextMenu={(e) => { if (gameActiveRef.current) e.preventDefault(); }}
-        className={`absolute inset-0 select-none overflow-hidden bg-[#050508] text-white ${shakeCls}`}
+        className={`absolute inset-0 select-none overflow-hidden bg-[#050508] text-white`}
         style={{ touchAction: gameActiveRef.current ? 'none' : 'auto', WebkitTapHighlightColor: 'transparent' }}
       >
         <div className="absolute inset-0 pointer-events-none" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
@@ -810,15 +906,15 @@ export default function TowerOfHanoiClient() {
         )}
 
         {/* ── START SCREEN ── */}
-        {phase === 'start' && !isChallenge && (
+        {phase === 'start' && !launching && !isChallenge && (
           <div className="relative h-full flex items-center justify-center p-5 overflow-y-auto z-40">
             <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(142,97,246,.16), transparent 70%)' }} />
             <div className="relative w-full max-w-[290px] rounded-[20px] border border-white/5 bg-[#0c0c16]/90 backdrop-blur-lg px-5 pt-5 pb-[18px] text-center shadow-[0_16px_40px_rgba(0,0,0,.5)] my-6">
               <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(139,92,246,.35)]">
                 <Compass className="w-[22px] h-[22px] text-white" />
               </div>
-              <h1 className="text-[17px] font-bold tracking-tight">Tower of Hanoi</h1>
-              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45s per level</p>
+              <h1 className="font-display text-[32px] sm:text-[38px]">Tower of Hanoi</h1>
+              <p className="text-[9px] label-tiny text-slate-500 mt-1">45s per level</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
                 <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Tap a peg to lift, tap to place</>} />
@@ -846,24 +942,24 @@ export default function TowerOfHanoiClient() {
         {showBoard && (
           <>
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
-              <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
+              <span className="text-2xl font-hud font-bold text-white leading-none tabular-nums">{score}</span>
               <div className="flex items-center gap-2 mt-1.5">
-                <span className="text-[10px] font-black text-violet-300 bg-violet-500/10 border border-violet-500/20 px-1.5 py-0.5 rounded font-mono">{diskCount} Disks</span>
+                <span className="text-[10px] font-black text-violet-300 bg-violet-500/10 border border-violet-500/20 px-1.5 py-0.5 rounded">{diskCount} Disks</span>
               </div>
             </div>
 
             {/* Timer — top-right corner */}
             <div className="absolute top-5 right-5 z-40 flex flex-col items-end pointer-events-none select-none">
-              <span className={`text-3xl font-black font-mono leading-none tabular-nums ${timeRemaining <= 10 ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}>
+              <span className={`text-3xl font-hud font-bold leading-none tabular-nums ${timeRemaining <= 10 ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}>
                 {Math.ceil(timeRemaining)}s
               </span>
-              <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest mt-1">Time Left</span>
+              <span className="text-[8px] label-tiny text-slate-500 mt-1">Time Left</span>
             </div>
 
             {/* Moves counter — top-center */}
             <div className="absolute top-5 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 bg-black/50 border border-white/10 rounded-full px-3.5 py-1.5 pointer-events-none">
               <Move className="w-3.5 h-3.5 text-violet-300" />
-              <span className="text-[11px] font-black font-mono text-slate-200">{moves}<span className="text-slate-500">/{parMoves} par</span></span>
+              <span className="text-[11px] font-black text-slate-200">{moves}<span className="text-slate-500">/{parMoves} par</span></span>
             </div>
 
             <div className="relative w-full h-full flex flex-col items-center justify-center px-4 pt-20 pb-16">
@@ -906,11 +1002,11 @@ export default function TowerOfHanoiClient() {
 
         {/* ── COUNTDOWN SCREEN ── */}
         {phase === 'countdown' && !isChallenge && (
-          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/60 backdrop-blur-[2px]">
+          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/60">
             <span className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-400">Get Ready</span>
             <div className="relative w-28 h-28 rounded-full border-[3px] border-violet-500/20 flex items-center justify-center">
               <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-violet-400 border-r-violet-400 animate-spin" style={{ animationDuration: '0.7s' }} />
-              <span key={countdownValue} className="fx-pop-in text-5xl font-black bg-gradient-to-b from-white to-violet-300 bg-clip-text text-transparent">
+              <span key={countdownValue} className="fx-pop-in text-5xl font-display bg-gradient-to-b from-white to-violet-300 bg-clip-text text-transparent">
                 {countdownValue}
               </span>
             </div>
@@ -920,7 +1016,7 @@ export default function TowerOfHanoiClient() {
 
         {/* ── RESULT SCREEN ── */}
         {phase === 'ended' && endSummary && !isChallenge && (
-          <ResultScreen summary={endSummary} onPlayAgain={enterDrill} onShare={shareResult} />
+          <ResultScreen summary={endSummary} bestScore={bestScore} onPlayAgain={enterDrill} onShare={shareResult} />
         )}
       </div>
     </DrillWrapper>
@@ -957,13 +1053,13 @@ function HowToRow({ icon, node }) {
 function MiniStat({ label, value, color }) {
   return (
     <div className="rounded-[9px] border border-white/5 bg-white/[0.02] py-1.5 px-1 text-center">
-      <div className={`text-[12px] font-bold ${color}`}>{value}</div>
-      <div className="text-[7.5px] uppercase tracking-wide text-slate-500 font-bold mt-0.5">{label}</div>
+      <div className={`text-[12px] font-hud font-bold ${color}`}>{value}</div>
+      <div className="text-[7.5px] label-tiny text-slate-500 mt-0.5">{label}</div>
     </div>
   );
 }
 
-function ResultScreen({ summary, onPlayAgain, onShare }) {
+function ResultScreen({ summary, bestScore, onPlayAgain, onShare }) {
   const grade = getGrade(summary.accuracy);
   const gradeColor = grade.grade === 'S+' || grade.grade === 'S' ? '#fbbf24' : '#a78bfa';
 
@@ -971,28 +1067,28 @@ function ResultScreen({ summary, onPlayAgain, onShare }) {
     <div className="absolute inset-0 z-40 flex" style={{ background: 'rgba(5,5,8,0.97)' }}>
       <div className="w-[36%] flex flex-col items-center justify-center gap-1.5 border-r border-white/5" style={{ background: 'radial-gradient(ellipse 260px 200px at 50% 30%, rgba(250,204,21,.08), transparent 70%)' }}>
         {summary.isNewBest && (
-          <span className="text-[9.5px] font-bold text-yellow-400 bg-yellow-500/10 border border-yellow-500/25 px-2.5 py-0.5 rounded-full mb-1">NEW BEST</span>
+          <span className="text-[11px] font-display text-yellow-400 bg-yellow-500/10 border border-yellow-500/25 px-2.5 py-1 rounded-full mb-1">NEW BEST</span>
         )}
-        <div className="text-5xl sm:text-6xl font-black leading-none" style={{ color: gradeColor }}>{grade.grade}</div>
-        <div className="text-[10px] uppercase tracking-widest text-slate-500">{grade.label}</div>
-        <div className="text-3xl sm:text-4xl font-black text-white mt-1 tabular-nums">{summary.score.toLocaleString()}</div>
-        <div className="text-[9px] uppercase tracking-widest text-slate-500">Points</div>
+        <div className="text-5xl sm:text-6xl font-display leading-none" style={{ color: gradeColor }}>{grade.grade}</div>
+        <div className="text-[10px] label-tiny text-slate-500">{grade.label}</div>
+        <div className="text-3xl sm:text-4xl font-display text-white mt-1 tabular-nums">{summary.score.toLocaleString()}</div>
+        <div className="text-[9px] label-tiny text-slate-500">Points</div>
       </div>
 
       <div className="flex-1 flex flex-col justify-center gap-3 px-6 sm:px-8 py-4 min-w-0">
         <div className="grid grid-cols-3 gap-2">
+          <ResultStat label="Best Score" value={(bestScore ?? 0).toLocaleString()} color="text-yellow-400" />
           <ResultStat label="Accuracy" value={`${summary.accuracy}%`} color="text-blue-400" />
-          <ResultStat label="Combo" value={`${summary.bestCombo}x`} color="text-orange-400" />
           <ResultStat label="XP" value={`+${summary.xpEarned}`} color="text-violet-400" />
         </div>
         <div className="flex gap-2">
-          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-bold text-xs uppercase tracking-wide cursor-pointer">
+          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-extrabold text-xs uppercase tracking-wider cursor-pointer">
             Play Again
           </button>
-          <button onClick={onShare} className="w-11 flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer">
+          <button onClick={onShare} className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer">
             <Share2 className="w-4 h-4" />
           </button>
-          <Link href="/drills/cognitive" className="w-11 flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white">
+          <Link href="/drills/cognitive" className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white">
             <ArrowLeft className="w-4 h-4 text-slate-400" />
           </Link>
         </div>
@@ -1004,8 +1100,8 @@ function ResultScreen({ summary, onPlayAgain, onShare }) {
 function ResultStat({ label, value, color }) {
   return (
     <div className="rounded-[11px] border border-white/5 bg-white/[0.03] py-2 px-1 text-center">
-      <div className={`text-sm font-black ${color} tabular-nums`}>{value}</div>
-      <div className="text-[7.5px] uppercase tracking-wide text-slate-500 font-bold mt-0.5">{label}</div>
+      <div className={`text-sm font-hud font-bold ${color} tabular-nums`}>{value}</div>
+      <div className="text-[7.5px] label-tiny text-slate-500 mt-0.5">{label}</div>
     </div>
   );
 }

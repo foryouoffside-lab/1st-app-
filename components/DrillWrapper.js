@@ -9,49 +9,52 @@ import Link from 'next/link';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '../contexts/AuthContext';
 import { useChallenge } from '../contexts/ChallengeContext';
-import { sendChallenge, sendGlobalChallenge, acceptChallenge, declineChallenge, submitScore, resolveAbandonedMatch, forfeitMatch, getServerClockOffset, DUEL_DRILLS, tierForEiq } from '../lib/challengeEngine';
+import { sendChallenge, sendGlobalChallenge, acceptChallenge, declineChallenge, withdrawChallenge, submitScore, resolveAbandonedMatch, forfeitMatch, getServerClockOffset, ensureMatchStart, markMatchPlaying, isInviteFresh, markInMatch, clearInMatch, BUSY_TTL_MS, DUEL_DRILLS, DUEL_DURATION_MS, tierForEiq, FORFEIT_GRACE_COUNT } from '../lib/challengeEngine';
 import { ARENA_ENABLED } from '../lib/featureFlags';
-import { doc, onSnapshot, updateDoc, collection, query, where, limit, getDoc } from 'firebase/firestore';
+import { keepAwake, allowSleep } from '../lib/keepAwake';
+import { enterImmersive, exitImmersive } from '../lib/immersive';
+import { HUB_GROUP_KEY, groupFromPath } from '../lib/drillGroups';
+import { useOnlineStatus } from '../lib/useOnlineStatus';
+import DrillErrorBoundary from './DrillErrorBoundary';
+import { doc, onSnapshot, updateDoc, collection, query, where, limit, orderBy, getDoc } from 'firebase/firestore';
 import {
-  ArrowLeft,
-  Volume2,
-  VolumeX,
-  Swords,
-  CheckCircle2,
-  Play,
-  Clock,
-  Trophy,
-  Home,
-  Zap,
-  X,
-  Users,
+  ArrowLeft, Volume2, VolumeX, Swords, CheckCircle2, Trophy, Home, Zap, X,
   Repeat
 } from 'lucide-react';
 
-// How often a live duel pushes this player's running score to the challenge
-// doc (effect 5 below).
+// There is deliberately no mid-duel score sync any more. One used to live here
+// (at 800ms, then 5s) pushing this player's running score to the challenge doc,
+// and it was the single most expensive thing in the app — ~6 writes per player
+// per 30s match, each also delivered to the opponent as a read.
 //
-// This was 800ms, which made it by far the most expensive thing in the app:
-// ~37 writes per player over a 30s match, ~75 per match, each one also
-// delivered to the opponent as a read. That single number set the ceiling on
-// how many duels a day the whole app could support.
+// Nothing ever displayed the running value: the snapshot listener (effect 3)
+// swallows playing→playing updates, and the result screen uses the final
+// scores submitted separately by submitScore at match end. The only place it
+// surfaced was the history row of a match somebody walked out of — and both
+// walk-out paths (forfeitMatch / resolveAbandonedMatch) FORCE the winner
+// regardless of score, so that scoreline was decoration on an outcome it
+// doesn't decide. Those rows now read 0–0 and lead with "won/lost by forfeit",
+// which is the honest version anyway.
 //
-// It bought nothing at that rate. The mid-match score is NOT displayed
-// anywhere — the snapshot listener (effect 3) deliberately swallows
-// playing→playing updates, and the result screen uses the final scores
-// submitted separately by submitScore at match end. The only thing that ever
-// reads this running value is resolveAbandonedMatch, settling a match whose
-// opponent vanished; a few seconds of staleness there just means an abandoned
-// match's history row shows the score from moments before they left, which is
-// as truthful as the value it replaced.
-const SCORE_SYNC_INTERVAL_MS = 5000;
+// Removing it cuts roughly a third of what a duel costs to run. Don't add it
+// back to show a live opponent score without pricing that in first.
 
 // How long to wait for an opponent's final score before settling the match
 // without them (see effect 6b). Both duelists' clocks start at the same shared
 // matchStartAt and run a fixed 30s, so a connected opponent's submit lands
 // within a second or two — this window only has to absorb a slow network, not
 // a difference in how long each player actually played.
-const ABANDONED_MATCH_GRACE_MS = 20 * 1000;
+// 8s, not 20s. 20s was the whole of the "stuck on a loading spinner and only
+// got the result much later" complaint: if the opponent backgrounds the app
+// mid-duel, effect 6c never runs (the component doesn't unmount, and duels are
+// deliberately exempt from the visibilitychange exit), so THIS timer is the
+// only thing that settles the match — and the player who sat through the duel
+// then waited a further 20 seconds staring at "Waiting for opponent to
+// finish...". The window's own justification above is that it only has to
+// absorb a slow network, and a connected opponent's submit lands within a
+// second or two, so 8s is still ~4x the realistic worst case while cutting the
+// dead wait by more than half.
+const ABANDONED_MATCH_GRACE_MS = 8 * 1000;
 
 // How long to hold the "Connecting Players" lobby open waiting for the other
 // duelist to actually load the drill. Without a bound this screen waited
@@ -61,7 +64,30 @@ const LOBBY_WAIT_SECONDS = 30;
 
 // Lead time between "both players are ready" and the match actually starting —
 // the shared 3-2-1. Stamped in server time (see getServerClockOffset).
-const MATCH_COUNTDOWN_MS = 3000;
+//
+// 4s rather than 3s: this lead has to cover the round trip of the stamp
+// itself (writer -> server -> the OTHER player's snapshot listener) plus that
+// device finishing its landscape rotation, and only what's left over is the
+// visible countdown. On a slow mobile connection 3s could be entirely eaten
+// by the round trip, which meant the second player's drill began a beat late
+// — and in a fixed-length scored match, late is lost points.
+const MATCH_COUNTDOWN_MS = 4000;
+
+// The shared start instant and the 'playing' status are both stamped by the
+// host first, since somebody has to go first and doing it from both sides at
+// once is pure duplicated cost. But neither may DEPEND on the host: if that
+// one device's write doesn't land, both players are stranded. So the guest
+// stands by and does it instead after these delays, if it still hasn't
+// happened. Both writes are transactional no-ops when the host got there
+// first (see ensureMatchStart / markMatchPlaying), so the fallback can never
+// double-stamp or move a value that's already set.
+const MATCH_START_FALLBACK_MS = 1500;
+const MATCH_PLAYING_FALLBACK_MS = 1500;
+
+// How recent a player's presence heartbeat has to be for them to still count
+// as invitable in the duel drawer. Must match the Arena's own cutoff — see
+// PRESENCE_FRESH_MS in app/challenge/ChallengeArenaClient.js.
+const PRESENCE_FRESH_MS = 8 * 60 * 1000;
 
 // Duel-eligible drills read their own auto-start timing directly via
 // lib/challengeEngine.js's useDuelMatchStart(challengeId) hook (a direct
@@ -98,6 +124,33 @@ export default function DrillWrapper({
   const drillSlug = pathname.replace('/drills/', '');
   const isDuelEligibleDrill = DUEL_DRILLS.some((d) => d.slug === drillSlug);
 
+  // Category of the drill currently open, derived from its own path.
+  const drillGroup = groupFromPath(pathname);
+
+  // Tell the Cognitive hub which category to show when the player comes back.
+  //
+  // Every exit route from a drill — this header's back arrow, Android's back
+  // button, and each drill's result-screen exit link — goes to a bare
+  // /drills/cognitive with no ?group=, so the hub had nothing to go on. It
+  // used to fall back to "All Drills"; remembering the last BROWSED category
+  // fixed the common case but not this one, because the player can reach a
+  // drill without ever browsing its category (Home's "All Drills" list, the
+  // daily challenge, search). Then the stale value won and exiting Sudoku
+  // dropped them in Attention.
+  //
+  // Keying it off the drill's own path instead makes the answer correct no
+  // matter how the drill was reached.
+  useEffect(() => {
+    if (!drillGroup) return;
+    try { sessionStorage.setItem(HUB_GROUP_KEY, drillGroup); } catch {}
+  }, [drillGroup]);
+
+  // Belt and braces for the back arrow specifically: name the category in the
+  // URL too, so that path doesn't depend on storage being available at all.
+  const backHrefWithGroup = drillGroup && backHref === '/drills/cognitive'
+    ? `/drills/cognitive?group=${drillGroup}`
+    : backHref;
+
   const { user, db } = useAuth();
   const { outgoingChallenge, incomingChallenges } = useChallenge();
   
@@ -108,8 +161,19 @@ export default function DrillWrapper({
   const [opponentName, setOpponentName] = useState('Opponent');
   const [opponentPhoto, setOpponentPhoto] = useState('');
   const [challengeStatus, setChallengeStatus] = useState('lobby'); // lobby, countdown, playing, finished
+  // The visible countdown is always 3 -> 2 -> 1, even though the real lead is
+  // MATCH_COUNTDOWN_MS (4s, sized to cover the stamp's round trip). The extra
+  // second is absorbed by holding on 3, which is why the display is capped
+  // below rather than showing the raw remaining seconds.
   const [countdownNum, setCountdownNum] = useState(3);
   const [finalScoreSubmitted, setFinalScoreSubmitted] = useState(false);
+  // Every retry inside submitScore failed — the result never reached the
+  // server. Surfaced on the waiting screen with a manual retry.
+  const [submitFailed, setSubmitFailed] = useState(false);
+  // The Arena already refuses to START a search offline; this is the other
+  // half — knowing the connection dropped DURING a duel, so the failure card
+  // can say what actually happened instead of guessing.
+  const online = useOnlineStatus();
   // Seconds left for the opponent to load into the lobby before we give up on
   // them; null once the wait is over (see effect 2b).
   const [lobbySecondsLeft, setLobbySecondsLeft] = useState(LOBBY_WAIT_SECONDS);
@@ -128,9 +192,6 @@ export default function DrillWrapper({
   // show its own inline waiting/declined state.
   const [pendingRematch, setPendingRematch] = useState(null);
 
-  // Firestore update throttle control
-  const lastUploadedScoreRef = useRef(-1);
-  const lastUploadTimeRef = useRef(0);
   // Last seen challenge status — lets the snapshot handler swallow the
   // playing→playing opponent-score syncs (see the listener below).
   const lastChallengeStatusRef = useRef(null);
@@ -156,11 +217,10 @@ export default function DrillWrapper({
     setChallengeStatus('lobby');
     setCountdownNum(3);
     setFinalScoreSubmitted(false);
+    setSubmitFailed(false);
     setLobbySecondsLeft(LOBBY_WAIT_SECONDS);
     setPendingRematch(null);
     setSentChallengeId(null);
-    lastUploadedScoreRef.current = -1;
-    lastUploadTimeRef.current = 0;
     lastChallengeStatusRef.current = null;
   }, [challengeId]);
 
@@ -181,24 +241,59 @@ export default function DrillWrapper({
   useEffect(() => {
     if (!db || !user || !showInviteDrawer) return;
 
-    const q = query(
-      collection(db, 'users'),
-      where('online', '==', true),
-      limit(20)
-    );
+    // Ordered by lastSeen, same fix (and same fallback) as the Arena's own
+    // online list — see the long note on that effect in ChallengeArenaClient.
+    // Unordered, this pulled an arbitrary 20 out of a permanently-growing
+    // `online == true` set, then discarded the stale ones below, so the
+    // drawer could show nobody while players were genuinely online.
+    let cancelled = false;
+    let unsub = null;
+    let usedFallback = false;
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const handleSnapshot = (snapshot) => {
       const players = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        if (data.uid !== user.uid) {
-          players.push(data);
-        }
+      const cutoff = Date.now() - PRESENCE_FRESH_MS;
+      snapshot.forEach((docSnap) => {
+        // The document ID *is* the uid. Reading a `uid` FIELD instead (what
+        // this did) meant a profile doc written without one came through as
+        // undefined, failed this "not me" check, and listed the player as
+        // their own opponent — the same bug already fixed in the Arena's
+        // copy of this listener.
+        const data = { ...docSnap.data(), uid: docSnap.id };
+        if (data.uid === user.uid) return;
+        // `online: true` is cleared on visibilitychange/beforeunload, neither
+        // of which fires when Android kills a backgrounded app — so that flag
+        // alone lists players who left hours ago, and inviting one produces
+        // an invite that can only ever time out. Require a recent heartbeat
+        // too (written by the Arena screen; accounts with no lastSeen at all
+        // predate it and are trusted as-is).
+        const seen = data.lastSeen?.toMillis ? data.lastSeen.toMillis() : 0;
+        if (seen && seen < cutoff) return;
+        players.push(data);
       });
       setOnlinePlayers(players);
-    });
+    };
 
-    return () => unsubscribe();
+    const subscribe = (ordered) => {
+      const q = ordered
+        ? query(collection(db, 'users'), where('online', '==', true), orderBy('lastSeen', 'desc'), limit(20))
+        : query(collection(db, 'users'), where('online', '==', true), limit(20));
+      return onSnapshot(q, handleSnapshot, (error) => {
+        if (ordered && !usedFallback && !cancelled) {
+          usedFallback = true;
+          unsub = subscribe(false);
+          return;
+        }
+        console.error('Online players fetch failed:', error);
+      });
+    };
+
+    unsub = subscribe(true);
+
+    return () => {
+      cancelled = true;
+      if (unsub) unsub();
+    };
   }, [db, user, showInviteDrawer]);
 
   // 2. Check if challenge mode is active and set role
@@ -208,13 +303,13 @@ export default function DrillWrapper({
     setIsChallengeMode(true);
     const challengeRef = doc(db, 'challenges', challengeId);
 
-    // Sync state. During live play the ONLY thing changing on this doc is
-    // the opponent's score sync (~every 800ms), and nothing mid-match
-    // displays it anymore — so playing→playing updates are swallowed here
-    // instead of re-rendering the whole wrapper (and drill subtree) every
-    // sync for data nobody can see. Status transitions (accepted/playing/
-    // completed) always pass through, so the finished screen still gets
-    // the final scores/winner/EIQ fields.
+    // Sync state. Nothing writes to this doc during live play any more (the
+    // mid-duel score sync is gone — see the note by ABANDONED_MATCH_GRACE_MS),
+    // so playing→playing updates should never arrive. The guard stays as
+    // cheap insurance: it stops any stray same-status update re-rendering the
+    // whole wrapper (and the drill subtree) mid-duel. Status transitions
+    // (accepted/playing/completed) always pass through, so the finished
+    // screen still gets the final scores/winner/EIQ fields.
     const unsubscribe = onSnapshot(challengeRef, (docSnap) => {
       if (!docSnap.exists()) return;
       const data = docSnap.data();
@@ -242,25 +337,14 @@ export default function DrillWrapper({
       // Handle match readiness
       if (data.status === 'accepted') {
         if (data.fromReady && data.toReady) {
-          setChallengeStatus('countdown');
           // Both clients must count down to — and auto-start — the exact
           // same wall-clock instant. Each client's own onSnapshot listener
           // observes "both ready" at a slightly different real time (network
           // latency), so a local "start a 3-2-1 the moment I see this" timer
           // makes the two players' drills begin a beat or two apart. Instead
-          // the host stamps one shared target timestamp once; both clients
-          // then count down against that same value below.
-          if (host && !data.matchStartAt) {
-            // Stamped in SERVER time, not this device's time. Both clients
-            // convert it back through their own measured clock offset, so a
-            // phone whose clock is off by seconds no longer starts seconds
-            // early or late (see getServerClockOffset).
-            getServerClockOffset().then((offset) => {
-              updateDoc(challengeRef, {
-                matchStartAt: Date.now() + offset + MATCH_COUNTDOWN_MS,
-              }).catch(console.error);
-            });
-          }
+          // ONE shared target timestamp is stamped on the doc (effect 2c
+          // below) and both clients count down against that same value.
+          setChallengeStatus('countdown');
         } else {
           setChallengeStatus('lobby');
         }
@@ -314,6 +398,59 @@ export default function DrillWrapper({
     return () => unsubscribe();
   }, [challengeId, db, user]);
 
+  // 2b. Hold an "in a duel right now" claim on this player's profile for as
+  // long as they are inside this match, and release it on the way out.
+  //
+  // Without it a duelling player stayed in every other player's Arena
+  // opponent list: presence is a `lastSeen` stamp that keeps them listed for
+  // PRESENCE_FRESH_MS (8 minutes), while a whole duel — lobby, 30 seconds of
+  // play, result screen — fits inside that easily. So they were pickable, and
+  // an invite sent to them was one they could never answer, because the
+  // invite banner is deliberately unmounted on drill routes (AppShellClient)
+  // and so never rendered. The sender just watched the invite time out.
+  //
+  // Covers BOTH duellists, which is why it lives here rather than only in
+  // acceptChallenge: the player who SENT the invite never calls that — they
+  // are routed in by ChallengeStatusToast the moment it is accepted.
+  //
+  // The claim is a self-expiring stamp rather than a flag (see BUSY_TTL_MS),
+  // and is renewed at half its TTL so a duel that outlives it — a long
+  // sit on the result screen, a rematch — never quietly makes the player
+  // visible again mid-match. The cleanup clears it on any exit; if the app is
+  // killed outright and the cleanup never runs, the stamp expires on its own
+  // and the Arena's presence heartbeat clears it on the player's return.
+  useEffect(() => {
+    if (!ARENA_ENABLED || !isChallengeMode || !user?.uid) return;
+    const uid = user.uid;
+    markInMatch(uid);
+    const renew = setInterval(() => markInMatch(uid), BUSY_TTL_MS / 2);
+    return () => {
+      clearInterval(renew);
+      clearInMatch(uid);
+    };
+  }, [isChallengeMode, user?.uid]);
+
+  // 2c. Stamp the shared match-start instant once both players have readied
+  // up. Written in SERVER time (each client converts it back through its own
+  // measured clock offset), so a phone whose clock is off by seconds no
+  // longer starts seconds early or late — see getServerClockOffset.
+  //
+  // The host goes first; the guest re-attempts it shortly after if nothing
+  // has appeared, so one stalled connection can't strand both players in the
+  // lobby. ensureMatchStart is transactional and refuses to overwrite an
+  // existing value, so the two attempts can never disagree about when the
+  // match starts.
+  useEffect(() => {
+    if (!isChallengeMode || challengeStatus !== 'countdown') return;
+    if (challengeData?.matchStartAt) return;
+    if (!challengeId) return;
+
+    const t = setTimeout(() => {
+      ensureMatchStart(challengeId, MATCH_COUNTDOWN_MS).catch(console.error);
+    }, isHost ? 0 : MATCH_START_FALLBACK_MS);
+    return () => clearTimeout(t);
+  }, [isChallengeMode, challengeStatus, challengeData?.matchStartAt, isHost, challengeId]);
+
   // 2b. Bound the lobby wait. Counts down while we're sitting in the lobby and
   // stops at 0, which flips the lobby overlay to its "didn't join" state with a
   // real way out (see the lobby overlay below). Any progress past 'lobby'
@@ -366,11 +503,22 @@ export default function DrillWrapper({
       setPendingRematch(null);
       router.push(`/drills/${outgoingChallenge.drillSlug}?challengeId=${outgoingChallenge.id}`);
     } else if (outgoingChallenge.status === 'declined') {
+      // A cancellation this player made themselves also lands as 'declined'
+      // (see withdrawChallenge) — reporting that back as "declined by
+      // opponent" blamed the opponent for the player's own Cancel.
+      if (outgoingChallenge.withdrawnBySender) return;
       setMatchmakingMessage("Challenge declined by opponent.");
       setPendingRematch((prev) => (prev ? { ...prev, declined: true } : prev));
-      setTimeout(() => {
+      // Clear everything the decline put on screen, not just the invite id.
+      // This timer already existed but only reset sentChallengeId, so the
+      // "X declined the rematch" panel it raises on the result screen had
+      // nothing to take it away again and simply stayed there for good.
+      const t = setTimeout(() => {
         setSentChallengeId(null);
+        setPendingRematch(null);
+        setMatchmakingMessage('');
       }, 3000);
+      return () => clearTimeout(t);
     }
   }, [outgoingChallenge, sentChallengeId, router]);
 
@@ -390,90 +538,150 @@ export default function DrillWrapper({
     if (challengeStatus !== 'countdown' || !matchStartAt) return;
 
     let fired = false;
+    let fallbackTimer = null;
     const tick = () => {
       const remainingMs = matchStartAt - Date.now();
       if (remainingMs <= 0) {
         if (fired) return;
         fired = true;
         setCountdownNum(0);
-        // Set status to playing in Firestore (if host)
-        if (isHost && db && challengeId) {
-          updateDoc(doc(db, 'challenges', challengeId), {
-            status: 'playing'
-          }).catch(console.error);
+        // Move the match to 'playing'. The host writes it immediately; the
+        // guest re-attempts shortly after if it still hasn't landed. This
+        // status is what gates the live score sync AND the final-score
+        // submit below, so leaving it to the host alone meant a host whose
+        // write failed left the GUEST unable to report the result of a match
+        // they had just played in full. markMatchPlaying only ever moves
+        // 'accepted' → 'playing', so the second attempt is a harmless no-op.
+        if (!challengeId) return;
+        if (isHost) {
+          markMatchPlaying(challengeId).catch(console.error);
+        } else {
+          fallbackTimer = setTimeout(() => {
+            if (lastChallengeStatusRef.current !== 'playing' && lastChallengeStatusRef.current !== 'completed') {
+              markMatchPlaying(challengeId).catch(console.error);
+            }
+          }, MATCH_PLAYING_FALLBACK_MS);
         }
       } else {
-        setCountdownNum(Math.ceil(remainingMs / 1000));
+        // Monotonic on purpose: a countdown may only ever go DOWN. The inputs
+        // here settle at different times — matchStartAt arrives from Firestore
+        // and clockOffset from the server-time probe — so the first tick can
+        // legitimately compute a LARGER number than the tick before it, and
+        // the player watched "3" become "4" before counting down properly.
+        // Clamping to the minimum seen makes a late-arriving correction show
+        // up as the countdown holding on a number for an extra beat, which
+        // reads as normal, instead of running backwards.
+        // Capped at 3 so the 4s lead never renders as a "4", and clamped
+        // monotonic so a late-arriving matchStartAt/clockOffset correction
+        // can only ever hold the number still, never run it backwards.
+        //
+        // The lead is divided into three EQUAL beats rather than counted in
+        // whole seconds. Ticking per-second against a 4s lead spent the first
+        // two seconds on "3" (4000-3001ms ceilings to 4, capped to 3; then
+        // 3000-2001ms is 3 again) and only one second each on "2" and "1" —
+        // which reads on device as the countdown freezing on 3 before
+        // suddenly rushing. MATCH_COUNTDOWN_MS stays 4s because the sync
+        // round trip needs it; only the pacing of the digits changes.
+        const stepMs = MATCH_COUNTDOWN_MS / 3;
+        setCountdownNum((prev) => {
+          const next = Math.min(3, Math.ceil(remainingMs / stepMs));
+          return prev == null ? next : Math.min(prev, next);
+        });
       }
     };
 
     tick();
     const timer = setInterval(tick, 150);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+    };
   }, [challengeStatus, challengeData?.matchStartAt, clockOffset, isHost, db, challengeId]);
 
-  // 5. Real-time score sync during gameplay — at most one write per 800ms,
-  // but now with a TRAILING flush as well as the leading one.
+  // The shared start instant, expressed on THIS device's clock.
+  const matchStartLocal = challengeData?.matchStartAt != null
+    ? challengeData.matchStartAt - clockOffset
+    : null;
+
+  // Is the match actually under way? Normally that's just status 'playing',
+  // written at the start instant — but the drill itself doesn't wait for that
+  // write (it auto-starts off matchStartAt directly, see useDuelMatchStart),
+  // so between the start instant and the status write landing there's a
+  // window where the player is genuinely playing while this component still
+  // thinks the match hasn't begun. Everything gated on "the match is live"
+  // — above all the final-score submit — has to be true in that window too,
+  // or a whole match can be played and never reported.
+  const duelUnderway = challengeStatus === 'playing'
+    || (challengeStatus === 'countdown' && matchStartLocal != null && countdownNum === 0);
+
+  // 6. Final Score submit on game end.
   //
-  // It used to simply drop any score change that arrived inside the 800ms
-  // window, with nothing scheduled to retry it: this effect only re-runs when
-  // `score` changes again, so if a player scored and then stopped (or quit)
-  // shortly after a sync, the last value written to the doc stayed behind
-  // their real score indefinitely. That value is exactly what
-  // resolveAbandonedMatch settles a disconnected opponent's match with (see
-  // effect 6b), so it has to converge on the truth rather than whatever
-  // happened to land on a window boundary. Scheduling the tail write fixes
-  // that; if the score moves again first, the cleanup replaces the pending
-  // write with a newer one.
-  useEffect(() => {
-    if (!isChallengeMode || challengeStatus !== 'playing' || score === null || !db || !challengeId) return;
-    if (score === lastUploadedScoreRef.current) return;
-
-    const pushScore = () => {
-      // A completed match is final — never write a score into it. The effect
-      // cleanup below cancels the pending trailing write when challengeStatus
-      // changes, but that only fires once the snapshot carrying the new status
-      // arrives; the match can already be completed (by this client's own
-      // submitScore transaction, or by the opponent's) a network round trip
-      // before that. Writing in that window would overwrite a settled match's
-      // final score with a mid-game value — and firestore.rules now rejects it
-      // outright (challenges are immutable once completed), so without this
-      // guard it's also a guaranteed permission error in the console every
-      // time it happens. lastChallengeStatusRef is updated by the snapshot
-      // listener and covers both who-completed-it cases.
-      if (lastChallengeStatusRef.current === 'completed') return;
-      lastUploadedScoreRef.current = score;
-      lastUploadTimeRef.current = Date.now();
-      const updates = isHost ? { fromScore: score } : { toScore: score };
-      updateDoc(doc(db, 'challenges', challengeId), updates).catch(console.error);
-    };
-
-    const sinceLastUpload = Date.now() - lastUploadTimeRef.current;
-    if (sinceLastUpload >= SCORE_SYNC_INTERVAL_MS) {
-      pushScore();
-      return;
+  // `submitScore` retries internally, so a dropped request no longer costs
+  // the player the match. If every attempt still fails, `submitFailed` puts a
+  // real explanation on screen and offers a manual retry instead of leaving
+  // them on an eternal "waiting for opponent" spinner while the opponent's
+  // abandoned-match rescue quietly takes the win.
+  const submitFinalScore = async () => {
+    setFinalScoreSubmitted(true);
+    setSubmitFailed(false);
+    try {
+      await submitScore(challengeId, user.uid, score || 0);
+    } catch (err) {
+      console.error("Failed to submit final score:", err);
+      setSubmitFailed(true);
     }
+  };
+  const submitFinalScoreRef = useRef(submitFinalScore);
+  submitFinalScoreRef.current = submitFinalScore;
 
-    const t = setTimeout(pushScore, SCORE_SYNC_INTERVAL_MS - sinceLastUpload);
-    return () => clearTimeout(t);
-  }, [score, isChallengeMode, challengeStatus, db, challengeId, isHost]);
+  // 6-0. Resend the moment the connection comes back.
+  //
+  // The submit is a Firestore TRANSACTION, and unlike a plain write a
+  // transaction needs a server round-trip — so offline it fails fast rather
+  // than queueing. Three attempts over ~3.6s and the player is looking at a
+  // failure card with a Retry button that, while they are still offline, can
+  // only fail again. Firing on the offline->online edge means turning wifi
+  // back on resends by itself.
+  //
+  // Edge-triggered on purpose: keyed off the transition, not the state, so a
+  // write that keeps failing for some other reason (a rule saying no) cannot
+  // turn this into a retry loop.
+  const wasOfflineRef = useRef(false);
+  useEffect(() => {
+    if (!online) { wasOfflineRef.current = true; return; }
+    if (!wasOfflineRef.current) return;
+    wasOfflineRef.current = false;
+    if (submitFailed) submitFinalScoreRef.current();
+  }, [online, submitFailed]);
 
-  // 6. Final Score submit on game end
   useEffect(() => {
     const isTimedOut = timeLeft === 0;
-    if (!isChallengeMode || challengeStatus !== 'playing' || finalScoreSubmitted) return;
+    if (!isChallengeMode || !duelUnderway || finalScoreSubmitted) return;
     if (!isTimedOut && !isGameOver) return;
+    submitFinalScoreRef.current();
+  }, [timeLeft, isGameOver, isChallengeMode, duelUnderway, finalScoreSubmitted, challengeId, user, score]);
 
-    const submitFinal = async () => {
-      setFinalScoreSubmitted(true);
-      try {
-        await submitScore(challengeId, user.uid, score || 0);
-      } catch (err) {
-        console.error("Failed to submit final score:", err);
-      }
-    };
-    submitFinal();
-  }, [timeLeft, isGameOver, isChallengeMode, challengeStatus, finalScoreSubmitted, challengeId, user, score]);
+  // 6a. Match-end watchdog — the wrapper's own copy of the shared deadline.
+  //
+  // Normally the drill closes the match itself: its clock reaches zero and it
+  // reports `timeLeft === 0`, which effect 6 above turns into a submit. That
+  // clock now runs off the same shared end instant, so in the ordinary case
+  // this watchdog never fires. It exists for the case where the drill DOESN'T
+  // get there — a round transition that never completes, a stuck render, a
+  // paused loop — because a duel that never ends is the one failure the
+  // opponent cannot recover from except by sitting out the abandon timer and
+  // taking a win the match never actually decided.
+  //
+  // Deliberately a second past the true deadline, so the drill's own submit
+  // (carrying its final, fully-flushed score) wins the race whenever it's
+  // working normally.
+  useEffect(() => {
+    if (!isChallengeMode || !duelUnderway || finalScoreSubmitted) return;
+    if (matchStartLocal == null) return;
+    const msUntilClose = (matchStartLocal + DUEL_DURATION_MS + 1000) - Date.now();
+    const t = setTimeout(() => submitFinalScoreRef.current(), Math.max(0, msUntilClose));
+    return () => clearTimeout(t);
+  }, [isChallengeMode, duelUnderway, finalScoreSubmitted, matchStartLocal]);
 
   // 6b. Abandoned-opponent rescue. submitScore only completes a match once
   // BOTH players have reported, so an opponent who force-quits, backgrounds
@@ -487,11 +695,16 @@ export default function DrillWrapper({
   useEffect(() => {
     if (!isChallengeMode || challengeStatus !== 'playing' || !finalScoreSubmitted) return;
     if (!challengeId || !user) return;
+    // Our OWN score never reached the server, so there is nothing to settle
+    // in our favour — resolveAbandonedMatch would no-op anyway (it requires
+    // the caller's score to be present), and calling it here would only
+    // paper over the real problem with a second failed write.
+    if (submitFailed) return;
     const t = setTimeout(() => {
       resolveAbandonedMatch(challengeId, user.uid).catch(console.error);
     }, ABANDONED_MATCH_GRACE_MS);
     return () => clearTimeout(t);
-  }, [isChallengeMode, challengeStatus, finalScoreSubmitted, challengeId, user]);
+  }, [isChallengeMode, challengeStatus, finalScoreSubmitted, submitFailed, challengeId, user]);
 
   // 6c. Leaving a live duel forfeits it.
   //
@@ -509,7 +722,12 @@ export default function DrillWrapper({
   const forfeitStateRef = useRef({});
   forfeitStateRef.current = {
     isChallengeMode,
-    challengeStatus,
+    // `duelUnderway`, not the 'playing' status: walking out in the moment
+    // between the shared start instant and that status write landing is
+    // still walking out of a live match. forfeitMatch itself only acts on a
+    // doc that really is 'playing', so this can never forfeit a match that
+    // hasn't begun.
+    duelUnderway,
     finalScoreSubmitted,
     challengeId,
     uid: user?.uid,
@@ -525,11 +743,15 @@ export default function DrillWrapper({
       // and they ended up alone in a lobby for a duel the sender was no longer
       // expecting (which then read as the sender "exiting" a match they never
       // knowingly agreed to).
+      // withdrawChallenge, not declineChallenge: if the opponent accepted the
+      // rematch in the same instant we walked away, a blind "declined" write
+      // would tear down a match they were already being routed into. This
+      // only cancels an invite still sitting unanswered.
       if (s.pendingRematchId) {
-        declineChallenge(s.pendingRematchId).catch(console.error);
+        withdrawChallenge(s.pendingRematchId).catch(console.error);
       }
 
-      if (!s.isChallengeMode || s.challengeStatus !== 'playing') return;
+      if (!s.isChallengeMode || !s.duelUnderway) return;
       if (s.finalScoreSubmitted) return;
       if (!s.challengeId || !s.uid) return;
       forfeitMatch(s.challengeId, s.uid).catch(console.error);
@@ -560,18 +782,34 @@ export default function DrillWrapper({
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [isChallengeMode, backHref, router]);
 
-  // 7. Hide the global floating exit-X (AppShellClient's "hide-drill-controls"
-  // body class) once a duel is actually in progress, so a mistimed tap can't
-  // bail a player out of a live match.
+  // 6e. Hold the screen awake for as long as a drill route is open.
+  //
+  // Plenty of drills go tens of seconds with no touch at all - the player is
+  // tracking a ball, memorising a grid, waiting on a stimulus - so Android
+  // sees an idle screen, dims it, and then locks it in the middle of a run.
+  // FLAG_KEEP_SCREEN_ON (native) / the wake-lock sentinel (browser) is
+  // released the moment this wrapper unmounts, so it costs nothing once the
+  // player is back in the menus. See lib/keepAwake.js.
   useEffect(() => {
-    if (!isChallengeMode) return;
-    if (challengeStatus === 'playing') {
-      document.body.classList.add('hide-drill-controls');
-    } else {
-      document.body.classList.remove('hide-drill-controls');
-    }
-    return () => document.body.classList.remove('hide-drill-controls');
-  }, [isChallengeMode, challengeStatus]);
+    keepAwake();
+    return () => allowSleep();
+  }, []);
+
+  // 6f. Edge-to-edge full screen for the whole drill route.
+  //
+  // The drills hid the status bar individually but nothing ever hid the
+  // navigation bar, so every board was drawn into the screen minus the gesture
+  // pill, and two drills never went full screen at all. Doing it once here is
+  // what makes all 24 consistent.
+  //
+  // On mount rather than at START on purpose: hiding the bars changes the
+  // WebView's usable height, and that resize has to land while the start card
+  // is up, not under the 3-2-1 overlay (see the countdown-shake work in
+  // afterViewportSettled). The bars come back on unmount.
+  useEffect(() => {
+    enterImmersive();
+    return () => exitImmersive();
+  }, []);
 
   // This button only renders on drills in DUEL_DRILLS (see isDuelEligibleDrill
   // above), so it's always inviting to *this* specific drill — no ambiguity
@@ -611,7 +849,7 @@ export default function DrillWrapper({
   // treated as a rematch request.
   const opponentUid = challengeData ? (isHost ? challengeData.toUid : challengeData.fromUid) : null;
   const rematchInvite = (challengeStatus === 'finished' && opponentUid && opponentUid !== 'global')
-    ? (incomingChallenges || []).find((c) => c.fromUid === opponentUid) || null
+    ? (incomingChallenges || []).find((c) => c.fromUid === opponentUid && isInviteFresh(c)) || null
     : null;
 
   const acceptRematchInvite = async (invite) => {
@@ -620,7 +858,9 @@ export default function DrillWrapper({
       router.push(`/drills/${invite.drillSlug}?challengeId=${invite.id}`);
     } catch (err) {
       console.error("Failed to accept rematch invite:", err);
-      if (err?.code === 'arena/locked-out') alert(err.message);
+      if (err?.code === 'arena/locked-out' || err?.code === 'challenge/taken' || err?.code === 'challenge/expired') {
+        alert(err.message);
+      }
     }
   };
 
@@ -665,7 +905,7 @@ export default function DrillWrapper({
     setPendingRematch(null);
     setSentChallengeId(null);
     if (id) {
-      try { await declineChallenge(id); } catch (err) { console.error(err); }
+      try { await withdrawChallenge(id); } catch (err) { console.error(err); }
     }
   };
 
@@ -714,7 +954,7 @@ export default function DrillWrapper({
             <div className="w-9 h-9" />
           ) : (
             <Link
-              href={backHref}
+              href={backHrefWithGroup}
               className="relative flex items-center justify-center w-9 h-9 rounded-xl active:scale-90 transition-transform duration-100 before:absolute before:-inset-1 before:content-['']"
               style={{ background: 'rgba(255,255,255,0.06)' }}
               aria-label="Back to drills"
@@ -770,79 +1010,121 @@ export default function DrillWrapper({
 
       {/* Main Game Screen */}
       <main className="flex-1 relative overflow-hidden" style={{ touchAction: 'none' }}>
-        {children}
+        {/* One boundary for every drill — a crash in here used to unmount the
+            whole subtree and leave the black screen with nothing to tap. */}
+        <DrillErrorBoundary drillName={drillName} backHref={backHrefWithGroup}>
+          {children}
+        </DrillErrorBoundary>
 
         {/* ──────── MULTIPLAYER SCREEN OVERLAYS ──────── */}
         
         {/* LOBBY WAITING SCREEN */}
         {isChallengeMode && challengeStatus === 'lobby' && (
-          <div className="absolute inset-0 bg-neutral-950/95 flex flex-col items-center justify-center p-6 z-40 text-center">
+          <div className="absolute inset-0 bg-black flex flex-col items-center justify-center p-6 z-40 text-center">
             {/* Stops pulsing once we've given up — a live "still working on it"
                 animation under a "didn't join" message reads as a stuck screen. */}
-            <div className={`w-16 h-16 rounded-2xl flex items-center justify-center mb-6 ${
-              lobbySecondsLeft > 0
-                ? 'bg-purple-600/10 border border-purple-500/30 animate-pulse'
-                : 'bg-neutral-900 border border-neutral-800'
-            }`}>
-              <Swords className={`w-8 h-8 ${lobbySecondsLeft > 0 ? 'text-purple-400' : 'text-neutral-500'}`} />
-            </div>
-            
-            <h2 className="text-xl font-bold text-white mb-2">
+            {/* The two-player card IS the status — it names who is still
+                missing — so the 64px pulsing icon and the sentence restating
+                it are both gone. Same card-with-VS-divider shape as the result
+                screen, and it now fits the 423px landscape viewport the duel
+                drills actually run in. */}
+            <h2 className="font-display text-[28px] text-white">
               {lobbySecondsLeft > 0 ? 'Connecting Players' : 'Opponent Didn’t Join'}
             </h2>
-            {lobbySecondsLeft > 0 ? (
-              <p className="text-xs text-neutral-400 max-w-xs leading-relaxed mb-2">
-                Waiting for both you and <span className="text-purple-400 font-bold">{opponentName}</span> to load into the lobby.
-              </p>
-            ) : (
-              <p className="text-xs text-neutral-400 max-w-xs leading-relaxed mb-2">
-                <span className="text-purple-400 font-bold">{opponentName?.split(' ')[0]}</span> never loaded in — they may have closed the app or lost connection. No EIQ was staked.
-              </p>
-            )}
 
-            {/* A visible countdown, rather than an open-ended spinner, so the
-                wait reads as bounded instead of broken. */}
-            {lobbySecondsLeft > 0 ? (
-              <p className="text-[11px] font-mono font-bold text-neutral-500 mb-6 tabular-nums">
+            {/* FACE-OFF, on ONE line in every orientation.
+                The two players sit opposite each other side by side — including
+                in portrait, where this previously stacked one above the other.
+                Stacking was the wrong call twice over: it read as a list rather
+                than a matchup, and because each row was centred as a unit, the
+                two avatars landed at different x-positions whenever the names
+                were different lengths ("biradar" vs "For"), which looked
+                misaligned. Equal flex-1 columns with the VS between them keeps
+                both avatars on the same optical line whatever the names are.
+                No card chrome at all — no border, no panel background, no
+                rounded box. On a black screen the boxed version read as a grey
+                square floating on top of the drill; the two players and the VS
+                between them are enough structure on their own. */}
+            <div className="mt-5 w-full max-w-xl">
+              <div className="flex flex-row items-stretch">
+                <div className="flex flex-col items-center justify-start gap-2.5 px-3 py-4 flex-1 min-w-0">
+                  <img src={user?.photoURL} referrerPolicy="no-referrer" className="w-16 h-16 rounded-full object-cover ring-2 ring-emerald-400/70 shrink-0" />
+                  <div className="text-center min-w-0 w-full">
+                    <span className="block text-[12.5px] font-bold text-white truncate">{user?.displayName?.split(' ')[0]}</span>
+                    <span className="mt-1.5 inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-emerald-400">
+                      <CheckCircle2 className="w-3 h-3" /> Ready
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex flex-col items-center justify-center gap-2 px-1 shrink-0">
+                  <div className="w-px flex-1 bg-neutral-800" />
+                  <span className="text-[9px] label-tiny text-neutral-600">vs</span>
+                  <div className="w-px flex-1 bg-neutral-800" />
+                </div>
+
+                <div className={`flex flex-col items-center justify-start gap-2.5 px-3 py-4 flex-1 min-w-0 transition-opacity duration-300 ${
+                  challengeData?.[isHost ? 'toReady' : 'fromReady'] ? '' : 'opacity-55'
+                }`}>
+                  {opponentPhoto ? (
+                    <img src={opponentPhoto} referrerPolicy="no-referrer" className={`w-16 h-16 rounded-full object-cover shrink-0 ring-2 ${
+                      challengeData?.[isHost ? 'toReady' : 'fromReady'] ? 'ring-emerald-400/70' : 'ring-amber-400/50'
+                    }`} />
+                  ) : (
+                    <div className={`w-16 h-16 rounded-full bg-neutral-900 flex items-center justify-center shrink-0 ring-2 ${
+                      challengeData?.[isHost ? 'toReady' : 'fromReady'] ? 'ring-emerald-400/70' : 'ring-amber-400/50'
+                    }`}>
+                      <Swords className="w-5 h-5 text-neutral-500" />
+                    </div>
+                  )}
+                  <div className="text-center min-w-0 w-full">
+                  <span className="block text-[12.5px] font-bold text-white truncate">{opponentName?.split(' ')[0]}</span>
+                  <span className={`mt-1.5 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wider ${
+                    challengeData?.[isHost ? 'toReady' : 'fromReady']
+                      ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                      : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                  }`}>
+                  {/* A live dot ONLY while we're genuinely still waiting. Once
+                      the lobby has given up, everything stops moving — a
+                      "still working on it" animation under an "Opponent Didn't
+                      Join" heading reads as a stuck screen (same reason the
+                      old 64px pulsing icon was removed). */}
+                  {!challengeData?.[isHost ? 'toReady' : 'fromReady'] && lobbySecondsLeft > 0 && (
+                    <span className="w-1 h-1 rounded-full bg-amber-400 animate-pulse" />
+                  )}
+                    {challengeData?.[isHost ? 'toReady' : 'fromReady'] ? 'Ready' : 'Connecting'}
+                  </span>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            {/* The remaining wait as plain quiet text, not a progress bar.
+                A full-width purple bar was the brightest thing on an otherwise
+                black screen and pulled the eye away from the two players, who
+                are the point of this card. The wait is still bounded and still
+                visible — it just doesn't shout. */}
+            {lobbySecondsLeft > 0 && (
+              <p className="mt-4 text-[11px] font-medium text-neutral-600 tabular-nums">
                 Giving up in {lobbySecondsLeft}s
               </p>
-            ) : (
-              <button
-                onClick={abandonLobby}
-                className="mt-4 mb-6 px-5 py-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold rounded-2xl text-sm flex items-center justify-center gap-2 shadow-lg transition duration-200"
-              >
-                <Home className="w-4 h-4" />
-                Back to Arena
-              </button>
             )}
 
-            <div className="flex gap-8 items-center bg-neutral-900/40 border border-neutral-800 p-6 rounded-2xl">
-              <div className="flex flex-col items-center gap-2">
-                <img src={user?.photoURL} referrerPolicy="no-referrer" className="w-12 h-12 rounded-full border border-purple-500" />
-                <span className="text-xs text-neutral-300">{user?.displayName?.split(' ')[0]}</span>
-                <span className="text-[9px] bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-full border border-emerald-500/20 font-bold flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3" /> Ready
-                </span>
-              </div>
-              <div className="text-xs text-neutral-500 font-black font-mono">VS</div>
-              <div className="flex flex-col items-center gap-2">
-                {opponentPhoto ? (
-                  <img src={opponentPhoto} referrerPolicy="no-referrer" className="w-12 h-12 rounded-full border border-neutral-700" />
-                ) : (
-                  <div className="w-12 h-12 rounded-full bg-neutral-800 border border-neutral-700 flex items-center justify-center">
-                    <Swords className="w-5 h-5 text-neutral-500" />
-                  </div>
-                )}
-                <span className="text-xs text-neutral-300">{opponentName?.split(' ')[0]}</span>
-                <span className={`text-[9px] px-2 py-0.5 rounded-full font-bold ${
-                  challengeData?.[isHost ? 'toReady' : 'fromReady'] 
-                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
-                    : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
-                }`}>
-                  {challengeData?.[isHost ? 'toReady' : 'fromReady'] ? 'Ready' : 'Connecting...'}
-                </span>
-              </div>
-            </div>
+            {lobbySecondsLeft <= 0 && (
+              <>
+                <p className="mt-3 max-w-xs text-xs leading-relaxed text-neutral-400">
+                  <span className="font-bold text-purple-400">{opponentName?.split(' ')[0]}</span> never loaded in — they may have closed the app or lost connection. No EIQ was staked.
+                </p>
+                <button
+                  onClick={abandonLobby}
+                  className="mt-4 px-5 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold rounded-2xl text-sm flex items-center justify-center gap-2 shadow-lg transition duration-200"
+                >
+                  <Home className="w-4 h-4" />
+                  Back to Arena
+                </button>
+              </>
+            )}
           </div>
         )}
 
@@ -854,7 +1136,7 @@ export default function DrillWrapper({
             <div className="w-16 h-16 bg-red-950/40 border border-red-500/25 rounded-2xl flex items-center justify-center mb-6">
               <X className="w-8 h-8 text-red-400" />
             </div>
-            <h2 className="text-xl font-bold text-white mb-2">Duel Declined</h2>
+            <h2 className="font-display text-2xl text-white mb-2">Duel Declined</h2>
             <p className="text-xs text-neutral-400 max-w-xs leading-relaxed">
               <span className="text-red-300 font-bold">{opponentName?.split(' ')[0] || 'Your opponent'}</span> turned down this duel. No EIQ was staked.
             </p>
@@ -868,13 +1150,28 @@ export default function DrillWrapper({
           </div>
         )}
 
-        {/* START COUNTDOWN SCREEN */}
-        {isChallengeMode && challengeStatus === 'countdown' && (
+        {/* START COUNTDOWN SCREEN. Dismissed on `duelUnderway`, not on the
+            'playing' status write: the drill under this overlay auto-starts
+            from matchStartAt directly, so waiting for that write to round-trip
+            left a "GO" card sitting on top of a match that was already live
+            and already scoring. */}
+        {isChallengeMode && challengeStatus === 'countdown' && !duelUnderway && (
           <div className="absolute inset-0 bg-neutral-950/85 flex flex-col items-center justify-center gap-3 p-6 z-40 text-center backdrop-blur-sm">
             <span className="text-[11px] font-black uppercase tracking-[0.2em] text-purple-300">Get Ready</span>
             <div className="relative w-28 h-28 rounded-full border-[3px] border-purple-500/20 flex items-center justify-center">
               <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-purple-400 border-r-purple-400 animate-spin" style={{ animationDuration: '0.7s' }} />
-              <span key={countdownNum} className="fx-pop-in text-5xl font-black bg-gradient-to-b from-white to-purple-300 bg-clip-text text-transparent">
+              {/* Solid white, not `bg-clip-text text-transparent` over a
+                  gradient. background-clip:text paints nothing at all in
+                  Android's WebView when the element is also running a scale
+                  animation inside a backdrop-filter parent — which is this
+                  exact node — so the digit rendered as a transparent glyph
+                  and the player saw an empty ring counting down. A plain
+                  colour with a glow cannot fail to paint. */}
+              <span
+                key={countdownNum}
+                className="fx-count-pop text-5xl font-display text-white tabular-nums"
+                style={{ textShadow: '0 0 18px rgba(168,85,247,0.55)' }}
+              >
                 {countdownNum > 0 ? countdownNum : 'GO'}
               </span>
             </div>
@@ -886,21 +1183,70 @@ export default function DrillWrapper({
             score and the match completing (normally a second or two, since
             both clocks start at the same shared instant). Without this the
             player would stare at a frozen, chrome-less game field. */}
-        {isChallengeMode && challengeStatus === 'playing' && finalScoreSubmitted && (
+        {isChallengeMode && duelUnderway && challengeStatus !== 'finished' && finalScoreSubmitted && (
           <div className="absolute inset-0 bg-neutral-950/90 flex flex-col items-center justify-center gap-4 p-6 z-40 text-center">
-            <div className="relative flex items-center justify-center">
-              <div className="absolute w-16 h-16 rounded-full border-4 border-t-purple-600 border-r-transparent border-b-transparent border-l-transparent animate-spin" />
-              <div className="w-11 h-11 bg-neutral-900 rounded-full flex items-center justify-center border border-neutral-800">
-                <Swords className="w-5 h-5 text-purple-400" />
-              </div>
-            </div>
-            <div>
-              <h3 className="text-sm font-bold text-white">Time's up!</h3>
-              <p className="text-xs text-neutral-400 mt-1">Waiting for {opponentName?.split(' ')[0]} to finish...</p>
-              <p className="text-[10px] text-neutral-600 mt-2 max-w-[220px] mx-auto leading-relaxed">
-                If they’ve disconnected, the result is settled automatically in a few seconds.
-              </p>
-            </div>
+            {submitFailed ? (
+              <>
+                <div className="w-14 h-14 bg-red-950/40 border border-red-500/25 rounded-2xl flex items-center justify-center">
+                  <X className="w-7 h-7 text-red-400" />
+                </div>
+                {/* Says which failure this is. Offline it used to advise
+                    "check your connection and try again" next to a Retry that
+                    could only fail the same way, with no other control on the
+                    screen — the player's only way out was to kill the app. */}
+                <div>
+                  <h3 className="font-display text-lg text-white">
+                    {online ? 'Couldn’t send your score' : 'You’re offline'}
+                  </h3>
+                  <p className="text-xs text-neutral-400 mt-1 max-w-[250px] mx-auto leading-relaxed">
+                    Your final score of <span className="font-bold text-white tabular-nums">{score ?? 0}</span>{' '}
+                    {online
+                      ? 'didn’t reach the server. Try again.'
+                      : 'can’t be sent without a connection. Turn wifi or mobile data back on and it sends itself.'}
+                  </p>
+                </div>
+                <button
+                  onClick={() => submitFinalScoreRef.current()}
+                  disabled={!online}
+                  className={`px-5 py-3 font-bold rounded-2xl text-sm flex items-center justify-center gap-2 shadow-lg ${
+                    online
+                      ? 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white'
+                      : 'bg-neutral-800 text-neutral-500 cursor-not-allowed'
+                  }`}
+                >
+                  <Repeat className="w-4 h-4" />
+                  Retry
+                </button>
+                {/* An explicit exit. Force-quitting the app was already the
+                    only escape, and it has exactly this outcome — the
+                    opponent's abandoned-match rescue settles the duel after
+                    the grace window. This changes nothing about the result,
+                    it just stops the screen being a trap and says plainly
+                    what leaving costs. */}
+                <button
+                  onClick={() => router.push('/challenge')}
+                  className="text-[11px] font-bold text-neutral-500 hover:text-neutral-300 transition-colors"
+                >
+                  Leave duel — opponent takes the win
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="relative flex items-center justify-center">
+                  <div className="absolute w-16 h-16 rounded-full border-4 border-t-purple-600 border-r-transparent border-b-transparent border-l-transparent animate-spin" />
+                  <div className="w-11 h-11 bg-neutral-900 rounded-full flex items-center justify-center border border-neutral-800">
+                    <Swords className="w-5 h-5 text-purple-400" />
+                  </div>
+                </div>
+                <div>
+                  <h3 className="font-display text-lg text-white">Time's up!</h3>
+                  <p className="text-xs text-neutral-400 mt-1">Waiting for {opponentName?.split(' ')[0]} to finish...</p>
+                  <p className="text-[10px] text-neutral-600 mt-2 max-w-[220px] mx-auto leading-relaxed">
+                    If they’ve disconnected, the result is settled automatically in a few seconds.
+                  </p>
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -924,89 +1270,177 @@ export default function DrillWrapper({
           // instead of leaving the player to think the scoring is broken.
           const forfeitedBy = challengeData?.forfeitedBy;
           const iForfeited = forfeitedBy && forfeitedBy === user?.uid;
-          const theyForfeited = forfeitedBy && forfeitedBy !== user?.uid;
           return (
             <div className="absolute inset-0 bg-[#07070d] z-40 overflow-y-auto select-none" style={{ touchAction: 'pan-y', WebkitOverflowScrolling: 'touch' }}>
               <div className="min-h-full flex items-center justify-center p-4">
-                <div className="w-full max-w-md my-auto text-center">
+                {/* max-w-3xl, not max-w-md: a duel result renders in the 900x423
+                    LANDSCAPE viewport the duel drills run in, and a 448px column
+                    there left two thirds of the screen empty while crushing the
+                    scoreline into a narrow strip. The card is laid out wide
+                    below and falls back to stacked on genuinely narrow screens. */}
+                <div className="w-full max-w-2xl my-auto text-center">
 
-                  {/* Outcome banner */}
-                  {draw ? (
-                    <div className="inline-block bg-neutral-800 border border-neutral-700 text-neutral-200 text-xs font-black uppercase tracking-widest px-4 py-1.5 rounded-full">
-                      🤝 Draw
-                    </div>
-                  ) : won ? (
-                    <div className="inline-block bg-gradient-to-r from-yellow-400 to-amber-500 text-black text-xs font-black uppercase tracking-widest px-4 py-1.5 rounded-full shadow-[0_0_24px_rgba(234,179,8,0.35)]">
-                      🏆 Victory
-                    </div>
-                  ) : (
-                    <div className="inline-block bg-red-950 border border-red-500/25 text-red-400 text-xs font-black uppercase tracking-widest px-4 py-1.5 rounded-full">
-                      Defeat
-                    </div>
-                  )}
-                  <div className="text-[10px] text-neutral-500 font-bold uppercase tracking-widest mt-2">{challengeData?.drillName}</div>
+                  {/* Outcome. This is the one thing the player opened the
+                      screen to find out, so it gets to be the biggest thing on
+                      it — it used to be a 12px pill, smaller than the two score
+                      numbers underneath it. */}
+                  {/* Outcome as a colour-coded chip beside the drill name.
+                      This used to be a 3xl glowing yellow word, deliberately
+                      made "the biggest thing on the screen". That reasoning is
+                      superseded rather than forgotten: the scoreline below is
+                      now the hero at 5xl and the winning side is the only one
+                      rendered in white, so the result still reads instantly —
+                      while the glow (which read arcade rather than premium)
+                      and the height it ate in a 423px landscape viewport are
+                      both gone. */}
+                  <div className="flex items-center justify-center gap-2.5">
+                    <span className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] label-tiny ${
+                      draw ? 'border-neutral-700 bg-white/[0.04] text-neutral-300'
+                        : won ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-400'
+                        : 'border-rose-500/25 bg-rose-500/10 text-rose-400'
+                    }`}>
+                      {draw ? 'Draw' : won ? 'Victory' : 'Defeat'}
+                    </span>
+                    <span className="text-[10px] label-tiny text-neutral-600 truncate">
+                      {challengeData?.drillName}
+                    </span>
+                  </div>
 
                   {/* Why the match ended this way, when it wasn't the clock */}
                   {iForfeited && (
                     <div className="mt-2 text-[11px] text-red-400/90 font-semibold max-w-xs mx-auto leading-relaxed">
                       You left the duel — leaving forfeits the match and its EIQ.
+                      {/* The lockout is forgiven for the first few in a row, so
+                          the one that actually triggers it must not arrive
+                          unannounced. Warned only on the last free one, which
+                          is the moment the player can still act on it.
+                          forfeitStreak is already the post-match value here. */}
+                      {user?.forfeitStreak === FORFEIT_GRACE_COUNT && (
+                        <span className="mt-1 block text-amber-400/90">
+                          Leave one more in a row and the Arena locks for 30 minutes.
+                        </span>
+                      )}
                     </div>
                   )}
-                  {theyForfeited && (
-                    <div className="mt-2 text-[11px] text-emerald-400/90 font-semibold max-w-xs mx-auto leading-relaxed">
-                      {opponentName?.split(' ')[0]} left the duel — you win by forfeit.
-                    </div>
-                  )}
-
-                  {/* Score comparison */}
-                  <div className="grid grid-cols-2 gap-3 mt-4">
-                    <div className={`px-4 py-4 rounded-2xl border text-center ${
-                      won ? 'bg-purple-950/25 border-purple-500/40 shadow-lg shadow-purple-500/10' : 'bg-neutral-900/50 border-neutral-800'
-                    }`}>
-                      {user?.photoURL ? (
-                        <img src={user.photoURL} referrerPolicy="no-referrer" className="w-11 h-11 rounded-full border border-purple-500/50 mx-auto mb-2 object-cover" />
-                      ) : (
-                        <div className="w-11 h-11 rounded-full bg-neutral-800 border border-neutral-700 flex items-center justify-center mx-auto mb-2">
-                          <Swords className="w-5 h-5 text-purple-400" />
+                  {/* A win where the opponent walked out is shown as an
+                      ORDINARY win: no "you win by forfeit" line, and no
+                      "duel ended early" panel replacing the scoreboard. The
+                      winner sees the same card they'd see after any other
+                      duel — the EIQ still moves, the player who left still
+                      pays for it. Only the person who actually left is told
+                      why (see iForfeited above), since they'd otherwise lose
+                      EIQ with no explanation at all. */}
+                  {(
+                  /* One scoreboard instead of two floating boxes, with the
+                     EIQ result carried in its own footer strip — the same
+                     card-plus-footer shape as Your Standing on the Rankings
+                     page. The winning side takes the accent wash, so the
+                     result reads from the card's colour before any number is
+                     parsed. */
+                  <div className="mt-3 rounded-3xl border border-neutral-800 bg-[#12131c] overflow-hidden">
+                    {/* "Broadcast" layout: the two players FACE each other across
+                        the full width — avatar and name on the outside, scores
+                        meeting in the middle — instead of two stacked centred
+                        columns. A duel result renders in a 900x423 landscape
+                        viewport, where the old narrow grid left most of the
+                        width empty and shrank the scoreline to 3xl. Stacks
+                        vertically below `sm` for any portrait case. */}
+                    <div className="flex flex-col sm:flex-row sm:items-stretch">
+                      <div className={`flex items-center gap-3 px-4 py-3.5 sm:flex-1 ${won ? 'bg-purple-500/[0.07]' : ''}`}>
+                        {user?.photoURL ? (
+                          <img src={user.photoURL} referrerPolicy="no-referrer" className={`w-12 h-12 rounded-full object-cover shrink-0 ${
+                            won ? 'ring-2 ring-purple-400' : 'ring-1 ring-neutral-700'
+                          }`} />
+                        ) : (
+                          <div className={`w-12 h-12 rounded-full bg-neutral-800 flex items-center justify-center shrink-0 ${
+                            won ? 'ring-2 ring-purple-400' : 'ring-1 ring-neutral-700'
+                          }`}>
+                            <Swords className="w-5 h-5 text-purple-400" />
+                          </div>
+                        )}
+                        <div className="min-w-0 text-left">
+                          <div className="text-[13px] font-bold text-white truncate">{user?.displayName?.split(' ')[0] || 'You'}</div>
+                          <div className="mt-0.5 text-[10px] label-tiny text-neutral-500">You</div>
                         </div>
-                      )}
-                      <span className="text-[10px] text-neutral-400 block uppercase tracking-wider font-bold">You</span>
-                      <span className="text-3xl font-black text-white font-mono tabular-nums">{myScore}</span>
+                        <div className={`ml-auto text-4xl font-display tabular-nums leading-none ${
+                          draw || won ? 'text-white' : 'text-neutral-600'
+                        }`}>{myScore}</div>
+                      </div>
+
+                      {/* Divider carries the VS, so the two sides read as one
+                          match rather than two separate results. */}
+                      <div className="flex sm:flex-col items-center justify-center gap-2 px-3 sm:px-1">
+                        <div className="hidden sm:block w-px flex-1 bg-neutral-800" />
+                        <div className="sm:hidden h-px flex-1 bg-neutral-800" />
+                        <span className="text-[9px] label-tiny text-neutral-600">vs</span>
+                        <div className="hidden sm:block w-px flex-1 bg-neutral-800" />
+                        <div className="sm:hidden h-px flex-1 bg-neutral-800" />
+                      </div>
+
+                      <div className={`flex items-center gap-3 px-4 py-3.5 sm:flex-1 sm:flex-row-reverse ${!won && !draw ? 'bg-rose-500/[0.07]' : ''}`}>
+                        {opponentPhoto ? (
+                          <img src={opponentPhoto} referrerPolicy="no-referrer" className={`w-12 h-12 rounded-full object-cover shrink-0 ${
+                            !won && !draw ? 'ring-2 ring-rose-400' : 'ring-1 ring-neutral-700'
+                          }`} />
+                        ) : (
+                          <div className={`w-12 h-12 rounded-full bg-neutral-800 flex items-center justify-center shrink-0 ${
+                            !won && !draw ? 'ring-2 ring-rose-400' : 'ring-1 ring-neutral-700'
+                          }`}>
+                            <Swords className="w-5 h-5 text-neutral-400" />
+                          </div>
+                        )}
+                        <div className="min-w-0 text-left sm:text-right">
+                          <div className="text-[13px] font-bold text-white truncate">{opponentName?.split(' ')[0]}</div>
+                          <div className="mt-0.5 text-[10px] label-tiny text-neutral-500">Opponent</div>
+                        </div>
+                        <div className={`ml-auto sm:ml-0 sm:mr-auto text-4xl font-display tabular-nums leading-none ${
+                          draw || !won ? 'text-white' : 'text-neutral-600'
+                        }`}>{theirScore}</div>
+                      </div>
                     </div>
 
-                    <div className={`px-4 py-4 rounded-2xl border text-center ${
-                      !won && !draw ? 'bg-rose-950/20 border-rose-500/30' : 'bg-neutral-900/50 border-neutral-800'
-                    }`}>
-                      {opponentPhoto ? (
-                        <img src={opponentPhoto} referrerPolicy="no-referrer" className="w-11 h-11 rounded-full border border-neutral-700 mx-auto mb-2 object-cover" />
-                      ) : (
-                        <div className="w-11 h-11 rounded-full bg-neutral-800 border border-neutral-700 flex items-center justify-center mx-auto mb-2">
-                          <Swords className="w-5 h-5 text-neutral-400" />
-                        </div>
-                      )}
-                      <span className="text-[10px] text-neutral-400 block uppercase tracking-wider font-bold truncate px-1">{opponentName?.split(' ')[0]}</span>
-                      <span className="text-3xl font-black text-white font-mono tabular-nums">{theirScore}</span>
-                    </div>
+                    {/* Margin bar — the scoreline says WHO won, this says by how
+                        much. Same two-tone split the Arena duel-history rows
+                        already use, so a result reads identically in both
+                        places. 3px, so it costs no meaningful height in the
+                        423px landscape viewport these duels actually run in. */}
+                    {(myScore + theirScore) > 0 && (
+                      <div className="flex h-[3px] w-full overflow-hidden bg-neutral-800">
+                        <div
+                          className={won ? 'bg-purple-500' : 'bg-neutral-700'}
+                          style={{ width: `${(myScore / (myScore + theirScore)) * 100}%` }}
+                        />
+                        <div className={`flex-1 ${!won && !draw ? 'bg-rose-500' : 'bg-neutral-700'}`} />
+                      </div>
+                    )}
+
                   </div>
+                  )}
 
-                  {/* EIQ change — written by submitScore onto the challenge doc.
-                      Winner gains, loser loses (floored at 0), draw is 0. */}
+                  {/* EIQ change — written by submitScore onto the challenge
+                      doc. Winner gains, loser loses (floored at 0), draw is 0.
+                      Sits OUTSIDE the scoreline branch on purpose: a forfeit
+                      that nobody finished still moves EIQ, so hiding this with
+                      the scoreboard would drop the one number that did change.
+                      Was two cryptic pills ("• 0 EIQ" next to "0 · BRONZE")
+                      that never said which was the change and which the
+                      total; now it is one labelled row. */}
                   {typeof myEiqGained === 'number' && (
-                    <div className="mt-3 flex items-center justify-center gap-2">
-                      <span className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full border text-xs font-black font-mono ${
-                        myEiqGained > 0
-                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                          : myEiqGained < 0
-                            ? 'bg-red-500/10 border-red-500/25 text-red-400'
-                            : 'bg-neutral-900 border-neutral-800 text-neutral-400'
+                    <div className={`mt-2 flex items-center justify-between gap-3 rounded-2xl border px-4 py-2.5 ${
+                      myEiqGained > 0 ? 'border-emerald-500/25 bg-emerald-500/[0.07]'
+                        : myEiqGained < 0 ? 'border-rose-500/25 bg-rose-500/[0.07]'
+                        : 'border-neutral-800 bg-[#12131c]'
+                    }`}>
+                      <span className={`text-sm font-hud font-bold tabular-nums ${
+                        myEiqGained > 0 ? 'text-emerald-400' : myEiqGained < 0 ? 'text-rose-400' : 'text-neutral-400'
                       }`}>
-                        {myEiqGained > 0 ? '▲' : myEiqGained < 0 ? '▼' : '•'} {myEiqGained > 0 ? `+${myEiqGained}` : myEiqGained} EIQ
+                        {myEiqGained > 0 ? `+${myEiqGained}` : myEiqGained} EIQ
                       </span>
                       {typeof myEiqAfter === 'number' && (
-                        <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-neutral-900 border border-neutral-800 text-xs font-bold text-neutral-300 font-mono">
+                        <span className="flex items-center gap-1.5 text-[11px] font-bold text-neutral-400">
                           <Trophy className="w-3.5 h-3.5 text-yellow-400" />
-                          {myEiqAfter}
-                          {tier && <span className="text-[10px] uppercase tracking-wider text-neutral-500">· {tier.name}</span>}
+                          <span className="font-hud text-white">{myEiqAfter}</span> total
+                          {tier && <span className="text-[10px] label-tiny text-neutral-500">· {tier.name}</span>}
                         </span>
                       )}
                     </div>
@@ -1018,7 +1452,11 @@ export default function DrillWrapper({
                   {rematchInvite && (
                     <button
                       onClick={() => acceptRematchInvite(rematchInvite)}
-                      className="mt-4 w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold rounded-2xl text-sm flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(16,185,129,0.25)] animate-pulse"
+                      /* Violet, not the emerald gradient it used to be — green
+                         is the app's "done/correct" colour everywhere else, and
+                         a full-width pulsing green slab read as a success
+                         banner rather than something to press. */
+                      className="mt-3 w-full py-2.5 bg-violet-600 hover:bg-violet-500 text-white font-bold rounded-2xl text-sm flex items-center justify-center gap-2 shadow-lg transition active:scale-[.98]"
                     >
                       <Swords className="w-4 h-4" />
                       {opponentName?.split(' ')[0]} wants a rematch — Accept!
@@ -1053,11 +1491,19 @@ export default function DrillWrapper({
                     )
                   )}
 
-                  {/* Actions — side-by-side in landscape/wide, stacked in portrait */}
-                  <div className="mt-5 flex flex-col sm:flex-row gap-2.5">
+                  {/* Actions — side-by-side in landscape/wide, stacked in portrait.
+                      Kept tight: the duel drills run landscape, where the whole
+                      result has 423 CSS px of height to live in. */}
+                  {/* Centred, fixed-width actions rather than two stretched
+                      flex-1 slabs. Across the full landscape width a
+                      full-bleed gradient button was the loudest thing on the
+                      screen — louder than the scoreline it sits under. Still
+                      full-width when stacked in portrait, where stretching is
+                      correct. */}
+                  <div className="mt-3 flex flex-col sm:flex-row sm:justify-center gap-2.5">
                     <button
                       onClick={() => router.push('/challenge')}
-                      className="flex-1 py-3.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold rounded-2xl text-sm flex items-center justify-center gap-2 shadow-lg transition duration-200"
+                      className="sm:flex-none sm:min-w-[180px] px-6 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold rounded-2xl text-sm flex items-center justify-center gap-2 shadow-lg transition duration-200"
                     >
                       <Home className="w-4 h-4" />
                       Back to Arena
@@ -1065,7 +1511,7 @@ export default function DrillWrapper({
                     {challengeData?.toUid !== 'global' && !pendingRematch && (
                       <button
                         onClick={handleChallengeAgain}
-                        className="flex-1 py-3.5 bg-neutral-900 border border-neutral-800 hover:border-purple-500/40 text-white font-bold rounded-2xl text-sm flex items-center justify-center gap-2 transition duration-200"
+                        className="sm:flex-none sm:min-w-[150px] px-6 py-2.5 bg-neutral-900 border border-neutral-800 hover:border-purple-500/40 text-white font-bold rounded-2xl text-sm flex items-center justify-center gap-2 transition duration-200"
                       >
                         <Repeat className="w-4 h-4" />
                         Rematch
@@ -1119,7 +1565,7 @@ export default function DrillWrapper({
                   <button
                     onClick={() => {
                       if (sentChallengeId) {
-                        declineChallenge(sentChallengeId).catch(console.error);
+                        withdrawChallenge(sentChallengeId).catch(console.error);
                       }
                       setSentChallengeId(null);
                     }}
@@ -1233,7 +1679,7 @@ function HUDStat({ label, value, color, urgent }) {
   return (
     <div className="flex flex-col items-center">
       <span
-        className={`text-sm font-black tabular-nums ${urgent ? 'animate-pulse' : ''}`}
+        className={`text-sm font-hud font-bold tabular-nums ${urgent ? 'animate-pulse' : ''}`}
         style={{ color }}
       >
         {value}

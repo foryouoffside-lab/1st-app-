@@ -6,7 +6,6 @@ const nextConfig = {
   // ============================================
   
   reactStrictMode: true,
-  outputFileTracingRoot: typeof __dirname !== 'undefined' ? __dirname : undefined,
   compress: true,
   poweredByHeader: false,
   productionBrowserSourceMaps: false,
@@ -46,14 +45,6 @@ const nextConfig = {
     ],
   },
   
-  // ============================================
-  // WEBPACK SPLIT CHUNKS (Reduces TBT)
-  // ============================================
-  
-  webpack: (config, { isServer, dev }) => {
-    return config;
-  },
-  
   eslint: {
     ignoreDuringBuilds: true,
   },
@@ -68,7 +59,13 @@ const nextConfig = {
   
   output: 'export',
   trailingSlash: true,
-  // outputFileTracingRoot only needed for standalone mode
+
+  // scripts/capture-previews.js starts its own `next dev` to screenshot the
+  // drills. Two dev servers sharing one .next overwrite each other's chunks
+  // half-written, which surfaces in the browser as a bare "SyntaxError:
+  // Invalid or unexpected token" on a random drill — so the capture run gets
+  // a build directory of its own and leaves the normal .next cache alone.
+  distDir: process.env.NEXT_CAPTURE_DIST || '.next',
 };
 
 module.exports = nextConfig;

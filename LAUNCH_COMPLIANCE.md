@@ -25,7 +25,8 @@ to Production on Google Play, for a worldwide audience.
 | Placeholders in legal pages | Done 2026-08-22 — Sangmesh, India |
 | Store listing claims | Rewritten 2026-08-22 — see §4 |
 | **OAuth consent screen branding** | Outstanding (Console only) |
-| **Privacy policy version drift** | **NEEDS FIX — see §2** |
+| Privacy policy version drift | Done — resolved 2026-08-23, see §2 |
+| Legal URLs reachable | Verified live 2026-09-02 — /privacy, /terms, /delete-account all HTTP 200 |
 
 ---
 

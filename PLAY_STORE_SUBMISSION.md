@@ -128,21 +128,31 @@ word nobody searches for.)
 (Play Console -> Data safety -> Data deletion. Required because the app has
 accounts. The page is `app/delete-account/page.js`.)
 
-> **Do not submit the description above as written.** "science-based" and
-> "sharpen the mental skills that matter every day" are efficacy claims of
-> the kind the FTC fined Lumosity $2M over. See `LAUNCH_COMPLIANCE.md` §4 for
-> the reason and a drop-in rewrite that keeps the appeal without the claim.
-> Also see `PLAY_STORE_ASO.md` §2 — the title wastes 15 of its 30 characters.
+> The warning that used to sit here ("do not submit the description above as
+> written") applied to the PRE-2026-08-22 copy, which is gone. Everything in
+> §2 is the rewritten, claim-free version and is safe to paste as-is. Leaving
+> the old warning under the new copy read as "do not submit this", which is
+> the opposite of what it meant.
 
 ---
 
 ## 3. Graphic assets
 
 - **App icon (512x512):** already have it — `public/icons/icon-512x512.png`
-- **Feature graphic (1024x500):** done — `store-assets/feature-graphic-1024x500.png`
-  (1024x500 exact, RGB/no alpha, matches Play's spec). Source is
-  `store-assets/feature-graphic.html` if it ever needs edits — open it in a
-  browser at 1024x500 or re-render with a headless browser screenshot.
+- **Feature graphic (1024x500):** use **`store-assets/feature-graphic-v2.png`**
+  (1024x500 exact, RGB/no alpha, 237 KB). Source: `feature-graphic-v2.html`;
+  re-render with `node store-assets/render-feature.js <src.html> <out.png>`
+  (Playwright + Edge, opaque background — Play rejects alpha here).
+
+  Replaced and DELETED `feature-graphic-1024x500.png` on 2026-09-02 — having
+  both in one folder meant the wrong one got uploaded to Play Console once
+  already. Two things were wrong with it, and both would be wrong again if
+  anyone re-renders the old source: it carried a **"PRO" badge** months after
+  the app was renamed to plain "SkillDrills" (contradicting the launcher label,
+  capacitor.config.ts, the legal pages and the store title), and it advertised
+  "brain training drills" — the efficacy framing that LAUNCH_COMPLIANCE.md §4
+  deliberately stripped out of the description. A graphic making a claim the
+  description carefully avoids is the version a reviewer reads.
 - **Screenshots:** already captured, in `store-assets/screenshots/`
   (Processing Speed hub, Grid Memorization gameplay, etc.) — upload those
   directly. Play requires at least 2; more (4-8) is better for the listing.

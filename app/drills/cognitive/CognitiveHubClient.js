@@ -6,16 +6,28 @@
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import {
-  Brain, Clock, Play,
-  Home, ChevronRight, Activity, Cpu, Sparkles, Search
-} from 'lucide-react';
+import { Brain, Play, Search } from 'lucide-react';
 import { getAllDrillProgress } from '../../../lib/progressStore';
-import { DRILL_INDEX } from '../../../lib/drillIndex';
-import { SUB_GROUPS, getGroupMeta, getDrillGroup, getGroupIcon } from '../../../lib/drillGroups';
+import { DRILL_INDEX, byEngagement } from '../../../lib/drillIndex';
+import { SUB_GROUPS, getGroupMeta, getDrillGroup, getGroupIcon, HUB_GROUP_KEY } from '../../../lib/drillGroups';
 import { canvasDpr } from '../../../lib/canvasFx';
 
 const NO_TRAINING_SUFFIX = new Set(['processing-speed', 'problem-solving']);
+
+// Remembers which category the user was last browsing.
+//
+// The hub only ever learned its category from `?group=` in the URL, and the
+// picker changes `activeGroup` WITHOUT rewriting the URL. Every route back
+// into the hub from a drill is a bare `/drills/cognitive` (DrillWrapper's
+// backHref, the hardware back button, and the result screen's exit link all
+// use it), so returning from a drill always landed on "All Drills" — the user
+// picked Attention, played an Attention drill, and came back somewhere else.
+//
+// sessionStorage rather than localStorage on purpose: "where I was" should
+// survive going into a drill and back, not a full relaunch of the app, where
+// the neutral All Drills view is the better starting point.
+// (key itself now lives in lib/drillGroups.js as HUB_GROUP_KEY, so the
+// hub and DrillWrapper cannot drift apart.)
 
 export default function CognitiveHubClient() {
   const searchParams = useSearchParams();
@@ -27,6 +39,36 @@ export default function CognitiveHubClient() {
   });
   const [isLoaded, setIsLoaded] = useState(false);
   const canvasRef = useRef(null);
+  const didRestoreGroupRef = useRef(false);
+
+  // Restore the remembered category, but only when the URL doesn't name one —
+  // an explicit ?group= (how the Home screen's category cards link in) is a
+  // deliberate request and always wins.
+  //
+  // Done in an effect rather than in the useState initializer above because
+  // this page is prerendered by the static export, where sessionStorage does
+  // not exist; reading it during the initial render would also make the
+  // client's first paint disagree with the prerendered HTML. The hub renders
+  // its loading state until `isLoaded`, so this resolves before anything is
+  // visible.
+  useEffect(() => {
+    if (didRestoreGroupRef.current) return;
+    didRestoreGroupRef.current = true;
+
+    const requested = searchParams.get('group');
+    if (SUB_GROUPS.some(g => g.id === requested)) return;
+
+    try {
+      const saved = sessionStorage.getItem(HUB_GROUP_KEY);
+      if (SUB_GROUPS.some(g => g.id === saved)) setActiveGroup(saved);
+    } catch {}
+  }, [searchParams]);
+
+  // Remember every change, so the next return to the hub lands back here.
+  useEffect(() => {
+    if (!didRestoreGroupRef.current) return;
+    try { sessionStorage.setItem(HUB_GROUP_KEY, activeGroup); } catch {}
+  }, [activeGroup]);
 
   useEffect(() => {
     async function load() {
@@ -80,9 +122,22 @@ export default function CognitiveHubClient() {
     let lastFrameTime = 0;
     const draw = (time) => {
       animationFrameId = requestAnimationFrame(draw);
-      // Cap this purely-decorative background to ~30fps — it's slow-drifting
-      // and visible on every screen, so a high-refresh phone shouldn't pay 2-4x.
-      if (time - lastFrameTime < 33) return;
+
+      // This is a decorative background on a MENU. It has no gameplay value and
+      // no deadline, but it was clearing and repainting a full-screen canvas —
+      // 25 filled arcs plus up to 300 stroked links — 30 times a second for as
+      // long as the hub was open. That is sustained GPU compositing to animate
+      // something nobody is looking at while they read a drill list.
+      //
+      // 20fps: the particles drift at 0.25px/frame, so this is invisible.
+      if (time - lastFrameTime < 50) return;
+
+      // rAF is usually throttled when the tab is hidden, but "hidden" is not
+      // guaranteed in a Capacitor WebView the way it is in a browser tab — an
+      // app sitting behind the lock screen or in the recents switcher kept
+      // painting. Cheap explicit check.
+      if (typeof document !== 'undefined' && document.hidden) return;
+
       lastFrameTime = time;
 
       ctx.clearRect(0, 0, width, height);
@@ -120,7 +175,7 @@ export default function CognitiveHubClient() {
     };
   }, [isLoaded]);
 
-  // Filter Cognitive drills
+  // Filter Cognitive drills — one row per drill, no folded pairs.
   const allCognitiveDrills = DRILL_INDEX.filter(d => d.categorySlug === 'cognitive');
 
   // Stats/recommendation scope to the active group (so a preset group reads
@@ -138,11 +193,11 @@ export default function CognitiveHubClient() {
       return matchesName || matchesKeywords;
     }
     return true;
-  });
+  }).sort(byEngagement);
 
-  // Calculate stats
+  // Drives the search placeholder. The hero's played/completion counters that
+  // used to live beside this are gone — see the hero block below.
   const totalDrills = scopedDrills.length;
-  const playedCount = scopedDrills.filter(d => drillProgress[d.id]?.attempts > 0).length;
 
   const activeGroupMeta = activeGroup !== 'all' ? getGroupMeta(activeGroup) : null;
   const HeroIcon = activeGroupMeta ? activeGroupMeta.icon : Brain;
@@ -174,7 +229,7 @@ export default function CognitiveHubClient() {
       <div className="min-h-screen flex items-center justify-center bg-[#050508]">
         <div className="text-center space-y-3">
           <div className="w-10 h-10 border-2 border-violet-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="text-[10px] text-neutral-500 font-mono uppercase tracking-widest">Calibrating Synaptic Core...</p>
+          <p className="text-[10px] text-neutral-500 uppercase tracking-widest">Calibrating Synaptic Core...</p>
         </div>
       </div>
     );
@@ -194,10 +249,10 @@ export default function CognitiveHubClient() {
         <div className="cat-hero">
           <div className="cat-hero-top">
             <div className="cat-hero-icon">
-              <HeroIcon className="w-7 h-7" />
+              <HeroIcon className="w-5 h-5" />
             </div>
             <div>
-              <h1 className="font-black tracking-tight text-white leading-tight">
+              <h1 className="font-display text-[32px] text-white leading-[0.9]">
                 {activeGroupMeta
                   // 'Processing Speed' and 'Problem Solving' are long enough that
                   // appending 'Training' wraps the heading onto a second line, so
@@ -207,31 +262,18 @@ export default function CognitiveHubClient() {
               </h1>
             </div>
           </div>
+          {/* Two lines, and that is the budget. The old copy ran to three
+              lines of "overclock ... scientific cognitive modules", and the
+              Total Drills / Played By You / Completion row under it added a
+              fourth — between them they pushed the first drill card off the
+              bottom of the screen on every single visit to the hub. The
+              drill count still appears, in the search placeholder below,
+              where it is actually doing a job. */}
           <p className="desc text-xs mt-3 leading-relaxed text-slate-400">
             {activeGroupMeta
               ? activeGroupMeta.description
-              : 'Overclock working memory metrics, reaction speeds, and selective attention thresholds using scientific cognitive modules.'}
+              : 'Train working memory, reaction speed, and selective attention with short, focused drills.'}
           </p>
-          {/* Only shown on the "All Drills" view — at the subcategory level
-              the drill count just repeats what the picker card below already
-              says, and a completion % out of 2-6 drills is too coarse to be
-              a meaningful signal. */}
-          {!activeGroupMeta && (
-            <div className="cat-hero-stats mt-4 flex gap-6">
-              <div>
-                <b className="text-sm font-black text-white">{totalDrills}</b>
-                <span className="text-[9px] uppercase tracking-wider text-slate-500 block">Total Drills</span>
-              </div>
-              <div>
-                <b className="text-sm font-black text-white">{playedCount}</b>
-                <span className="text-[9px] uppercase tracking-wider text-slate-500 block">Played By You</span>
-              </div>
-              <div>
-                <b className="text-sm font-black text-white">{playedCount > 0 ? Math.round((playedCount / totalDrills) * 100) : 0}%</b>
-                <span className="text-[9px] uppercase tracking-wider text-slate-500 block">Completion</span>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* 2. Category picker — each subgroup gets its own accent color and
@@ -282,8 +324,13 @@ export default function CognitiveHubClient() {
           {activeGroupMeta ? `All ${activeGroupMeta.name} drills` : 'All Cognitive drills'}
         </div>
 
-        {/* 4. Drill listing (Mobile Row List - standard for app layout) */}
-        <div className="drill-list space-y-2">
+        {/* 4. Drill listing — two-up preview cards.
+             A row of text told a new player nothing: "Ghost Link" and "Batch
+             Processing" are unguessable names next to a category icon shared
+             by five other drills. Each card now leads with a frame of the
+             drill actually running (captured by scripts/capture-previews.js),
+             so the picture answers "what is this?" before the name has to. */}
+        <div className="drill-grid">
           {filteredDrills.map(drill => {
             const progress = drillProgress[drill.id];
             const hasPlayed = progress?.attempts > 0;
@@ -295,35 +342,46 @@ export default function CognitiveHubClient() {
             const groupAccent = getGroupMeta(group).accent;
 
             return (
-              <div key={drill.id} className="drill-row" style={{ '--a': groupAccent }}>
-                <div className="ic shrink-0">
-                  <DrillIcon className="w-4.5 h-4.5" />
-                </div>
-                <div className="info">
-                  <span className="catlabel">{getGroupMeta(group).name}</span>
-                  <h3 className="nm text-white">{drill.name}</h3>
-                  <div className="meta">
-                    <span className={`diff-pill ${getDifficultyClass(diffLabel)}`}>
-                      {diffLabel}
-                    </span>
-                    <span className="dur">{drill.duration || '45s'}</span>
+              <div key={drill.id} className="drill-card" style={{ '--a': groupAccent }}>
+                <Link href={drill.path} className="thumb">
+                  {/* Difficulty rides the thumbnail's top-left corner rather
+                      than the body: it is a property of the drill you are
+                      looking at, and up here it costs the name row nothing. */}
+                  <span className={`diff-pill ${getDifficultyClass(diffLabel)}`}>
+                    {diffLabel}
+                  </span>
+                  <img
+                    src={`/previews/cards/${drill.id}.webp`}
+                    alt=""
+                    width={640}
+                    height={360}
+                    loading="lazy"
+                    decoding="async"
+                  />
+                  <span className="dur">{drill.duration || '45s'}</span>
+                  {/* Same idea as the watched-progress bar on a video
+                      thumbnail: how far this player has got, at a glance. */}
+                  {hasPlayed && (
+                    <i className="seen" style={{ width: `${Math.min(100, bestScore / 15)}%` }} />
+                  )}
+                  <span className="play">
+                    <Play className="w-3.5 h-3.5 fill-current" />
+                  </span>
+                </Link>
+
+                <div className="body">
+                  <span className="ic">
+                    <DrillIcon className="w-3.5 h-3.5" />
+                  </span>
+                  {/* Name only. A personal best next to it was noise on a
+                      picking screen — it says nothing about what the drill is,
+                      and "New" on everything unplayed made a wall of cards all
+                      shout the same word. The progress bar on the thumbnail
+                      already carries "you have played this". */}
+                  <div className="info">
+                    <h3 className="nm text-white">{drill.name}</h3>
                   </div>
                 </div>
-                <div className="right shrink-0">
-                  {hasPlayed ? (
-                    <>
-                      <span className="pb">Best: {bestScore}</span>
-                      <div className="bar">
-                        <i style={{ width: `${Math.min(100, (bestScore / 1.5))}%` }} />
-                      </div>
-                    </>
-                  ) : (
-                    <span className="notstarted">Not started</span>
-                  )}
-                </div>
-                <Link href={drill.path} className="play-btn cursor-pointer shrink-0 ml-2">
-                  <Play className="w-3.5 h-3.5 fill-current" />
-                </Link>
               </div>
             );
           })}

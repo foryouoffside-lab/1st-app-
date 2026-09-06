@@ -14,6 +14,11 @@ public class MainActivity extends BridgeActivity {
         // SplashScreen attributes in styles.xml (windowSplashScreenBackground
         // etc.) to apply consistently pre-Android-12 too, not just on 31+.
         SplashScreen.installSplashScreen(this);
+        // Screen-on control for drills (see lib/keepAwake.js). Must be
+        // registered before super.onCreate() builds the bridge.
+        registerPlugin(KeepAwakePlugin.class);
+        // Edge-to-edge full screen for drills (see lib/immersive.js).
+        registerPlugin(ImmersiveModePlugin.class);
         super.onCreate(savedInstanceState);
         WebView webView = this.bridge.getWebView();
         // Ignore the device's system font-size/display-size setting and

@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
 import { 
   Compass, Volume2, VolumeX, Eye, Zap, Ban,
   Share2, ArrowLeft, Heart, Star, Circle, Square, Triangle, 
@@ -13,17 +12,24 @@ import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { lockPortrait, unlockOrientation } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
 import { getPlayerName } from '../../../../../lib/progressStore';
-import generateShareCard, { shareScoreCard } from '../../../../../components/ShareScoreCard';
+import { useShareCard } from '../../../../../components/ShareScoreCard';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
 import DrillWrapper from '../../../../../components/DrillWrapper';
+import { APP_SHARE_URL } from '../../../../../lib/shareLinks';
 
 // ============================================================
 // TUNING CONSTANTS
 // ============================================================
 const TOTAL_TIME = 45;
-const OVERDRIVE_MS = 5000;
 const STORAGE_KEY = 'skilldrills_card_matching_v1';
+
+// How long a freshly dealt board is shown face-up before it flips down.
+// Scaled by card count — a 24-card board is genuinely more to take in than a
+// 12-card one, and a fixed duration would make the late levels unfair rather
+// than harder. The game clock is PAUSED for this window (see the timer
+// interval), so the preview never eats into the player's 45 seconds.
+const previewMsFor = (cardCount) => Math.min(2800, 1400 + cardCount * 55);
 
 const BASE_PAIRS = 6;
 const LEVEL_STEP = 2;
@@ -43,7 +49,7 @@ class AudioSynthesizer {
     if (!this.ctx) {
       try {
         this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-      } catch (e) {}
+      } catch {}
     }
     if (this.ctx && this.ctx.state === 'suspended') {
       this.ctx.resume();
@@ -67,7 +73,7 @@ class AudioSynthesizer {
       gainNode.connect(this.ctx.destination);
       osc.start();
       osc.stop(this.ctx.currentTime + dur);
-    } catch (e) {}
+    } catch {}
   }
 
   // 1. Hit sound
@@ -76,8 +82,85 @@ class AudioSynthesizer {
   // 2. Countdown tick sound
   playCountdownTick() { this.tone(440, 0.09, 'sine', 0.12, 440); }
 
-  // 3. "GO" start sound
-  playGo() { this.tone(523.25, 0.18, 'triangle', 0.17, 784); }
+  // GO — a struck wooden bar. Warm rather than urgent: this is the last beat
+  // of 3-2-1, so it has to feel bigger than the 440Hz ticks without turning
+  // the start of a focus drill into an alarm.
+  //
+  // Earlier versions chased impact and got harshness instead — a bright A5
+  // mallet, a four-note arpeggio over a sub drop, a chord with a glide into
+  // it. Next to the ticks they all read as ARCADE.
+  //
+  // What works is a marimba tap. A 12ms noise burst bandpassed at 900Hz is
+  // the beater contacting wood — low and short enough that it never reads as
+  // a drum, but without it the tone has no onset and nothing feels struck.
+  // Behind it, three voices 5ms later: C5 as the bar, its octave for a little
+  // air, C4 underneath for warmth. Each is a pair of sines detuned four cents
+  // apart through a lowpass — the same construction as chimeVoice — which is
+  // why nothing here buzzes. C is a minor third above the 440Hz ticks, so it
+  // resolves upward and lands clearly without shouting. Decays over ~350ms.
+  //
+  // Scheduled on the AudioContext clock, not with setTimeout: the main thread
+  // is setting the round up at exactly this instant.
+  playGo() {
+    if (!this.enabled || !this.ctx) return;
+    try {
+      const ctx = this.ctx;
+      if (ctx.state === 'suspended') ctx.resume();
+      const t0 = ctx.currentTime;
+
+      // The beater. Linearly-decaying white noise through a bandpass — a
+      // wooden knock, not a snare.
+      const nLen = Math.max(1, Math.floor(ctx.sampleRate * 0.012));
+      const nBuf = ctx.createBuffer(1, nLen, ctx.sampleRate);
+      const nData = nBuf.getChannelData(0);
+      for (let i = 0; i < nLen; i++) {
+        nData[i] = (Math.random() * 2 - 1) * (1 - i / nLen);
+      }
+      const nSrc = ctx.createBufferSource();
+      nSrc.buffer = nBuf;
+      const nBand = ctx.createBiquadFilter();
+      nBand.type = 'bandpass';
+      nBand.frequency.setValueAtTime(900, t0);
+      nBand.Q.setValueAtTime(1.6, t0);
+      const nGain = ctx.createGain();
+      nGain.gain.setValueAtTime(0.042, t0);
+      nGain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.012);
+      nSrc.connect(nBand);
+      nBand.connect(nGain);
+      nGain.connect(ctx.destination);
+      nSrc.start(t0);
+      nSrc.stop(t0 + 0.012);
+
+      // The bar. 5ms behind the knock so the two read as one event.
+      [
+        // freq    at     dur   vol    cut   attack
+        [523.25,  0.005, 0.35, 0.120, 2000, 0.008], // body — C5
+        [1046.50, 0.005, 0.13, 0.034, 3200, 0.008], // octave — air
+        [261.63,  0.005, 0.30, 0.040, 1200, 0.012]  // foundation — C4
+      ].forEach(([freq, at, dur, vol, cut, attack]) => {
+        const startAt = t0 + at;
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(cut, startAt);
+        filter.Q.setValueAtTime(0.5, startAt);
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.0001, startAt);
+        gain.gain.linearRampToValueAtTime(vol, startAt + attack);
+        gain.gain.exponentialRampToValueAtTime(0.001, startAt + dur);
+        filter.connect(gain);
+        gain.connect(ctx.destination);
+        [-4, 4].forEach((cents) => {
+          const osc = ctx.createOscillator();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, startAt);
+          osc.detune.setValueAtTime(cents, startAt);
+          osc.connect(filter);
+          osc.start(startAt);
+          osc.stop(startAt + dur);
+        });
+      });
+    } catch {}
+  }
 
   // 4. Penalty / Miss sound
   playPenalty() {
@@ -101,7 +184,7 @@ class AudioSynthesizer {
         osc.start(t0 + delay);
         osc.stop(t0 + delay + 0.08);
       });
-    } catch (e) {}
+    } catch {}
   }
   playMiss() { this.playPenalty(); }
   playWrongBoom() { this.playPenalty(); }
@@ -125,7 +208,7 @@ class AudioSynthesizer {
         osc.start(t0 + offset);
         osc.stop(t0 + offset + 0.15);
       });
-    } catch (e) {}
+    } catch {}
   }
 
   chimeVoice(freq, startAt, dur, vol, filterFreq = 2600) {
@@ -163,7 +246,7 @@ class AudioSynthesizer {
         this.chimeVoice(freq, t0 + i * 0.08, 0.24, 0.13, 3200);
       });
       this.chimeVoice(1046.50, t0 + 0.26, 0.6, 0.16, 4200);
-    } catch (e) {}
+    } catch {}
   }
 
   setEnabled(status) {
@@ -181,7 +264,7 @@ const getSavedData = () => {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
     return { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0 };
-  } catch (e) {
+  } catch {
     return { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0 };
   }
 };
@@ -189,7 +272,7 @@ const getSavedData = () => {
 const saveData = (data) => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch (e) {}
+  } catch {}
 };
 
 // ============================================================
@@ -204,6 +287,15 @@ export default function CardMatchingClient() {
 
   // Gameplay visual states
   const [cards, setCards] = useState([]);
+  // Face-up preview of a freshly dealt board. Kept separate from
+  // flippedIndices so it can't be mistaken for a real pair-in-progress by the
+  // matching logic — it only affects what a card RENDERS as.
+  const [preview, setPreview] = useState(false);
+  const previewRef = useRef(false);
+  const previewTimerRef = useRef(null);
+  // Bumped on every deal. Used as the grid's React key so a new board mounts
+  // FRESH rather than transitioning out of the previous one — see initGrid.
+  const [dealId, setDealId] = useState(0);
   const [gridCols, setGridCols] = useState(3);
   // Row count is implied by how many cards the level deals; the board's aspect
   // ratio depends on it, so it has to be derived rather than assumed square.
@@ -213,7 +305,6 @@ export default function CardMatchingClient() {
 
   // Stats
   const [score, setScore] = useState(0);
-  const [combo, setCombo] = useState(0);
   const [timeRemaining, setTimeRemaining] = useState(TOTAL_TIME);
   const [dangerLevel, setDangerLevel] = useState(0);
 
@@ -309,18 +400,39 @@ export default function CardMatchingClient() {
     return cardDeck;
   }, []);
 
+  // Shows the dealt board face-up, then flips it down. previewRef is the
+  // authority (the timer interval and the click handler read it synchronously);
+  // the state mirror exists only so the cards re-render.
+  const startPreview = useCallback((cardCount) => {
+    if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+    previewRef.current = true;
+    setPreview(true);
+    previewTimerRef.current = setTimeout(() => {
+      previewTimerRef.current = null;
+      previewRef.current = false;
+      setPreview(false);
+    }, previewMsFor(cardCount));
+  }, []);
+
   const initGrid = useCallback(() => {
     const newDeck = getCardIcons();
     cardsRef.current = newDeck;
     setCards(newDeck);
-    
+    // New key => the whole board REMOUNTS instead of animating out of the old
+    // one. The previous deal left its cards mid-transition (matched cards sat
+    // at opacity-0/scale-50, and a level that changes column count also changes
+    // both grid track lengths), so the next board used to fade and resize its
+    // way in over ~300ms — which is the partial, bottom-row-first load.
+    setDealId((n) => n + 1);
+
     flippedIndicesRef.current = [];
     matchedIndicesRef.current = [];
-    flipCountsRef.current = {}; 
-    
+    flipCountsRef.current = {};
+
     setFlippedIndices([]);
     setMatchedIndices([]);
-  }, [getCardIcons]);
+    startPreview(newDeck.length);
+  }, [getCardIcons, startPreview]);
 
   // === END GAME ===
   const endGame = useCallback(async () => {
@@ -330,6 +442,8 @@ export default function CardMatchingClient() {
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     if (overdriveTimeoutRef.current) clearTimeout(overdriveTimeoutRef.current);
     if (heartbeatTimerRef.current) clearTimeout(heartbeatTimerRef.current);
+    if (previewTimerRef.current) { clearTimeout(previewTimerRef.current); previewTimerRef.current = null; }
+    previewRef.current = false;
 
     audioSynth?.playResultsReveal();
 
@@ -395,9 +509,13 @@ export default function CardMatchingClient() {
       bestCombo: bestComboVal,
       xpEarned: xpResult.xp,
       isNewBest: isNew,
+      prevBest: saved.bestScore,
     });
 
-    if (Capacitor.isNativePlatform()) StatusBar.show().catch(() => {});
+    // The status bar deliberately stays hidden here. Re-showing it resized the
+    // WebView at the exact moment the result screen mounted, so the results
+    // visibly jumped into place. It is restored on unmount instead (see the
+    // mount effect), alongside unlockOrientation().
   }, []);
 
   // === MATCH RESOLUTION ===
@@ -413,7 +531,6 @@ export default function CardMatchingClient() {
       correctMatchesRef.current += 1;
       const currentCombo = comboRef.current;
       comboRef.current += 1;
-      setCombo(comboRef.current);
 
       if (comboRef.current > bestComboRef.current) {
         bestComboRef.current = comboRef.current;
@@ -477,7 +594,6 @@ export default function CardMatchingClient() {
       // clear feedback.
       audioSynth?.playPenalty();
       comboRef.current = 0;
-      setCombo(0);
 
       waitingRef.current = true;
       setTimeout(() => {
@@ -497,6 +613,9 @@ export default function CardMatchingClient() {
 
     if (phase !== 'playing' || timeRemainingRef.current <= 0) return;
     if (waitingRef.current) return;
+    // Board is being shown face-up — taps here would flip a card the player can
+    // already see, and would register as a real flip against their accuracy.
+    if (previewRef.current) return;
     if (matchedIndicesRef.current.includes(index)) return;
     if (flippedIndicesRef.current.includes(index)) return;
     if (flippedIndicesRef.current.length >= 2) return;
@@ -542,6 +661,11 @@ export default function CardMatchingClient() {
       audioSynth?.playGo();
       setPhase('playing');
       gameActiveRef.current = true;
+      // Opening board gets the same face-up preview as every later level. Done
+      // here rather than at deal time because the deck is set before the 3-2-1
+      // countdown, and the countdown overlay dims and blurs the board — showing
+      // the preview behind it would be showing it through frosted glass.
+      startPreview(cardsRef.current.length);
 
       let lastTick = Date.now();
       timerIntervalRef.current = setInterval(() => {
@@ -550,6 +674,13 @@ export default function CardMatchingClient() {
           return;
         }
         const now = Date.now();
+        // Clock is frozen while the board is shown face-up. Advancing lastTick
+        // without spending it is what makes this a PAUSE rather than a debt
+        // that gets deducted in one jump when the preview ends.
+        if (previewRef.current) {
+          lastTick = now;
+          return;
+        }
         const deltaMs = now - lastTick;
         lastTick = now;
 
@@ -569,7 +700,7 @@ export default function CardMatchingClient() {
     setCountdownValue(n);
     audioSynth?.playCountdownTick();
     countdownTimerRef.current = setTimeout(() => runCountdown(n - 1), 700);
-  }, [endGame, scheduleHeartbeat]);
+  }, [endGame, scheduleHeartbeat, startPreview]);
 
   // === ENTER DRILL ===
   const enterDrill = useCallback(() => {
@@ -584,14 +715,20 @@ export default function CardMatchingClient() {
     if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
     if (overdriveTimeoutRef.current) clearTimeout(overdriveTimeoutRef.current);
     if (heartbeatTimerRef.current) clearTimeout(heartbeatTimerRef.current);
+    if (previewTimerRef.current) { clearTimeout(previewTimerRef.current); previewTimerRef.current = null; }
+    previewRef.current = false;
 
     const saved = getSavedData();
 
-    const startLevel = Math.max(1, Math.min(MAX_LEVEL, Math.round((saved.bestLevel || 1) * 0.55)));
+    // Every run starts at the lowest difficulty. It used to start at 55% of the
+    // player's best level, so improving once permanently raised the speed every
+    // future run opened at - a silent spike with nothing on screen explaining it.
+    // That head-start only existed because a fixed 45s was too short to climb the
+    // ramp; the endurance clock replaces it.
+    const startLevel = 1;
     const startPairs = BASE_PAIRS + (startLevel - 1) * LEVEL_STEP;
 
     setScore(0);
-    setCombo(0);
     setTimeRemaining(TOTAL_TIME);
     setDangerLevel(0);
     setFlashes([]);
@@ -628,47 +765,33 @@ export default function CardMatchingClient() {
   }, [getCardIcons, runCountdown]);
 
   // === SHARE SCORE ===
-  const shareResult = useCallback(async () => {
-    if (!endSummary) return;
-    const url = 'https://skilldrills.online/drills/cognitive/memory/card-matching';
-    try {
-      const grade = getGrade(endSummary.accuracy);
-      const canvas = generateShareCard({
-        score: endSummary.score,
-        bestScore,
-        accuracy: endSummary.accuracy,
-        bestCombo: endSummary.bestCombo,
-        rating: { letter: grade.grade, label: grade.label, emoji: grade.emoji },
-        newBest: endSummary.isNewBest,
-        drillName: 'Card Matching',
-        playerName: getPlayerName(),
-      });
-      await shareScoreCard(url, canvas);
-    } catch (e) {
-      const text = `Scored ${endSummary.score} on Card Matching (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — SkillDrills`;
-      if (typeof navigator !== 'undefined' && navigator.share) {
-        navigator.share({ title: 'Card Matching — SkillDrills', text, url }).catch(() => {});
-      } else if (typeof navigator !== 'undefined' && navigator.clipboard) {
-        navigator.clipboard.writeText(`${text} ${url}`);
-      }
-    }
-  }, [endSummary, bestScore]);
-
-  // === HIDE FLOATING EXIT BUTTON WHILE IN DRILL ===
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      document.body.classList.add('hide-drill-controls');
-    }
-    return () => {
-      if (typeof window !== 'undefined') {
-        document.body.classList.remove('hide-drill-controls');
-      }
-    };
-  }, []);
+  // Score card. Drawn and encoded while the result screen sits idle,
+  // not on the tap - see useShareCard in components/ShareScoreCard.js.
+  const shareResult = useShareCard(endSummary ? {
+    score: endSummary.score,
+    bestScore: endSummary.prevBest ?? bestScore,
+    accuracy: endSummary.accuracy,
+    bestCombo: endSummary.bestCombo,
+    rating: getGrade(endSummary.accuracy),
+    newBest: endSummary.isNewBest,
+    drillName: 'Card Matching',
+    playerName: getPlayerName(),
+  } : null, {
+    url: APP_SHARE_URL,
+    title: 'Card Matching — SkillDrills',
+    text: endSummary ? `Scored ${endSummary.score} on Card Matching (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — SkillDrills` : '',
+  });
 
   // === ON MOUNT ===
   useEffect(() => {
     setIsClient(true);
+
+    // Take the status-bar area now, behind the 200ms loading screen, rather
+    // than when the player taps START. overlaysWebView:true makes the window
+    // layout size independent of whether the bar is showing, so this drill's
+    // StatusBar.hide() no longer resizes the WebView under the "3 · 2 · 1 · GO"
+    // overlay — which is what made the first digit shift into place.
+    if (Capacitor.isNativePlatform()) StatusBar.setOverlaysWebView({ overlay: true }).catch(() => {});
     mountedRef.current = true;
     
     const saved = getSavedData();
@@ -687,8 +810,13 @@ export default function CardMatchingClient() {
       if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
       if (overdriveTimeoutRef.current) clearTimeout(overdriveTimeoutRef.current);
       if (heartbeatTimerRef.current) clearTimeout(heartbeatTimerRef.current);
+      if (previewTimerRef.current) { clearTimeout(previewTimerRef.current); previewTimerRef.current = null; }
+      previewRef.current = false;
       unlockOrientation();
-      if (Capacitor.isNativePlatform()) StatusBar.show().catch(() => {});
+      if (Capacitor.isNativePlatform()) {
+        StatusBar.setOverlaysWebView({ overlay: false }).catch(() => {});
+        StatusBar.show().catch(() => {});
+      }
     };
   }, []);
 
@@ -696,7 +824,7 @@ export default function CardMatchingClient() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#050508]">
         <div className="text-center">
-          <div className="w-14 h-14 border-4 border-pink-500 border-t-transparent rounded-full animate-spin mx-auto mb-4 shadow-[0_0_20px_rgba(236,72,153,0.5)]"></div>
+          <div className="w-14 h-14 border-4 border-violet-500 border-t-transparent rounded-full animate-spin mx-auto mb-4 shadow-[0_0_20px_rgba(139,92,246,0.5)]"></div>
           <p className="text-slate-500 font-bold tracking-widest uppercase text-[10px] animate-pulse">Loading Memory Engine...</p>
         </div>
       </div>
@@ -782,13 +910,13 @@ export default function CardMatchingClient() {
         {/* ── START SCREEN ── */}
         {phase === 'start' && (
           <div className="relative h-full flex items-center justify-center p-5 overflow-y-auto z-40">
-            <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(236,72,153,.16), transparent 70%)' }} />
+            <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(139,92,246,.16), transparent 70%)' }} />
             <div className="relative w-full max-w-[290px] rounded-[20px] border border-white/5 bg-[#0c0c16]/90 backdrop-blur-lg px-5 pt-5 pb-[18px] text-center shadow-[0_16px_40px_rgba(0,0,0,.5)] my-6">
-              <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-pink-500 to-rose-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(236,72,153,.35)]">
+              <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(139,92,246,.35)]">
                 <Compass className="w-[22px] h-[22px] text-white" />
               </div>
-              <h1 className="text-[17px] font-bold tracking-tight text-white">Card Matching</h1>
-              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mt-1">45-second run</p>
+              <h1 className="font-display text-[32px] sm:text-[38px] text-white">Card Matching</h1>
+              <p className="text-[9px] label-tiny text-slate-500 mt-1">45-second run</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
                 <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Flip cards and match the pairs</>} />
@@ -799,12 +927,12 @@ export default function CardMatchingClient() {
               <div className="grid grid-cols-3 gap-1.5 mt-3.5">
                 <MiniStat label="Best" value={bestScore} color="text-yellow-400" />
                 <MiniStat label="Combo" value={`${bestCombo}x`} color="text-orange-400" />
-                <MiniStat label="Level" value={`Lv.${bestLevel}`} color="text-pink-400" />
+                <MiniStat label="Level" value={`Lv.${bestLevel}`} color="text-violet-400" />
               </div>
 
               <button
                 onClick={enterDrill}
-                className="w-full mt-3.5 py-[11px] rounded-[13px] bg-gradient-to-r from-pink-500 to-rose-600 font-bold text-[12.5px] tracking-wide active:scale-[0.97] transition-transform shadow-[0_0_20px_rgba(236,72,153,.3)] cursor-pointer text-white"
+                className="w-full mt-3.5 py-[11px] rounded-[13px] bg-gradient-to-r from-violet-600 to-indigo-600 font-bold text-[12.5px] tracking-wide active:scale-[0.97] transition-transform shadow-[0_0_20px_rgba(139,92,246,.3)] cursor-pointer text-white"
               >
                 START
               </button>
@@ -816,21 +944,26 @@ export default function CardMatchingClient() {
         {(phase === 'playing' || phase === 'countdown') && (
           <>
             <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
-              <span className="text-2xl font-black text-white leading-none tabular-nums">{score}</span>
+              <span className="text-2xl font-hud font-bold text-white leading-none tabular-nums">{score}</span>
             </div>
 
             {/* Timer overlay at top-right */}
             <div className="absolute top-5 right-5 z-40 flex flex-col items-end pointer-events-none select-none">
-              <span className={`text-3xl font-black font-mono leading-none tabular-nums ${timeRemaining <= 10 ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}>
+              <span className={`text-3xl font-hud font-bold leading-none tabular-nums ${timeRemaining <= 10 ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}>
                 {Math.ceil(timeRemaining)}s
               </span>
-              <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest mt-1">Time Left</span>
+              <span className="text-[8px] label-tiny text-slate-500 mt-1">Time Left</span>
             </div>
 
             {/* Grid cells */}
             <div className="relative w-full h-[100dvh] flex flex-col items-center justify-center p-4">
               <div
-                className="grid mx-auto relative transition-all duration-300"
+                key={dealId}
+                // No `transition-all` here. Animating the grid is what made a
+                // new level resize into place instead of simply appearing; with
+                // the per-deal key above, each board mounts at its final
+                // geometry in one frame.
+                className="grid mx-auto relative"
                 style={(() => {
                   // Cards are square BY CONSTRUCTION: one cell edge is computed
                   // once and used for both the column and the row tracks, so
@@ -845,9 +978,24 @@ export default function CardMatchingClient() {
                   // Tight gaps so the board reads as one grid rather than
                   // scattered tiles.
                   const gapPx = cards.length >= 24 ? 2 : 3;
+                  // A THIRD cap, on the cell rather than the board.
+                  //
+                  // The first two caps size the BOARD, which meant every level
+                  // filled the same 78vw of screen and the cell size fell out
+                  // of the column count: the 3-column board rendered ~108px
+                  // cards while every 4-column board rendered ~80px ones. So a
+                  // card visibly changed size between levels, and the 3x4 was
+                  // the outlier that read as oversized.
+                  //
+                  // Capping the cell instead makes a card the same size at
+                  // every level and lets the board shrink to fit its contents,
+                  // which is what actually makes the 3x4 smaller. 84px stays
+                  // far above the ~44px comfortable touch target.
+                  const maxCellPx = 84;
+                  const maxBoardPx = gridCols * maxCellPx + (gridCols - 1) * gapPx;
                   // Board width is capped on BOTH axes so taller layouts (more
                   // rows than columns) still fit on screen without compression.
-                  const boardW = `min(78vw, ${(70 * gridCols / gridRows).toFixed(2)}vh)`;
+                  const boardW = `min(78vw, ${(70 * gridCols / gridRows).toFixed(2)}vh, ${maxBoardPx}px)`;
                   const cell = `calc((${boardW} - ${(gridCols - 1) * gapPx}px) / ${gridCols})`;
                   return {
                     gridTemplateColumns: `repeat(${gridCols}, ${cell})`,
@@ -857,7 +1005,8 @@ export default function CardMatchingClient() {
                 })()}
               >
                 {cards.map((card, index) => {
-                  const isFlipped = flippedIndices.includes(index);
+                  // `preview` shows the whole board face-up on a fresh deal.
+                  const isFlipped = preview || flippedIndices.includes(index);
                   const isMatched = matchedIndices.includes(index);
                   const IconComp = card.icon;
 
@@ -869,7 +1018,27 @@ export default function CardMatchingClient() {
                       className={`
                         w-full h-full rounded-xl transition-all duration-300 flex items-center justify-center focus:outline-none touch-none relative overflow-hidden
                         ${isMatched ? 'opacity-0 pointer-events-none scale-50' : ''}
-                        ${isFlipped ? 'bg-slate-800 border border-slate-600 scale-95 shadow-inner' : 'bg-gradient-to-br from-pink-500 to-rose-600 border border-pink-400 hover:scale-[1.03] active:scale-95 shadow-md cursor-pointer'}
+                        ${isFlipped
+                          // Revealed face: near-black, not the old slate grey.
+                          // Grey sat halfway between the board and the back and
+                          // muddied both; black reads as a genuine "hole" in the
+                          // board and gives the coloured shape maximum contrast.
+                          ? 'bg-[#07070d] border border-[#39325f] scale-95 shadow-inner'
+                          // Face-down back: deliberately quiet. Every back is
+                          // identical, so this surface carries NO information —
+                          // and it covers most of the screen. The old saturated
+                          // pink spent all that area on nothing and competed
+                          // with the revealed icons, which are the thing the
+                          // player is actually trying to encode. Deep slate with
+                          // a violet edge keeps it on-theme while letting the
+                          // faces win the contrast.
+                          // Lifted from the first pass (#1e1b3a -> #141225),
+                          // which went too far the other way and left the board
+                          // reading as near-empty. This keeps the "quiet back"
+                          // logic but puts real light in it, so a face-down card
+                          // is clearly a card — while still sitting well below
+                          // the revealed shapes in contrast.
+                          : 'bg-gradient-to-br from-[#3b3474] to-[#251f47] border border-[#8272de] shadow-[0_2px_8px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(196,181,253,0.30)] hover:scale-[1.03] active:scale-95 cursor-pointer'}
                       `}
                       // No inline height clamp here. A maxHeight of 74px used to
                       // sit on this button and was the reason the cards could
@@ -880,10 +1049,26 @@ export default function CardMatchingClient() {
                       // w-full/h-full is all that is needed.
                       aria-label="Card"
                     >
-                      {isFlipped && (
-                        <div className="animate-in zoom-in fade-in duration-200">
-                          <IconComp className={`w-5 h-5 sm:w-7 sm:h-7 ${card.color}`} />
+                      {isFlipped ? (
+                        // Sized as a FRACTION of the card, not a fixed px value.
+                        // The cell is now a computed length that varies with
+                        // level and screen, so a hardcoded w-7 filled a 108px
+                        // card very differently from an 84px one. 46% keeps the
+                        // shape the same visual weight on every board.
+                        // Weight comes from a heavier STROKE, deliberately not
+                        // from `fill-current`. Filling these lucide glyphs
+                        // collapses distinct symbols into identical solids —
+                        // Circle, Target and Clock all become the same disc, and
+                        // Square and Grid the same square. In a matching drill
+                        // that destroys the very thing the player is matching on.
+                        <div className="animate-in zoom-in fade-in duration-200 w-[46%] h-[46%] flex items-center justify-center">
+                          <IconComp className={`w-full h-full ${card.color}`} strokeWidth={2.25} />
                         </div>
+                      ) : (
+                        // Faint emblem so a face-down card still reads as a
+                        // designed object rather than an empty tile — quiet
+                        // enough that it never reads as a symbol to remember.
+                        <span className="w-[26%] h-[26%] rounded-[6px] border-[1.5px] border-violet-300/40" />
                       )}
                       {bursts.filter(b => b.index === index).map(b => (
                         <div key={b.id} className="fx-burst" style={{ borderColor: b.color === 'cyan' ? '#06b6d4' : '#ef4444' }} />
@@ -899,11 +1084,11 @@ export default function CardMatchingClient() {
 
         {/* ── COUNTDOWN ── */}
         {phase === 'countdown' && (
-          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/55 backdrop-blur-[2px]">
+          <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/55">
             <span className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">Get Ready</span>
-            <div className="relative w-28 h-28 rounded-full border-[3px] border-pink-500/20 flex items-center justify-center">
-              <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-pink-400 border-r-pink-400 animate-spin" style={{ animationDuration: '0.7s' }} />
-              <span key={countdownValue} className="fx-pop-in text-5xl font-black bg-gradient-to-b from-white to-pink-300 bg-clip-text text-transparent">
+            <div className="relative w-28 h-28 rounded-full border-[3px] border-violet-500/20 flex items-center justify-center">
+              <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-violet-400 border-r-violet-400 animate-spin" style={{ animationDuration: '0.7s' }} />
+              <span key={countdownValue} className="fx-pop-in text-5xl font-display bg-gradient-to-b from-white to-violet-300 bg-clip-text text-transparent">
                 {countdownValue > 0 ? countdownValue : 'GO'}
               </span>
             </div>
@@ -913,7 +1098,7 @@ export default function CardMatchingClient() {
 
         {/* ── RESULT SCREEN ── */}
         {phase === 'ended' && endSummary && (
-          <ResultScreen summary={endSummary} onPlayAgain={enterDrill} onShare={shareResult} />
+          <ResultScreen summary={endSummary} bestScore={bestScore} onPlayAgain={enterDrill} onShare={shareResult} />
         )}
       </div>
     </DrillWrapper>
@@ -936,13 +1121,13 @@ function HowToRow({ icon, node }) {
 function MiniStat({ label, value, color }) {
   return (
     <div className="rounded-[9px] border border-white/5 bg-white/[0.02] py-1.5 px-1 text-center">
-      <div className={`text-[12px] font-bold ${color}`}>{value}</div>
-      <div className="text-[7.5px] uppercase tracking-wide text-slate-500 font-bold mt-0.5">{label}</div>
+      <div className={`text-[12px] font-hud font-bold ${color}`}>{value}</div>
+      <div className="text-[7.5px] label-tiny text-slate-500 mt-0.5">{label}</div>
     </div>
   );
 }
 
-function ResultScreen({ summary, onPlayAgain, onShare }) {
+function ResultScreen({ summary, bestScore, onPlayAgain, onShare }) {
   const grade = getGrade(summary.accuracy);
   const gradeColor = grade.grade === 'S+' || grade.grade === 'S' ? '#fbbf24' : '#a78bfa';
 
@@ -950,28 +1135,28 @@ function ResultScreen({ summary, onPlayAgain, onShare }) {
     <div className="absolute inset-0 z-40 flex" style={{ background: 'rgba(5,5,8,0.97)' }}>
       <div className="w-[36%] flex flex-col items-center justify-center gap-1.5 border-r border-white/5" style={{ background: 'radial-gradient(ellipse 260px 200px at 50% 30%, rgba(250,204,21,.08), transparent 70%)' }}>
         {summary.isNewBest && (
-          <span className="text-[9.5px] font-bold text-yellow-400 bg-yellow-500/10 border border-yellow-500/25 px-2.5 py-0.5 rounded-full mb-1">NEW BEST</span>
+          <span className="text-[11px] font-display text-yellow-400 bg-yellow-500/10 border border-yellow-500/25 px-2.5 py-1 rounded-full mb-1">NEW BEST</span>
         )}
-        <div className="text-5xl sm:text-6xl font-black leading-none" style={{ color: gradeColor }}>{grade.grade}</div>
-        <div className="text-[10px] uppercase tracking-widest text-slate-500">{grade.label}</div>
-        <div className="text-3xl sm:text-4xl font-black text-white mt-1 tabular-nums">{summary.score.toLocaleString()}</div>
-        <div className="text-[9px] uppercase tracking-widest text-slate-500">Points</div>
+        <div className="text-5xl sm:text-6xl font-display leading-none" style={{ color: gradeColor }}>{grade.grade}</div>
+        <div className="text-[10px] label-tiny text-slate-500">{grade.label}</div>
+        <div className="text-3xl sm:text-4xl font-display text-white mt-1 tabular-nums">{summary.score.toLocaleString()}</div>
+        <div className="text-[9px] label-tiny text-slate-500">Points</div>
       </div>
 
       <div className="flex-1 flex flex-col justify-center gap-3 px-6 sm:px-8 py-4 min-w-0">
         <div className="grid grid-cols-3 gap-2">
+          <ResultStat label="Best Score" value={(bestScore ?? 0).toLocaleString()} color="text-yellow-400" />
           <ResultStat label="Accuracy" value={`${summary.accuracy}%`} color="text-blue-400" />
-          <ResultStat label="Combo" value={`${summary.bestCombo}x`} color="text-orange-400" />
           <ResultStat label="XP" value={`+${summary.xpEarned}`} color="text-violet-400" />
         </div>
         <div className="flex gap-2">
-          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-pink-500 to-rose-600 text-white font-bold text-xs uppercase tracking-wide cursor-pointer">
+          <button onClick={onPlayAgain} className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-extrabold text-xs uppercase tracking-wider cursor-pointer">
             Play Again
           </button>
-          <button onClick={onShare} className="w-11 flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer">
+          <button onClick={onShare} className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer">
             <Share2 className="w-4 h-4" />
           </button>
-          <Link href="/drills/cognitive" className="w-11 flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white">
+          <Link href="/drills/cognitive" className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white">
             <ArrowLeft className="w-4 h-4 text-slate-400" />
           </Link>
         </div>
@@ -983,8 +1168,8 @@ function ResultScreen({ summary, onPlayAgain, onShare }) {
 function ResultStat({ label, value, color }) {
   return (
     <div className="rounded-[11px] border border-white/5 bg-white/[0.03] py-2 px-1 text-center">
-      <div className={`text-sm font-black ${color} tabular-nums`}>{value}</div>
-      <div className="text-[7.5px] uppercase tracking-wide text-slate-500 font-bold mt-0.5">{label}</div>
+      <div className={`text-sm font-hud font-bold ${color} tabular-nums`}>{value}</div>
+      <div className="text-[7.5px] label-tiny text-slate-500 mt-0.5">{label}</div>
     </div>
   );
 }

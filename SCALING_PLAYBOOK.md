@@ -60,11 +60,24 @@ A full load audit was already carried out. These are fixed and shipped:
 7. Live duel score sync 800ms → 5s (`SCORE_SYNC_INTERVAL_MS` in
    `components/DrillWrapper.js`). This was the single biggest cost.
 
-**Capacity after all that, on the free tier:** ~550 duel matches/day, ~400
-duelling players/day, ~500 Arena browsers/day, solo-only players effectively
-unlimited. These are DAILY CUMULATIVE limits — concurrency is a non-issue,
-Firestore allows a million simultaneous connections. "500 people at once" is
-fine; "500 people duelling over 24 hours" is the ceiling.
+**Then, 2026-08-24: the mid-duel score sync was deleted outright.** Nothing
+displayed the running value (the snapshot listener swallowed playing→playing
+updates and the result screen uses the separately-submitted final scores), and
+both walk-out paths — `forfeitMatch` and `resolveAbandonedMatch` — force the
+winner regardless of score, so it only ever decorated the history row of an
+abandoned match. Those rows now read 0–0 and lead with "won/lost by forfeit".
+This removed ~6 writes per player per duel, about a third of a duel's cost.
+**Do not reintroduce a live opponent score without pricing the writes first** —
+and note the design decision behind it: a blind 30s duel with a reveal at the
+end was judged better than one where a player who sees they're far ahead coasts
+and one who sees they're far behind gives up.
+
+**Capacity after all that, on the free tier:** roughly 800 duel matches/day
+(~550 before the score sync was deleted), ~400+ duelling players/day, ~500
+Arena browsers/day, solo-only players effectively unlimited. These are DAILY
+CUMULATIVE limits — concurrency is a non-issue, Firestore allows a million
+simultaneous connections. "500 people at once" is fine; "500 people duelling
+over 24 hours" is the ceiling.
 
 ### What to do, in this order
 
@@ -127,6 +140,80 @@ first.** This is almost always the right answer and it is nearly free:
 
 ---
 
+## Firestore — what is actually live right now (checked & deployed 2026-09-01)
+
+Plain-language state of the database, so nobody has to go digging in the console.
+
+| Thing | State |
+|---|---|
+| Database | `(default)`, Firestore **Native** mode, STANDARD edition |
+| Security rules | **Live and identical to `firestore.rules` in this repo** — the CLI reported "already up to date" and re-released them |
+| Composite indexes | **None, and none are needed** (see the section below) |
+| Field exemptions | One: `users.photoURL` is no longer indexed |
+| Collections in use | `users`, `usernames`, `challenges`, `matchmaking_queue` |
+| Data integrity | 2 user docs ↔ 2 username reservations, no orphans, **no doc carries a legacy `email` field** |
+| Automated backups | **None configured** (Firestore backups need the Blaze plan) |
+
+Deploy both halves any time with:
+
+    firebase deploy --only firestore:rules
+    firebase deploy --only firestore:indexes
+
+`firebase firestore:indexes` prints what is live, so you can always compare it
+against `firestore.indexes.json` without opening the console.
+
+### Two levers left deliberately unpulled
+
+- **Completed duels are never deleted.** The cleanup sweep in
+  `challengeEngine.js` only removes stale `pending`/`accepted`/`declined`
+  invites; a `completed` challenge is kept forever on purpose, because
+  `firestore.rules` reads it back with `getAfter()` to prove a stat write came
+  from a real match, and its immutability is what stops one match id being
+  replayed. Each doc is small, so this is a storage question and not an urgent
+  one — but it grows with every duel ever played. If storage ever becomes the
+  pinch, the fix is a **TTL policy** on the challenge docs rather than a code
+  change. Be aware that expiring them also removes that far back in a player's
+  Arena match history, so it is a product decision, not just cleanup.
+- **Backups.** Nothing is backed up. With a handful of test accounts that costs
+  nothing to ignore; once real players have EIQ and win/loss records worth
+  keeping, turn on a backup schedule (needs Blaze) before you need it.
+
+
+## Firestore indexes — why `firestore.indexes.json` is (almost) empty
+
+Checked every query in the app on 2026-09-01. **No composite index is needed,
+and none is declared.** That is not an oversight:
+
+- Firestore auto-creates a single-field index for every field, so a query with
+  ONE `where` (or one `orderBy`, like the leaderboard's `orderBy('eiq','desc')`)
+  is served with no configuration.
+- A query with SEVERAL `where(... '==' ...)` filters and no `orderBy` is served
+  by merging those single-field indexes. Every multi-filter query here is that
+  shape — `fromUid` + `status`, `toUid` + `status`, `toUid` + `status` on the
+  open-challenge feed. **A composite index is only required when you mix a
+  filter with an `orderBy`/range on a DIFFERENT field.**
+- So if you ever add an `orderBy` next to a `where` — say, ordering open
+  challenges by `createdAt` in the query instead of sorting in JS the way
+  `HomePageClient.js` does today — that query WILL need a composite index and
+  will fail until one exists. Add it here and redeploy rather than clicking the
+  link in the console error, so the repo stays the source of truth.
+
+### The one entry that IS here: `users.photoURL` is exempt from indexing
+
+Profile photos are stored inline on the user document as a base64 `data:` URL
+(no Firebase Storage, no Blaze plan needed) and `firestore.rules` caps them just
+under 300 KB. Firestore would otherwise index that whole string twice, ascending
+and descending, on a field nothing ever queries or sorts by — roughly doubling
+the storage each user document costs and slowing every profile write. The
+exemption turns that off. It is safe precisely because `photoURL` is only ever
+read back as a value, never filtered or ordered on; if that ever changes, this
+override has to go first or the new query will not work.
+
+Deploy with:
+
+    firebase deploy --only firestore:indexes
+
+
 ## Quick reference for future me
 
 | Question | Answer |
@@ -134,7 +221,7 @@ first.** This is almost always the right answer and it is nearly free:
 | Can it crash from too many users? | No. Static app, solo play is offline. |
 | What breaks then? | Firestore refuses requests when the daily free quota is gone. |
 | Will Crashlytics tell me? | **No.** Check Firestore → Usage instead. |
-| How many can it handle free? | ~550 duels/day. Solo players: unlimited. |
+| How many can it handle free? | ~800 duels/day. Solo players: unlimited. |
 | Concurrent user limit? | Effectively none. The limits are daily totals. |
 | First thing to do when it breaks? | Switch to Blaze + set a budget alert. |
 | Could I get a surprise bill? | Very unlikely — no Cloud Functions, no Storage. |

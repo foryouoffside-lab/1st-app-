@@ -14,7 +14,7 @@
 // treatment (sparkle dots + Crown/violet accents) so it reads as part of the
 // same reward system rather than a new one-off style.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Crown, Zap, Sparkles, Flame } from 'lucide-react';
 
 const AUTO_DISMISS_MS = 4500;
@@ -27,11 +27,8 @@ function buildLines(detail) {
   if (detail.leveledUp) {
     lines.push({ icon: Crown, color: 'text-yellow-400', text: `Level ${detail.leveledUp} reached!` });
   }
-  if (detail.missionComplete) {
-    lines.push({ icon: Sparkles, color: 'text-cyan-400', text: "Today's mission complete!" });
-  }
   if (detail.dailyChallengeSetComplete) {
-    lines.push({ icon: Sparkles, color: 'text-cyan-400', text: 'All 3 daily challenges complete — 2x XP!' });
+    lines.push({ icon: Sparkles, color: 'text-cyan-400', text: "All 3 of today's drills complete!" });
   } else if (detail.dailyChallengeCompleted) {
     lines.push({ icon: Sparkles, color: 'text-cyan-400', text: 'Daily challenge complete!' });
   }

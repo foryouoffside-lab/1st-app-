@@ -29,7 +29,11 @@ import {
   reauthenticateWithPopup,
   reauthenticateWithCredential,
 } from 'firebase/auth';
+// Safe to import here: lib/challengeEngine.js only reaches for lib/firebase.js
+// and react, never back into this file, so there is no import cycle.
+import { leaveMatchmakingQueue } from '../lib/challengeEngine';
 import { clearAllProgress } from '../lib/progressStore';
+import { setPlayerName } from '../lib/playerIdentity';
 
 const AuthContext = createContext({
   user: null,
@@ -51,9 +55,9 @@ const fallbackAvatar = (seed) =>
   `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(seed)}`;
 
 // Warms the browser's own image cache for this user's profile photo as
-// early as possible — the header (components/MobileHeader.js) shows it on
-// every single screen, so the sooner this fetch starts, the less often
-// that header is still on its placeholder by the time it renders.
+// early as possible — the Arena, Progress, the drill shell and the sign-in
+// gate all render it, so the sooner this fetch starts, the less often those
+// screens are still on their placeholder by the time they render.
 // referrerPolicy matches Avatar.js: Capacitor serves the app from an
 // unusual origin (https://localhost), and Google's photo CDN can reject a
 // request that carries that origin's Referer header.
@@ -205,6 +209,15 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [dbInstance, setDbInstance] = useState(null);
   const [authInstance, setAuthInstance] = useState(null);
+
+  // Publish the username for the non-React readers — chiefly the shared score
+  // card, which is drawn by a plain function called from ~24 drills and so has
+  // no way to reach this context. Keyed on the whole `user` so it re-syncs on
+  // every path that sets it (cache paint, auth listener, signup completion,
+  // sign-out) rather than duplicating a call at each setUser site.
+  useEffect(() => {
+    setPlayerName(user?.displayName || null);
+  }, [user]);
 
   // 1. Initialize Firebase and subscribe to real auth state. `onAuthStateChanged`
   //    is the source of truth for whether a session is active — the localStorage
@@ -396,7 +409,18 @@ export function AuthProvider({ children }) {
     try {
       const nameRef = doc(dbInstance, 'usernames', nameKey);
       const nameSnap = await getDoc(nameRef);
-      if (nameSnap.exists()) return { ok: false, error: 'That name is already taken.' };
+      // A reservation this SAME uid already owns is not someone else's name —
+      // it is this account's own leftover. That happens when a deletion got
+      // part-way through (profile doc gone, reservation still standing) and
+      // the player signs back in to the same Google account, which keeps the
+      // same uid. Treating it as "taken" would lock a person out of their own
+      // name forever, because firestore.rules has no path that hands a
+      // reservation to anybody else. Reuse it instead: it already points where
+      // it should, so the batch below simply skips re-writing it.
+      const ownStaleReservation = nameSnap.exists() && nameSnap.data()?.uid === pendingSignup.uid;
+      if (nameSnap.exists() && !ownStaleReservation) {
+        return { ok: false, error: 'That name is already taken.' };
+      }
 
       // Fallback check for pre-existing accounts not yet in usernames/ (see
       // note above) — exact-match only, but that's the same guarantee this
@@ -405,7 +429,9 @@ export function AuthProvider({ children }) {
       const usersRef = collection(dbInstance, 'users');
       const q = query(usersRef, where('displayName', '==', clean));
       const snap = await getDocs(q);
-      if (!snap.empty) return { ok: false, error: 'That name is already taken.' };
+      if (snap.docs.some((d) => d.id !== pendingSignup.uid)) {
+        return { ok: false, error: 'That name is already taken.' };
+      }
 
       // email deliberately left off this doc — users/{uid} is world-readable
       // (leaderboards/opponent cards need it), so email lives only in
@@ -429,7 +455,12 @@ export function AuthProvider({ children }) {
       // path for usernames/{name}) and NEITHER document is written, so the
       // profile can never exist without a matching reservation.
       const batch = writeBatch(dbInstance);
-      batch.set(nameRef, { uid: pendingSignup.uid });
+      // Skipped when this uid already holds the reservation — rewriting it
+      // would be an `update`, which firestore.rules forbids outright, and the
+      // whole batch (profile included) would be rejected.
+      if (!ownStaleReservation) {
+        batch.set(nameRef, { uid: pendingSignup.uid });
+      }
       batch.set(doc(dbInstance, 'users', pendingSignup.uid), publicProfile);
       await batch.commit();
 
@@ -449,9 +480,29 @@ export function AuthProvider({ children }) {
 
   const signOut = async () => {
     if (user && dbInstance) {
+      // Take down everything that advertises this player as available before
+      // dropping the session. Signing out used to write `online: false` and
+      // nothing else, which left two things pointing at an account that was
+      // no longer there:
+      //
+      //  - a matchmaking_queue row, if they signed out mid-search. Another
+      //    player could still match it and would then sit through the whole
+      //    accept timeout waiting on somebody who had logged out. It ages out
+      //    on its own after MATCHMAKING_FRESHNESS_MS, but not before someone
+      //    can pair with it.
+      //  - a `busyUntil` claim, if they signed out shortly after a duel. That
+      //    hides them from every other player's opponent list for the rest of
+      //    BUSY_TTL_MS — including from themselves after signing back in,
+      //    since the claim is on the profile, not the session.
+      //
+      // Both are fire-and-forget: a sign-out must never fail or hang on
+      // cleanup, and both self-heal on their own timers if the writes don't
+      // land.
+      leaveMatchmakingQueue(user.uid).catch(() => {});
       try {
         await updateDoc(doc(dbInstance, 'users', user.uid), {
           online: false,
+          busyUntil: 0,
           lastSeen: serverTimestamp()
         });
       } catch (e) {
@@ -474,6 +525,34 @@ export function AuthProvider({ children }) {
   //    Deleting a Firebase Auth user can require a very recent sign-in
   //    (auth/requires-recent-login) — if so, silently re-authenticate via
   //    Google once and retry, rather than failing the whole deletion.
+  // Firebase refuses deleteUser() on a session older than a few minutes
+  // (auth/requires-recent-login), so the account has to be re-authenticated.
+  //
+  // On the WEB that re-authentication is a popup, and a browser only allows
+  // window.open while a user gesture is still fresh. This used to be done
+  // lazily, from the catch around deleteUser() further down — by which point
+  // several awaited Firestore round-trips (the challenge sweep, the profile
+  // doc) had already run, the click was long stale, and the browser blocked
+  // the popup outright. That is the `auth/popup-blocked` the Delete Account
+  // button failed with in a browser: the deletion had already half-happened,
+  // and then the sign-in it needed to finish could never open.
+  //
+  // So it runs FIRST instead, before a single await, while the gesture that
+  // opened the confirm() is still live. Native is unaffected either way (the
+  // Google Sign-In SDK is not a popup), but both paths share this helper so
+  // they cannot drift apart again.
+  const REAUTH_AFTER_MS = 4 * 60 * 1000;
+
+  const reauthenticate = async () => {
+    if (Capacitor.isNativePlatform()) {
+      const result = await FirebaseAuthentication.signInWithGoogle({ useCredentialManager: false });
+      const credential = GoogleAuthProvider.credential(result.credential?.idToken);
+      await reauthenticateWithCredential(authInstance.currentUser, credential);
+    } else {
+      await reauthenticateWithPopup(authInstance.currentUser, new GoogleAuthProvider());
+    }
+  };
+
   const deleteAccount = async () => {
     if (!authInstance?.currentUser || !dbInstance || !user) {
       return { ok: false, error: 'Not signed in.' };
@@ -481,6 +560,14 @@ export function AuthProvider({ children }) {
     const uid = user.uid;
 
     try {
+      // Re-auth up front if the session is old enough that deleteUser() would
+      // demand it. Nothing has been deleted yet at this point, so a cancelled
+      // or blocked sign-in here leaves the account completely intact.
+      const lastSignIn = Date.parse(authInstance.currentUser.metadata?.lastSignInTime || '');
+      if (!Number.isFinite(lastSignIn) || Date.now() - lastSignIn > REAUTH_AFTER_MS) {
+        await reauthenticate();
+      }
+
       // Delete duel/challenge history this account is part of
       try {
         const fromQ = query(collection(dbInstance, 'challenges'), where('fromUid', '==', uid));
@@ -501,19 +588,21 @@ export function AuthProvider({ children }) {
         console.error('Failed to delete profile doc:', e);
       }
 
+      // The usernames/{name} reservation is deliberately LEFT STANDING. A name
+      // is claimed permanently: deleting the account must not put it back in
+      // circulation for someone else to take (see firestore.rules). If this
+      // same person signs in again with the same Google account, completeSignup
+      // recognises the reservation as their own and lets them re-take it.
+
 
       // Delete the actual Firebase Auth login
       try {
         await deleteUser(authInstance.currentUser);
       } catch (e) {
         if (e?.code === 'auth/requires-recent-login') {
-          if (Capacitor.isNativePlatform()) {
-            const result = await FirebaseAuthentication.signInWithGoogle({ useCredentialManager: false });
-            const credential = GoogleAuthProvider.credential(result.credential?.idToken);
-            await reauthenticateWithCredential(authInstance.currentUser, credential);
-          } else {
-            await reauthenticateWithPopup(authInstance.currentUser, new GoogleAuthProvider());
-          }
+          // Safety net: the up-front check above normally makes this
+          // unreachable, but a session can cross the threshold mid-deletion.
+          await reauthenticate();
           await deleteUser(authInstance.currentUser);
         } else {
           throw e;
@@ -532,7 +621,15 @@ export function AuthProvider({ children }) {
       return { ok: true };
     } catch (err) {
       console.error('Failed to delete account:', err);
-      return { ok: false, error: err.message || 'Something went wrong — try again.' };
+      // Raw Firebase codes ("Firebase: Error (auth/popup-blocked).") mean
+      // nothing to a player, and these three are the ones a real person
+      // actually hits.
+      const friendly = {
+        'auth/popup-blocked': 'Your browser blocked the sign-in window. Allow pop-ups for this site, then try again.',
+        'auth/popup-closed-by-user': 'Sign-in was cancelled, so nothing was deleted.',
+        'auth/cancelled-popup-request': 'Sign-in was cancelled, so nothing was deleted.',
+      }[err?.code];
+      return { ok: false, error: friendly || err.message || 'Something went wrong — try again.' };
     }
   };
 

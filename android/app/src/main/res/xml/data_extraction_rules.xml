@@ -1,15 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Android 12+ (API 31+) backup/transfer config. Excludes the WebView's own
-  storage (localStorage/IndexedDB/cookies), which is where the cached user
-  session (including email) lives — see contexts/AuthContext.js's
-  SESSION_KEY. Solo drill progress lives in @capacitor/preferences
-  (SharedPreferences, a separate location) and is intentionally NOT excluded
-  here, so it still survives cloud backup or device-to-device transfer.
+  Android 12+ (API 31+) backup/transfer config.
+
+  app_webview/ is excluded from BOTH paths: it is the WebView's own storage
+  (localStorage/IndexedDB/cookies), where the cached user session including
+  email lives. See contexts/AuthContext.js's SESSION_KEY.
+
+  CapacitorStorage.xml — the SharedPreferences file @capacitor/preferences
+  writes, i.e. all solo drill progress (sd_scores, sd_xp, sd_streak,
+  sd_history) — is excluded from cloud-backup ONLY, and the distinction is the
+  whole point:
+
+  - cloud-backup keeps a SNAPSHOT in the player's Google account, and that
+    snapshot can be STALE. That is what broke "Delete Account & Wipe Data":
+    clearAllProgress() emptied the file on the device, Google still held the
+    pre-wipe copy, and Android restored it on the next install. The player was
+    told their data was permanently deleted and then watched it come back. A
+    delete a cloud restore can undo is not a delete.
+
+  - device-transfer is a DIRECT copy of the phone's CURRENT state during new
+    device setup. It cannot resurrect wiped data, because by then the wiped
+    state is the current state. So it is safe to keep, and moving to a new
+    phone still carries solo progress across.
+
+  Net effect: deleting your data is permanent and immediate, while a genuine
+  phone-to-phone upgrade still keeps your progress. Identity (username, photo,
+  EIQ, Arena record) is in Firestore either way.
 -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="root" path="app_webview/" />
+        <exclude domain="sharedpref" path="CapacitorStorage.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="root" path="app_webview/" />

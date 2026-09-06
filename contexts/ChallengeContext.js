@@ -96,14 +96,17 @@ export function ChallengeProvider({ children }) {
         if (!latest || (data.createdAt?.seconds || 0) > (latest.createdAt?.seconds || 0)) latest = data;
       });
       // Every consumer of this value (ChallengeStatusToast, DrillWrapper,
-      // ChallengeArenaClient) only reacts to `id`/`status` transitions. This
-      // same doc also receives a live opponent-score write roughly every
-      // 800ms for the whole duration of any match this user is hosting
-      // (DrillWrapper's own score sync) — without this guard, every one of
-      // those score ticks would re-create `latest` and push a fresh object
-      // through this Context, re-rendering every consumer for a change
-      // nobody downstream actually cares about. Bailing out when id/status
-      // haven't moved keeps the object reference stable across those ticks.
+      // ChallengeArenaClient) only reacts to `id`/`status` transitions, so
+      // bailing out when neither has moved keeps the object reference stable
+      // and avoids re-rendering all of them mid-duel.
+      //
+      // This guard used to be load-bearing for a specific reason: the same doc
+      // took a live opponent-score write every 800ms (later 5s) for the whole
+      // duration of a hosted match, and each tick would otherwise re-create
+      // `latest` and push a fresh object through this Context. That score sync
+      // has since been deleted outright, so those ticks no longer exist — but
+      // the guard stays as cheap insurance against reconnects and
+      // metadata-only snapshots re-delivering an unchanged doc.
       setOutgoingChallenge((prev) => {
         if (prev === latest) return prev;
         if (prev && latest && prev.id === latest.id && prev.status === latest.status) return prev;

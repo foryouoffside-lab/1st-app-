@@ -3,8 +3,7 @@ import { useEffect, useState, Suspense } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Capacitor } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
-import { lockPortrait, unlockOrientation } from '../lib/orientation';
-import MobileHeader from './MobileHeader';
+import { lockPortrait } from '../lib/orientation';
 import BottomNav from './BottomNav';
 import ChallengeNotificationBanner from './ChallengeNotificationBanner';
 import ChallengeStatusToast from './ChallengeStatusToast';
@@ -14,6 +13,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { reportError, identifyUser } from '../lib/crashReporting';
 import { logScreenView, identifyAnalyticsUser } from '../lib/analytics';
 import { ensureDailyReminderScheduled } from '../lib/dailyReminder';
+import { reconcileDrillBests } from '../lib/bestScoreSync';
 import { LocalNotifications } from '@capacitor/local-notifications';
 
 export default function AppShellClient({ children }) {
@@ -38,6 +38,15 @@ export default function AppShellClient({ children }) {
     }).then((handle) => { listenerHandle = handle; });
 
     return () => { listenerHandle?.remove(); };
+  }, []);
+
+  // Repair any drill whose own "BEST" has fallen behind the canonical score
+  // store. The two live on opposite sides of Android's backup line, so after a
+  // reinstall or a device transfer the Progress screen can read "23 drills
+  // played" while every start card reads BEST 0. See lib/bestScoreSync.js.
+  // Fire-and-forget: a no-op in the normal case, and never worth blocking boot.
+  useEffect(() => {
+    reconcileDrillBests().catch(() => {});
   }, []);
 
   // Tag crash reports and analytics with the signed-in user's uid so either
