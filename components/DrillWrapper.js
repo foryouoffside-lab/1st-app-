@@ -730,29 +730,19 @@ export default function DrillWrapper({
     };
   }, []);
 
-  // 6d. Backgrounding a SOLO drill exits it outright. Putting the app away
-  // (recent-apps tray, not force-closed) doesn't unmount this component —
-  // the game loop kept ticking and the audio synth kept firing its short
-  // tone cues with the screen off, which read as the drill "running behind"
-  // and making noise nobody asked for. Routing back out stops it cold: the
-  // whole drill subtree unmounts, taking every interval/rAF loop with it.
+  // 6d. Backgrounding a SOLO drill used to route the player all the way back
+  // out (to `backHref`) so the game loop and the audio synth couldn't keep
+  // running with the screen off. That was too blunt: it also threw away the
+  // start card and the result screen — put the phone down on either of those
+  // and you came back to the home page for no reason.
   //
-  // A duel is deliberately exempt — leaving one mid-match already forfeits
-  // it via effect 6c the instant this component unmounts, and the
-  // abandoned-match rescue (effect 6b) exists specifically to give a
-  // backgrounded opponent a real 20s grace window rather than an instant
-  // loss. Exiting here on top of that would turn every backgrounded duel
-  // into an immediate forfeit instead.
-  useEffect(() => {
-    if (isChallengeMode) return;
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
-        router.replace(backHref);
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [isChallengeMode, backHref, router]);
+  // The screen now stays where it was left. The two real concerns are handled
+  // elsewhere: rAF game loops pause on their own while the document is hidden,
+  // and AudioContext playback is suspended globally on `visibilitychange` in
+  // AppShellClient so nothing bleeps in the background.
+  //
+  // A duel is still never touched here — effect 6c forfeits it on unmount and
+  // effect 6b gives a backgrounded opponent a 20s grace window.
 
   // 6e. Hold the screen awake for as long as a drill route is open.
   //

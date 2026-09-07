@@ -206,7 +206,7 @@ export default function ResultScreen({
   // either reads as the same object.
   if (signature) {
     const beat = isNewBest && prevBest > 0;
-    const sigCols = stats.length > 0 ? 'grid-cols-3' : 'grid-cols-2';
+    const sigCols = stats.length > 0 ? 'grid-cols-4' : 'grid-cols-3';
     return (
       <div
         className="absolute inset-0 z-40 flex flex-col px-6 pt-6 pb-7 select-none overflow-y-auto"
@@ -240,12 +240,13 @@ export default function ResultScreen({
           </div>
 
           <div className={`grid ${sigCols} gap-2 w-full`}>
-            <ResultStat label="Accuracy" value={`${shownAccuracy}%`} color="text-blue-400" delay={90} />
-            <ResultStat label="XP" value={`+${shownXp}`} color="text-violet-400" delay={160}>
+            <ResultStat label="Best" value={shownBest.toLocaleString()} color="text-yellow-400" delay={40} />
+            <ResultStat label="Accuracy" value={`${shownAccuracy}%`} color="text-blue-400" delay={110} />
+            <ResultStat label="XP" value={`+${shownXp}`} color="text-violet-400" delay={180}>
               {progressSummary && <XpBar progress={progressSummary} xpEarned={xpEarned} onLevelUp={handleLevelUp} />}
             </ResultStat>
             {stats.map((s, i) => (
-              <ResultStat key={s.label} label={s.label} value={s.value} color={s.color || 'text-slate-300'} delay={230 + i * 70} />
+              <ResultStat key={s.label} label={s.label} value={s.value} color={s.color || 'text-slate-300'} delay={250 + i * 70} />
             ))}
           </div>
         </div>

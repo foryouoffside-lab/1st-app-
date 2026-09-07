@@ -151,11 +151,16 @@ export default function AppShellClient({ children }) {
 
     // 2. Override Web Audio API (AudioContext) oscillator and buffer starts
     const OriginalAudioContext = window.AudioContext || window.webkitAudioContext;
+    // Every live context, so we can suspend them all when the app is
+    // backgrounded — a drill is no longer routed away on visibilitychange, so
+    // this is what stops its synth bleeping with the screen off.
+    if (!window.__sdAudioContexts) window.__sdAudioContexts = new Set();
     if (OriginalAudioContext && !OriginalAudioContext.__isMocked) {
       class MockAudioContext extends OriginalAudioContext {
         constructor(...args) {
           super(...args);
-          
+          try { window.__sdAudioContexts.add(this); } catch {}
+
           const origCreateOscillator = this.createOscillator;
           if (origCreateOscillator) {
             this.createOscillator = function() {
@@ -222,6 +227,30 @@ export default function AppShellClient({ children }) {
         }, 50);
       };
     }
+
+    // 4. Suspend / resume audio with the app. Backgrounding a drill no longer
+    //    routes out of it, so this is what keeps a synth from firing tone cues
+    //    with the screen off. Resume only when sound is still enabled.
+    const handleAudioVisibility = () => {
+      const hidden = document.visibilityState === 'hidden';
+      const ctxs = window.__sdAudioContexts;
+      if (!ctxs) return;
+      for (const ctx of ctxs) {
+        try {
+          if (ctx.state === 'closed') { ctxs.delete(ctx); continue; }
+          if (hidden) {
+            if (ctx.state === 'running') ctx.suspend();
+          } else if (ctx.state === 'suspended' && !checkMuted()) {
+            ctx.resume();
+          }
+        } catch {}
+      }
+    };
+    document.addEventListener('visibilitychange', handleAudioVisibility);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleAudioVisibility);
+    };
   }, []);
 
 
