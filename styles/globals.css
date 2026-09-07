@@ -1799,6 +1799,81 @@ body.is-drill-page footer {
 @keyframes fxFadeSlideUp { 0%{opacity:0; transform:translateY(8px);} 100%{opacity:1; transform:translateY(0);} }
 .fx-fade-up { animation: fxFadeSlideUp .18s ease-out both; }
 
+/* ── Shared result screen (components/drill/ResultScreen.js) ─────────────────
+   Every one of these is transform- or opacity-only, and the ones attached to
+   something the player has to READ animate transform ONLY, starting from a
+   visible state. `opacity:0` with fill-mode `both` is what stranded the duel
+   countdown digit permanently invisible when the WebView dropped a frame (see
+   the .fx-count-pop note above) — the score, the grade and the stat tiles are
+   load-bearing in exactly the same way, so they get the same treatment.
+   Opacity here belongs only to decoration that unmounts itself: the new-best
+   shine, the XP flash. */
+
+/* Entrance for the score and the stat tiles. Reads as a fade-up but never
+   touches opacity, so the worst case is an element that appears without the
+   slide, never one that never appears. 0% is a legible still for the
+   reduced-motion rule. */
+@keyframes fxResIn { 0%{transform:translateY(9px) scale(.965);} 100%{transform:translateY(0) scale(1);} }
+.fx-res-in { animation: fxResIn .2s cubic-bezier(.22,.61,.36,1) both; }
+
+/* NEW BEST — a stamp landing, not a pill fading in. Scale down onto the card
+   with a little rotational wobble; transform only. */
+@keyframes fxResStamp {
+  0%{transform:scale(1.38) rotate(-7deg);}
+  55%{transform:scale(.97) rotate(2.5deg);}
+  78%{transform:scale(1.04) rotate(-1deg);}
+  100%{transform:scale(1) rotate(0deg);}
+}
+.fx-res-stamp { animation: fxResStamp .42s cubic-bezier(.22,.61,.36,1) both; }
+
+/* …and one diagonal shine sweeping across it. Pure decoration inside an
+   overflow:hidden pill, so opacity is safe here: if it never paints, nothing
+   the player needs is missing. */
+@keyframes fxResShine {
+  0%{transform:translateX(-190%) skewX(-18deg); opacity:0;}
+  22%{opacity:1;}
+  100%{transform:translateX(300%) skewX(-18deg); opacity:0;}
+}
+.fx-res-shine {
+  position:absolute; top:-40%; bottom:-40%; left:0; width:42%;
+  pointer-events:none;
+  background:linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent);
+  animation: fxResShine .9s ease-out .2s both;
+}
+
+/* S / S+ shimmer. A colour pulse on the glyph's own shadow — NOT an animated
+   `background-clip:text` gradient position, which is the obvious way to do
+   this and does not paint at all in this WebView while the same element is
+   under a scale animation. */
+@keyframes fxResGradeGlow {
+  0%,100%{ text-shadow:0 0 10px rgba(251,191,36,.3); }
+  50%    { text-shadow:0 0 22px rgba(251,191,36,.8); }
+}
+.fx-res-grade-s { animation: fxResGradeGlow 2.2s ease-in-out .5s infinite; }
+
+/* XP bar. The fill is a full-width node scaled on X from its left edge, so the
+   whole move is one compositor transform — animating `width` here would lay
+   out the stat tile 60x/sec. Duration is written from React (0ms for the
+   level-up snap back to zero, 700ms for a fill), which is why there is no
+   duration in the shorthand below. */
+.fx-xp-track {
+  position:relative; height:3px; margin-top:5px;
+  border-radius:9999px; background:rgba(255,255,255,.07);
+  overflow:hidden;
+}
+.fx-xp-fill {
+  position:absolute; inset:0; border-radius:9999px;
+  transform-origin:left center; transform:scaleX(0);
+  background:linear-gradient(90deg,#7c3aed,#a78bfa);
+  transition-property:transform; transition-timing-function:cubic-bezier(.22,.61,.36,1);
+  will-change:transform;
+}
+@keyframes fxXpFlash { 0%{opacity:.9;} 100%{opacity:0;} }
+.fx-xp-flash {
+  position:absolute; inset:0; border-radius:9999px; pointer-events:none;
+  background:#fff; animation: fxXpFlash .34s ease-out both;
+}
+
 /* ── Quick Dodge: compositor-driven hazard layer ─────────────────────────────
    The hazards used to be repainted into a full-screen 2D canvas every frame.
    That is the one structural difference between this drill and

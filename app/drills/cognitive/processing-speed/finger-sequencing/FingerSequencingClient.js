@@ -1,10 +1,9 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
-  ArrowLeft, Eye, Target, Timer, Volume2, VolumeX, Share2, GitBranch,
+  Eye, Target, Timer, Volume2, VolumeX, GitBranch,
   RotateCw
 } from 'lucide-react';
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade, isValidReactionTime } from '../../../../../lib/scoringEngine';
@@ -15,7 +14,7 @@ import {
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { afterViewportSettled, lockLandscape, unlockOrientation, onOrientationSettled } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
-import { getPlayerName } from '../../../../../lib/progressStore';
+import { getPlayerName, getPlayerLevel } from '../../../../../lib/progressStore';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
 import { useShareCard } from '../../../../../components/ShareScoreCard';
@@ -23,6 +22,7 @@ import DrillWrapper from '../../../../../components/DrillWrapper';
 import { useDuelMatchStart, duelSecondsRemaining } from '../../../../../lib/challengeEngine';
 import { canvasDpr } from '../../../../../lib/canvasFx';
 import { APP_SHARE_URL } from '../../../../../lib/shareLinks';
+import ResultScreen from '../../../../../components/drill/ResultScreen';
 
 // ============================================================
 // ZERO-LATENCY AUDIO SYNTHESIZER
@@ -502,6 +502,10 @@ export default function FingerSequencingClient() {
       ? { isDailyDrill: false, wouldCompleteSet: false }
       : await previewDailyCompletion('finger-sequencing');
 
+    // Captured BEFORE the run is banked: the result screen's XP bar animates
+    // from the level the player walked in with to the one they walk out with.
+    const progress = await getPlayerLevel();
+
     const xpData = calcSessionXP({
       finalScore,
       accuracy: finalAcc,
@@ -534,6 +538,7 @@ export default function FingerSequencingClient() {
     });
 
     setEndSummary({
+      progress,
       score: finalScore,
       accuracy: finalAcc,
       bestCombo: bestNodeComboRef.current,
@@ -1620,11 +1625,13 @@ export default function FingerSequencingClient() {
 
         {/* RESULT SCREEN */}
         {phase === 'ended' && endSummary && !isChallenge && (
-          <ResultScreen 
-            summary={endSummary} 
-            bestScore={bestScore} 
-            onPlayAgain={startGame} 
-            onShare={shareScore} 
+          <ResultScreen
+            summary={endSummary}
+            bestScore={bestScore}
+            accent="from-emerald-600 to-teal-600"
+            synth={audioSynth}
+            onPlayAgain={startGame}
+            onShare={shareScore}
           />
         )}
       </div>
@@ -1651,57 +1658,3 @@ function MiniStat({ label, value, color }) {
   );
 }
 
-function ResultScreen({ summary, bestScore, onPlayAgain, onShare }) {
-  const grade = getGrade(summary.accuracy);
-  const gradeColor = grade.grade === 'S+' || grade.grade === 'S' ? '#fbbf24' : '#a78bfa';
-
-  return (
-    <div className="absolute inset-0 z-40 flex select-none" style={{ background: 'rgba(5,5,8,0.97)' }}>
-      {/* Grade Side */}
-      <div className="w-[36%] flex flex-col items-center justify-center gap-1.5 border-r border-white/5" style={{ background: 'radial-gradient(ellipse 260px 200px at 50% 30%, rgba(250,204,21,.08), transparent 70%)' }}>
-        {summary.isNewBest && (
-          <span className="text-[11px] font-display text-yellow-400 bg-yellow-500/10 border border-yellow-500/25 px-2.5 py-1 rounded-full mb-1">NEW BEST</span>
-        )}
-        <div className="text-5xl sm:text-6xl font-display leading-none" style={{ color: gradeColor }}>{grade.grade}</div>
-        <div className="text-[10px] label-tiny text-slate-500">{grade.label}</div>
-        <div className="text-3xl sm:text-4xl font-display text-white mt-1 tabular-nums">{summary.score.toLocaleString()}</div>
-        <div className="text-[9px] label-tiny text-slate-500">Points</div>
-      </div>
-
-      {/* Details Side */}
-      <div className="flex-1 flex flex-col justify-center gap-3 px-6 sm:px-8 py-4 min-w-0">
-        <div className="grid grid-cols-3 gap-2">
-          <ResultStat label="Best Score" value={(bestScore ?? 0).toLocaleString()} color="text-yellow-400" />
-          <ResultStat label="Accuracy" value={`${summary.accuracy}%`} color="text-blue-400" />
-          <ResultStat label="XP" value={`+${summary.xpEarned}`} color="text-violet-400" />
-        </div>
-        <div className="flex gap-2">
-          <button 
-            onClick={onPlayAgain} 
-            className="flex-1 py-3 rounded-[13px] bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-extrabold text-xs uppercase tracking-wider cursor-pointer hover:shadow-lg active:scale-95 transition-transform"
-          >
-            Play Again
-          </button>
-          <button 
-            onClick={onShare} 
-            className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer active:scale-95 transition-transform"
-          >
-            <Share2 className="w-4 h-4" />
-          </button>
-          <Link href="/drills/cognitive" className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white active:scale-95 transition-transform">
-            <ArrowLeft className="w-4 h-4 text-slate-400" />
-          </Link>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ResultStat({ label, value, color }) {
-  return (
-    <div className="rounded-[11px] border border-white/5 bg-white/[0.03] py-2 px-1 text-center">
-      <div className={`text-sm font-hud font-bold ${color} tabular-nums`}>{value}</div>
-      <div className="text-[7.5px] label-tiny text-slate-500 mt-0.5">{label}</div>
-    </div>
-  );
-}
