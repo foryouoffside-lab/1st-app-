@@ -1514,7 +1514,7 @@ export default function FingerSequencingClient() {
       timeLeft={phase === 'ended' ? 0 : Math.ceil(timeLeft)}
       soundEnabled={soundEnabled}
       onSoundToggle={() => setSoundEnabled(s => { audioSynth?.setEnabled(!s); return !s; })}
-      backHref="/drills/cognitive"
+      backHref="/"
       minimalChrome
     >
       <div 

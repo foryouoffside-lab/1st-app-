@@ -153,7 +153,7 @@ export default function ResultScreen({
   synth = null,
   onPlayAgain,
   onShare,
-  backHref = '/drills/cognitive',
+  backHref = '/',
 }) {
   const isTopGrade = grade.grade === 'S+' || grade.grade === 'S';
   const gradeColor = isTopGrade ? '#fbbf24' : '#a78bfa';

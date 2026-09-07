@@ -881,7 +881,7 @@ export default function GridMemorizationClient() {
       timeLeft={gameState === 'ended' ? 0 : Math.ceil(localTimeRemaining)}
       soundEnabled={soundEnabled}
       onSoundToggle={() => setSoundEnabled(v => { audioSynth?.setEnabled(!v); return !v; })}
-      backHref="/drills/cognitive"
+      backHref="/"
       minimalChrome
     >
       <div

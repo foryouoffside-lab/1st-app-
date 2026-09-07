@@ -789,7 +789,7 @@ export default function ShadeFinderClient() {
       timeLeft={phase === 'ended' ? 0 : Math.ceil(timeRemaining)}
       soundEnabled={soundEnabled}
       onSoundToggle={() => setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; })}
-      backHref="/drills/cognitive"
+      backHref="/"
       minimalChrome
     >
       <div

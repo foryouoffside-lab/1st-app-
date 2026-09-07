@@ -99,7 +99,7 @@ const PRESENCE_FRESH_MS = 8 * 60 * 1000;
 export default function DrillWrapper({
   drillName     = 'Drill',
   category      = 'cognitive',
-  backHref      = '/drills',
+  backHref      = '/',
   score         = null,
   combo         = null,
   timeLeft      = null,

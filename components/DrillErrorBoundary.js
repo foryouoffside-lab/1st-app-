@@ -55,10 +55,10 @@ export default class DrillErrorBoundary extends Component {
               Restart drill
             </button>
             <a
-              href={this.props.backHref || '/drills/cognitive'}
+              href={this.props.backHref || '/'}
               className="w-full rounded-xl border border-white/10 py-3 font-bold text-gray-300 transition-colors hover:bg-white/5"
             >
-              Back to drills
+              Back to home
             </a>
           </div>
         </div>

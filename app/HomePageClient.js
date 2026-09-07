@@ -22,7 +22,6 @@ const HOMEPAGE_CATEGORIES = DRILL_GROUPS.map(g => ({
   icon: g.icon,
   emoji: g.emoji,
   accent: g.accent,
-  href: `/drills/cognitive?group=${g.id}`,
 }));
 
 // Category chips for the home-screen drill browser. "All" leads (it covers
