@@ -1906,7 +1906,7 @@ body.is-drill-page footer {
 .lock-btn:active::after  { bottom:7px; right:7px; }
 
 /* A title or a score, clamped by two accent brackets. */
-.lock-mark { position:relative; display:inline-block; padding:5px 13px; }
+.lock-mark { position:relative; display:inline-block; padding:3px 10px; }
 .lock-mark::before, .lock-mark::after {
   content:''; position:absolute; width:10px; height:10px; border:2px solid var(--lm, #8b5cf6);
 }

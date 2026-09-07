@@ -2,9 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { 
-  Compass, Volume2, VolumeX, Eye, Zap, Ban
-} from 'lucide-react';
+import { Volume2, VolumeX } from 'lucide-react';
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade, getComboMultiplier } from '../../../../../lib/scoringEngine';
 import {
   rampToFloor, applyHit, applyMistake, scoringMaxLevel, scoringLives,
@@ -316,6 +314,7 @@ export default function ConcentrationGridClient() {
 
   // === Phase Machine State ===
   const [phase, setPhase] = useState('start'); // 'start' | 'countdown' | 'playing' | 'ended'
+  const [rulesOpen, setRulesOpen] = useState(false);
   const [countdownValue, setCountdownValue] = useState(3);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -895,37 +894,61 @@ export default function ConcentrationGridClient() {
 
         {/* ── START SCREEN ── */}
         {phase === 'start' && !isChallenge && (
-          <div className="relative h-full flex items-center justify-center p-5 overflow-y-auto z-40 pointer-events-auto">
-            <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(6,182,212,.16), transparent 70%)' }} />
-            <div className="relative w-full max-w-[290px] rounded-[20px] border border-white/5 bg-[#0c0c16]/90 backdrop-blur-lg px-5 pt-5 pb-[18px] text-center shadow-[0_16px_40px_rgba(0,0,0,.5)] my-6">
-              <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(6,182,212,.35)]">
-                <Compass className="w-[22px] h-[22px] text-white" />
-              </div>
-              <h1 className="lock-mark snap font-display text-[32px] sm:text-[38px] text-white mx-auto" style={{ '--lm': '#06b6d4' }}>Concentration Grid</h1>
-              <p className="text-[9px] rdg-unit text-slate-500 mt-2">45s per board</p>
-
-              <div className="flex flex-col gap-1.5 text-left mt-3.5">
-                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Tap the numbers in order from 1</>} />
-                <HowToRow icon={<Zap className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Grid grows with each board</>} />
-                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Hits add time, misses cost it</>} />
-              </div>
-
-              {bestScore > 0 && (
-                <div className="grid grid-cols-3 gap-1.5 mt-3.5">
-                  <MiniStat label="Best" value={bestScore} color="text-yellow-400" />
-                  <MiniStat label="Combo" value={`${bestCombo}x`} color="text-orange-400" />
-                  <MiniStat label="Level" value={`Lv.${bestGrid - 2}`} color="text-cyan-400" />
-                </div>
-              )}
-
+          <div
+            className="absolute inset-0 z-40 flex flex-col px-6 pt-6 pb-7 overflow-y-auto pointer-events-auto"
+            style={{ background: 'radial-gradient(ellipse 94% 48% at 50% 0%, rgba(6,182,212,.13), transparent 70%), #050508' }}
+          >
+            <div className="flex items-center justify-between shrink-0">
+              <a href="/" className="rdg-unit text-[10px] text-slate-500 py-1.5 pr-3 -ml-1">← Back</a>
               <button
-                onClick={enterDrill}
-                className="lock-btn mt-3.5"
-                style={{ '--lb': '#06b6d4' }}
+                type="button"
+                onClick={() => setRulesOpen((v) => !v)}
+                className="rdg-unit text-[10px] text-slate-300 border border-white/12 rounded-full px-3.5 py-1.5"
               >
-                Start
+                {rulesOpen ? 'Hide' : 'How to play?'}
               </button>
             </div>
+
+            <div className="flex-1 flex flex-col justify-center">
+              <h1
+                className="lock-mark snap font-display text-white inline-block self-start"
+                style={{ fontSize: 'clamp(38px,12vw,52px)', lineHeight: 0.92, '--lm': '#06b6d4' }}
+              >
+                Concentration<br />Grid
+              </h1>
+              <p className="rdg-unit text-[10px] text-slate-500 mt-4">Tap the numbers in order · 45s a board</p>
+
+              {rulesOpen && (
+                <div className="mt-4 flex flex-col gap-2 max-w-[340px]">
+                  {['Tap the numbers in order from 1', 'The grid grows with each board', 'Hits add time on the clock, misses cost it'].map((r) => (
+                    <p key={r} className="flex gap-2 text-[11.5px] leading-snug text-slate-400">
+                      <span className="text-cyan-500 font-bold">/</span>{r}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {bestScore > 0 && (
+              <div className="flex gap-8 py-3 border-y border-white/[0.07] mb-4 shrink-0">
+                <div>
+                  <div className="font-display tabular text-cyan-400 text-[22px] leading-none">{bestScore.toLocaleString()}</div>
+                  <div className="rdg-unit text-[7px] text-slate-500 mt-1">Best · PTS</div>
+                </div>
+                <div>
+                  <div className="font-display tabular text-cyan-400 text-[22px] leading-none">{String(Math.max(1, bestGrid - 2)).padStart(2, '0')}</div>
+                  <div className="rdg-unit text-[7px] text-slate-500 mt-1">Level</div>
+                </div>
+                <div>
+                  <div className="font-display tabular text-cyan-400 text-[22px] leading-none">{bestCombo}<span className="text-[13px]">×</span></div>
+                  <div className="rdg-unit text-[7px] text-slate-500 mt-1">Combo</div>
+                </div>
+              </div>
+            )}
+
+            <button onClick={enterDrill} className="lock-btn shrink-0" style={{ '--lb': '#06b6d4' }}>
+              Start
+            </button>
           </div>
         )}
 
@@ -985,9 +1008,9 @@ export default function ConcentrationGridClient() {
         {/* ── RESULT SCREEN ── */}
         {phase === 'ended' && endSummary && !isChallenge && (
           <ResultScreen
+            signature
             summary={endSummary}
             bestScore={bestScore}
-            accent="from-cyan-600 to-blue-600"
             lockColor="#06b6d4"
             synth={audioSynth}
             onPlayAgain={enterDrill}
@@ -1057,21 +1080,4 @@ const GridBoard = React.memo(function GridBoard({ gridData, gridSize, currentNum
   );
 });
 
-function HowToRow({ icon, node }) {
-  return (
-    <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
-      {icon}
-      <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">{node}</span>
-    </div>
-  );
-}
-
-function MiniStat({ label, value, color }) {
-  return (
-    <div className="rounded-[9px] border border-white/5 bg-white/[0.02] py-1.5 px-1 text-center">
-      <div className={`text-[16px] font-display tabular ${color}`}>{value}</div>
-      <div className="text-[7px] rdg-unit text-slate-500 mt-0.5">{label}</div>
-    </div>
-  );
-}
 

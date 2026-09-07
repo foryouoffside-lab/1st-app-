@@ -143,13 +143,13 @@ export default function ResultScreen({
   accuracy = summary?.accuracy ?? 0,
   xpEarned = summary?.xpEarned ?? 0,
   isNewBest = summary?.isNewBest ?? false,
+  prevBest = summary?.prevBest ?? null,
   progressSummary = summary?.progress ?? null,
   grade = getGrade(summary?.accuracy ?? 0),
   bestScore = 0,
-  // Per-drill skin. Defaults are the majority case.
-  accent = 'from-violet-600 to-indigo-600',
-  // Solid accent for the Lock button + score brackets — matches the start
-  // card's Start button. A hex, not a gradient. Defaults to brand violet.
+  // Per-drill skin. Solid accent for the Lock button + score brackets — matches
+  // the start card's Start button. A hex, not a gradient; defaults to brand
+  // violet. (Drills may still pass the old `accent` gradient prop; it is unused.)
   lockColor = '#8b5cf6',
   wash = 'rgba(250,204,21,.08)',
   extraStats = null,
@@ -157,6 +157,10 @@ export default function ResultScreen({
   onPlayAgain,
   onShare,
   backHref = '/',
+  // `signature` = the full-bleed "one object" layout that matches the new
+  // start card (mono corner links, a Lock-clamped score that resolves, the
+  // Lock Play Again button). Opt-in per drill while it is piloted.
+  signature = false,
 }) {
   const isTopGrade = grade.grade === 'S+' || grade.grade === 'S';
   const gradeColor = isTopGrade ? '#fbbf24' : '#a78bfa';
@@ -188,6 +192,70 @@ export default function ResultScreen({
     playFanfare(synth);
     setTimeout(() => setLevelToast(null), 1400);
   };
+
+  const LevelToast = levelToast !== null ? (
+    <div className="absolute inset-x-0 top-[8%] z-50 flex justify-center pointer-events-none">
+      <div className="fx-pop-in px-5 py-2 rounded-full bg-black/70 border border-yellow-500/35 text-yellow-400 font-display text-lg tracking-wide shadow-[0_0_28px_rgba(251,191,36,.3)]">
+        LEVEL {levelToast}
+      </div>
+    </div>
+  ) : null;
+
+  // ── The signature layout ──────────────────────────────────────────────────
+  // One column, full bleed, framed like the start card so a screenshot of
+  // either reads as the same object.
+  if (signature) {
+    const beat = isNewBest && prevBest > 0;
+    const sigCols = stats.length > 0 ? 'grid-cols-3' : 'grid-cols-2';
+    return (
+      <div
+        className="absolute inset-0 z-40 flex flex-col px-6 pt-6 pb-7 select-none overflow-y-auto"
+        style={{ background: `radial-gradient(ellipse 94% 44% at 50% 100%, ${lockColor}1f, transparent 70%), #050508` }}
+      >
+        <div className="flex items-center justify-between">
+          <a href={backHref} className="rdg-unit text-[10px] text-slate-500 py-1.5 pr-3 -ml-1">⌂ Home</a>
+          <button type="button" onClick={onShare} className="rdg-unit text-[10px] text-slate-300 py-1.5 pl-3 -mr-1">Share ↗</button>
+        </div>
+
+        <div className="flex-1 flex flex-col items-center justify-center text-center gap-7">
+          <div className="flex flex-col items-center gap-1">
+            {isNewBest && (
+              <span className="fx-res-stamp relative overflow-hidden text-[10px] font-display text-yellow-400 bg-yellow-500/10 border border-yellow-500/25 px-2.5 py-1 rounded-full mb-2">
+                NEW BEST<span className="fx-res-shine" />
+              </span>
+            )}
+            <div className={`rdg-unit text-[9px] ${isTopGrade ? 'text-yellow-400' : 'text-slate-500'}`}>{grade.label}</div>
+            <div
+              className={`lock-mark snap fx-rdg-settle font-display text-white tabular-nums ${isTopGrade ? 'fx-res-grade-s' : ''}`}
+              style={{ fontSize: 'clamp(52px,16vw,80px)', '--lm': lockColor }}
+            >
+              {shownScore.toLocaleString()}
+            </div>
+            <div className="rdg-unit text-[8px] text-slate-500 mt-1">Points</div>
+            <div className="rdg-unit text-[9px] text-slate-500 mt-3">
+              {beat
+                ? <>Prev best {prevBest.toLocaleString()} · <span className="text-emerald-400">+{(score - prevBest).toLocaleString()}</span></>
+                : (prevBest > 0 ? <>Best {Math.max(prevBest, score).toLocaleString()}</> : <>First run banked</>)}
+            </div>
+          </div>
+
+          <div className={`grid ${sigCols} gap-2 w-full`}>
+            <ResultStat label="Accuracy" value={`${shownAccuracy}%`} color="text-blue-400" delay={90} />
+            <ResultStat label="XP" value={`+${shownXp}`} color="text-violet-400" delay={160}>
+              {progressSummary && <XpBar progress={progressSummary} xpEarned={xpEarned} onLevelUp={handleLevelUp} />}
+            </ResultStat>
+            {stats.map((s, i) => (
+              <ResultStat key={s.label} label={s.label} value={s.value} color={s.color || 'text-slate-300'} delay={230 + i * 70} />
+            ))}
+          </div>
+        </div>
+
+        <button onClick={onPlayAgain} className="lock-btn mt-4" style={{ '--lb': lockColor }}>Play Again</button>
+
+        {LevelToast}
+      </div>
+    );
+  }
 
   return (
     <div className="absolute inset-0 z-40 flex select-none" style={{ background: 'rgba(5,5,8,0.97)' }}>
@@ -258,16 +326,8 @@ export default function ResultScreen({
         </div>
       </div>
 
-      {/* Sits high in the card, clear of the stat tiles and the Play Again
-          button — centred vertically it lands on top of them. Non-blocking:
-          no dim, no pause, no input capture, and it unmounts itself. */}
-      {levelToast !== null && (
-        <div className="absolute inset-x-0 top-[9%] z-50 flex justify-center pointer-events-none">
-          <div className="fx-pop-in px-5 py-2 rounded-full bg-black/70 border border-yellow-500/35 text-yellow-400 font-display text-lg tracking-wide shadow-[0_0_28px_rgba(251,191,36,.3)]">
-            LEVEL {levelToast}
-          </div>
-        </div>
-      )}
+      {/* Non-blocking: no dim, no pause, no input capture, unmounts itself. */}
+      {LevelToast}
     </div>
   );
 }
