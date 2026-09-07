@@ -16,6 +16,7 @@ import DrillWrapper from '../../../../../components/DrillWrapper';
 import { useDuelMatchStart, duelSecondsRemaining } from '../../../../../lib/challengeEngine';
 import { APP_SHARE_URL } from '../../../../../lib/shareLinks';
 import ResultScreen from '../../../../../components/drill/ResultScreen';
+import DrillStartCard from '../../../../../components/drill/DrillStartCard';
 
 // ============================================================
 // TUNING CONSTANTS
@@ -314,7 +315,6 @@ export default function ConcentrationGridClient() {
 
   // === Phase Machine State ===
   const [phase, setPhase] = useState('start'); // 'start' | 'countdown' | 'playing' | 'ended'
-  const [rulesOpen, setRulesOpen] = useState(false);
   const [countdownValue, setCountdownValue] = useState(3);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -894,62 +894,22 @@ export default function ConcentrationGridClient() {
 
         {/* ── START SCREEN ── */}
         {phase === 'start' && !isChallenge && (
-          <div
-            className="absolute inset-0 z-40 flex flex-col px-6 pt-6 pb-7 overflow-y-auto pointer-events-auto"
-            style={{ background: 'radial-gradient(ellipse 94% 48% at 50% 0%, rgba(6,182,212,.13), transparent 70%), #050508' }}
-          >
-            <div className="flex items-center justify-between shrink-0">
-              <a href="/" className="rdg-unit text-[10px] text-slate-500 py-1.5 pr-3 -ml-1">← Back</a>
-              <button
-                type="button"
-                onClick={() => setRulesOpen((v) => !v)}
-                className="rdg-unit text-[10px] text-slate-300 border border-white/12 rounded-full px-3.5 py-1.5"
-              >
-                {rulesOpen ? 'Hide' : 'How to play?'}
-              </button>
-            </div>
-
-            <div className="flex-1 flex flex-col justify-center">
-              <h1
-                className="lock-mark snap font-display text-white inline-block self-start"
-                style={{ fontSize: 'clamp(38px,12vw,52px)', lineHeight: 0.92, '--lm': '#06b6d4' }}
-              >
-                Concentration<br />Grid
-              </h1>
-              <p className="rdg-unit text-[10px] text-slate-500 mt-4">Tap the numbers in order · 45s a board</p>
-
-              {rulesOpen && (
-                <div className="mt-4 flex flex-col gap-2 max-w-[340px]">
-                  {['Tap the numbers in order from 1', 'The grid grows with each board', 'Hits add time on the clock, misses cost it'].map((r) => (
-                    <p key={r} className="flex gap-2 text-[11.5px] leading-snug text-slate-400">
-                      <span className="text-cyan-500 font-bold">/</span>{r}
-                    </p>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {bestScore > 0 && (
-              <div className="flex gap-8 py-3 border-y border-white/[0.07] mb-4 shrink-0">
-                <div>
-                  <div className="font-display tabular text-cyan-400 text-[22px] leading-none">{bestScore.toLocaleString()}</div>
-                  <div className="rdg-unit text-[7px] text-slate-500 mt-1">Best · PTS</div>
-                </div>
-                <div>
-                  <div className="font-display tabular text-cyan-400 text-[22px] leading-none">{String(Math.max(1, bestGrid - 2)).padStart(2, '0')}</div>
-                  <div className="rdg-unit text-[7px] text-slate-500 mt-1">Level</div>
-                </div>
-                <div>
-                  <div className="font-display tabular text-cyan-400 text-[22px] leading-none">{bestCombo}<span className="text-[13px]">×</span></div>
-                  <div className="rdg-unit text-[7px] text-slate-500 mt-1">Combo</div>
-                </div>
-              </div>
-            )}
-
-            <button onClick={enterDrill} className="lock-btn shrink-0" style={{ '--lb': '#06b6d4' }}>
-              Start
-            </button>
-          </div>
+          <DrillStartCard
+            drillName="Concentration Grid"
+            tagline="Tap the numbers in order · 45s a board"
+            rules={[
+              'Tap the numbers in order from 1',
+              'The grid grows with each board',
+              'Hits add time on the clock, misses cost it',
+            ]}
+            bestStrip={bestScore > 0 ? [
+              { value: bestScore.toLocaleString(), label: 'Best · PTS' },
+              { value: String(Math.max(1, bestGrid - 2)).padStart(2, '0'), label: 'Level' },
+              { value: `${bestCombo}×`, label: 'Combo' },
+            ] : null}
+            orientation="portrait"
+            onStart={enterDrill}
+          />
         )}
 
         {/* ── PLAYING ── */}
@@ -1011,7 +971,6 @@ export default function ConcentrationGridClient() {
             signature
             summary={endSummary}
             bestScore={bestScore}
-            lockColor="#06b6d4"
             synth={audioSynth}
             onPlayAgain={enterDrill}
             onShare={shareResult}

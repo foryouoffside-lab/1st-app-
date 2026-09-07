@@ -30,6 +30,11 @@ export const CARD_H = 360;
 // grade badge keeps its own tier colour, so the image carries both facts at a
 // glance: gold frame = a best, badge = how well they played.
 const PB_GOLD = '#facc15';
+// One accent for the card chrome — the brand violet, same as the app. The
+// grade BADGE keeps its own tier colour (that's information); everything else
+// — the top edge, the score brackets, the link — is violet, or gold on a
+// personal best.
+const BRAND = '#8b5cf6';
 const MUTED = '#98a2b3';
 const DIM = '#606b7e';
 
@@ -104,7 +109,7 @@ export function drawShareCard(ctx, data) {
   // Encouraging wording on the public image; the in-app screen keeps `label`.
   const label = (tier?.shareLabel || rating?.label || tier?.label || '').toUpperCase();
   const letter = rating?.letter || '—';
-  const accent = isNewBest ? PB_GOLD : tierHex;
+  const accent = isNewBest ? PB_GOLD : BRAND;
 
   ctx.textBaseline = 'alphabetic';
 
@@ -136,28 +141,19 @@ export function drawShareCard(ctx, data) {
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, CARD_W, CARD_H);
 
-  // Vignette — stops the flat corners reading as a screenshot.
+  // Vignette — stops the flat corners reading as a screenshot. No drawn
+  // border: the shared image is already a rectangle, and a rounded accent
+  // frame inside it read as a sticker slapped on the chat.
   const vig = ctx.createRadialGradient(CARD_W / 2, CARD_H / 2, CARD_H * 0.4, CARD_W / 2, CARD_H / 2, CARD_W * 0.8);
   vig.addColorStop(0, 'rgba(0,0,0,0)');
   vig.addColorStop(1, 'rgba(0,0,0,0.5)');
   ctx.fillStyle = vig;
   ctx.fillRect(0, 0, CARD_W, CARD_H);
 
-  // Frame: a soft accent halo plus a crisp hairline. The halo is three
-  // concentric strokes at falling alpha, NOT ctx.shadowBlur — shadowBlur is
-  // deferred and rasterised inside toBlob(), which cost ~13s on a mid-range
-  // Android device. Never reintroduce it here.
-  const halo = isNewBest ? 0.45 : 0.28;
-  for (let i = 3; i >= 1; i--) {
-    ctx.strokeStyle = alpha(accent, (halo / 6) * (4 - i));
-    ctx.lineWidth = i * 2.5;
-    roundRectPath(ctx, 2, 2, CARD_W - 4, CARD_H - 4, 22);
-    ctx.stroke();
-  }
-  ctx.strokeStyle = alpha(accent, isNewBest ? 0.85 : 0.55);
-  ctx.lineWidth = 2;
-  roundRectPath(ctx, 2, 2, CARD_W - 4, CARD_H - 4, 22);
-  ctx.stroke();
+  // A single hairline top edge in the accent — a channel indicator, not a
+  // frame. Full width, 3px, at the very top.
+  ctx.fillStyle = alpha(accent, isNewBest ? 0.95 : 0.8);
+  ctx.fillRect(0, 0, CARD_W, 3);
 
   // ── Top row: accent tick · drill (left) · handle (right) ────────────────
   ctx.fillStyle = accent;

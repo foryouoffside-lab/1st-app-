@@ -197,11 +197,15 @@ function resolveFonts() {
   const FALLBACK = 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
   try {
     const css = getComputedStyle(document.documentElement);
+    // Return the family straight from the next/font CSS var. The old code
+    // gated each family on `document.fonts.check('bold 32px …')` — but Anton
+    // ships weight 400 ONLY, so that probe returned false and the whole card
+    // fell back to Inter (a round "0", a non-condensed "CAN YOU BEAT THIS?").
+    // next/font already appends its own fallback chain (…, system-ui, arial),
+    // and every one of these faces is on screen before a share card exists.
     const pick = (varName) => {
       const family = css.getPropertyValue(varName).trim();
-      if (!family) return null;
-      const stack = `${family}, ${FALLBACK}`;
-      return document.fonts?.check?.(`bold 32px ${family}`) ? stack : null;
+      return family ? `${family}, ${FALLBACK}` : null;
     };
     const ui = pick('--font-inter') || FALLBACK;
     const display = pick('--font-anton') || ui;
