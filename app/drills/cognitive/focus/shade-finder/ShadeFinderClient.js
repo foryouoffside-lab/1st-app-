@@ -2,9 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
-import {
-  Compass, Volume2, VolumeX, Eye, Zap, Ban
-} from 'lucide-react';
+import { Volume2, VolumeX } from 'lucide-react';
 
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade } from '../../../../../lib/scoringEngine';
 import {
@@ -22,6 +20,7 @@ import DrillWrapper from '../../../../../components/DrillWrapper';
 import { useDuelMatchStart } from '../../../../../lib/challengeEngine';
 import { APP_SHARE_URL } from '../../../../../lib/shareLinks';
 import ResultScreen from '../../../../../components/drill/ResultScreen';
+import DrillStartCard from '../../../../../components/drill/DrillStartCard';
 
 // ============================================================
 // TUNING CONSTANTS
@@ -820,35 +819,22 @@ export default function ShadeFinderClient() {
 
         {/* ── START SCREEN ── */}
         {phase === 'start' && !isChallenge && (
-          <div className="relative h-full flex items-center justify-center p-5 overflow-y-auto w-full z-40">
-            <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 420px 260px at 50% 8%, rgba(142,97,246,.16), transparent 70%)' }} />
-            <div className="relative w-full max-w-[290px] rounded-[20px] border border-white/5 bg-[#0c0c16]/90 backdrop-blur-lg px-5 pt-5 pb-[18px] text-center shadow-[0_16px_40px_rgba(0,0,0,.5)] my-6">
-              <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(139,92,246,.35)]">
-                <Compass className="w-[22px] h-[22px] text-white" />
-              </div>
-              <h1 className="font-display text-[32px] sm:text-[38px] text-white">Shade Finder</h1>
-              <p className="text-[9px] label-tiny text-slate-500 mt-1">Endurance run</p>
-
-              <div className="flex flex-col gap-1.5 text-left mt-3.5">
-                <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Find the odd square out</>} />
-                <HowToRow icon={<Zap className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />} node={<>Grid grows, contrast shrinks</>} />
-                <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Hits add time, misses cost it</>} />
-              </div>
-
-              <div className="grid grid-cols-3 gap-1.5 mt-3.5">
-                <MiniStat label="Best" value={bestScore} color="text-yellow-400" />
-                <MiniStat label="Combo" value={`${bestCombo}x`} color="text-orange-400" />
-                <MiniStat label="Level" value={`Lv.${bestLevel}`} color="text-indigo-400" />
-              </div>
-
-              <button
-                onClick={enterDrill}
-                className="w-full mt-3.5 py-[11px] rounded-[13px] bg-gradient-to-r from-violet-600 to-indigo-600 font-bold text-[12.5px] tracking-wide active:scale-[0.97] transition-transform shadow-[0_0_20px_rgba(139,92,246,.3)] cursor-pointer text-white"
-              >
-                START
-              </button>
-            </div>
-          </div>
+          <DrillStartCard
+            drillName="Shade Finder"
+            tagline="Find the one square that's a shade off"
+            rules={[
+              'Find the odd square out',
+              'Grid grows, contrast shrinks',
+              'Hits add time, misses cost it',
+            ]}
+            bestStrip={bestScore > 0 ? [
+              { value: bestScore.toLocaleString(), label: 'Best · PTS' },
+              { value: `${bestCombo}×`, label: 'Combo' },
+              { value: String(bestLevel).padStart(2, '0'), label: 'Level' },
+            ] : null}
+            orientation="portrait"
+            onStart={enterDrill}
+          />
         )}
 
         {/* ── PLAYING / COUNTDOWN SCREEN ── */}
@@ -915,9 +901,9 @@ export default function ShadeFinderClient() {
         {/* ── RESULT SCREEN ── */}
         {phase === 'ended' && endSummary && !isChallenge && (
           <ResultScreen
+            signature
             summary={endSummary}
             bestScore={bestScore}
-            accent="from-violet-600 to-indigo-600"
             synth={audioSynth}
             onPlayAgain={enterDrill}
             onShare={shareResult}
@@ -925,27 +911,6 @@ export default function ShadeFinderClient() {
         )}
       </div>
     </DrillWrapper>
-  );
-}
-
-// ============================================================
-// SUB-COMPONENTS
-// ============================================================
-function HowToRow({ icon, node }) {
-  return (
-    <div className="flex items-center gap-2 bg-white/[0.02] border border-white/5 rounded-[10px] px-2.5 py-[7px]">
-      {icon}
-      <span className="text-[10.5px] text-slate-300 leading-tight whitespace-nowrap">{node}</span>
-    </div>
-  );
-}
-
-function MiniStat({ label, value, color }) {
-  return (
-    <div className="rounded-[9px] border border-white/5 bg-white/[0.02] py-1.5 px-1 text-center">
-      <div className={`text-[12px] font-hud font-bold ${color}`}>{value}</div>
-      <div className="text-[7.5px] label-tiny text-slate-500 mt-0.5">{label}</div>
-    </div>
   );
 }
 
