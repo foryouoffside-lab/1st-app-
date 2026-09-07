@@ -227,13 +227,6 @@ h1, h2, h3 {
    the category's own accent color on every row, fighting for attention.
    The dot still reads at a glance (green→red), the chip itself stays
    quiet so the category accent (icon/label) is the only loud color. */
-.diff-pill { font-size: 8.5px; font-weight: 700; padding: 2px 8px 2px 6px; border-radius: 99px; text-transform: uppercase; letter-spacing: .03em; white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; background: rgba(255, 255, 255, .05); border: 1px solid var(--line-soft); color: var(--text-dim); }
-.diff-pill::before { content: ''; width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
-.diff-pill.beginner::before { background: #4ade80; }
-.diff-pill.intermediate::before { background: #facc15; }
-.diff-pill.advanced::before { background: #fb923c; }
-.diff-pill.elite::before { background: #f87171; }
-.diff-pill.impossible::before { background: #dc2626; }
 .dur { font-size: 9.5px; color: var(--text-faint); white-space: nowrap; }
 
 /* ── daily challenge entry banner (Home) ─────────────────────────────────
@@ -376,11 +369,6 @@ h1, h2, h3 {
   background: #000; overflow: hidden;
 }
 .drill-rail-card .thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.drill-rail-card .thumb .diff-pill {
-  position: absolute; left: 6px; top: 6px; z-index: 2;
-  background: rgba(0,0,0,.72); border-color: rgba(255,255,255,.14);
-  color: #fff; backdrop-filter: blur(2px);
-}
 .drill-rail-card .thumb .dur {
   position: absolute; right: 6px; bottom: 7px;
   font-size: 9px; font-weight: 700; color: #fff;

@@ -45,15 +45,6 @@ const DRILL_ART = new Set([
   'card-matching',
 ]);
 
-// Same mapping the /drills hub uses for its difficulty pill, so a drill's
-// badge reads identically in both places.
-const DIFFICULTY_CLASS = {
-  easy: 'beginner', beginner: 'beginner',
-  medium: 'intermediate', intermediate: 'intermediate',
-  hard: 'advanced', advanced: 'advanced',
-  impossible: 'impossible', elite: 'elite',
-};
-
 export default function HomePageClient() {
   const { user, db } = useAuth();
   const router = useRouter();
@@ -247,20 +238,15 @@ export default function HomePageClient() {
         </div>
         <div key={activeCategory} className="drill-rail home-scroll rail-swap mb-6">
           {railDrills.map(drill => {
-            const group = getDrillGroup(drill);
-            const DrillIcon = getGroupIcon(group);
-            const accent = HOMEPAGE_CATEGORIES.find(c => c.slug === group)?.accent || 'var(--c-cognitive)';
-            const diffId = DIFFICULTY_CLASS[String(drill.difficulty || '').toLowerCase()] || 'elite';
-            const diffLabel = diffId.charAt(0).toUpperCase() + diffId.slice(1);
+            const DrillIcon = getGroupIcon(getDrillGroup(drill));
             return (
               <Link
                 key={drill.id}
                 href={drill.path || '/drills'}
                 className="drill-rail-card"
-                style={{ '--a': accent }}
+                style={{ '--a': 'var(--brand-2)' }}
               >
                 <span className="thumb">
-                  <span className={`diff-pill ${diffId}`}>{diffLabel}</span>
                   {hasAnimatedPreview(drill.id) ? (
                     <DrillPreview drillId={drill.id} />
                   ) : (
