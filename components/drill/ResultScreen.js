@@ -128,8 +128,8 @@ function ResultStat({ label, value, color, delay = 0, children }) {
       className="fx-res-in rounded-[11px] border border-white/5 bg-white/[0.03] py-2 px-1 text-center"
       style={{ animationDelay: `${delay}ms` }}
     >
-      <div className={`text-sm font-hud font-bold ${color} tabular-nums`}>{value}</div>
-      <div className="text-[7.5px] label-tiny text-slate-500 mt-0.5">{label}</div>
+      <div className={`text-base font-display tabular ${color}`}>{value}</div>
+      <div className="text-[7px] rdg-unit text-slate-500 mt-0.5">{label}</div>
       {children}
     </div>
   );
@@ -148,6 +148,9 @@ export default function ResultScreen({
   bestScore = 0,
   // Per-drill skin. Defaults are the majority case.
   accent = 'from-violet-600 to-indigo-600',
+  // Solid accent for the Lock button + score brackets — matches the start
+  // card's Start button. A hex, not a gradient. Defaults to brand violet.
+  lockColor = '#8b5cf6',
   wash = 'rgba(250,204,21,.08)',
   extraStats = null,
   synth = null,
@@ -205,10 +208,13 @@ export default function ResultScreen({
           {grade.grade}
         </div>
         <div className="text-[10px] label-tiny text-slate-500">{grade.label}</div>
-        <div className="fx-res-in text-3xl sm:text-4xl font-display text-white mt-1 tabular-nums" style={{ animationDelay: '120ms' }}>
+        <div
+          className="lock-mark snap fx-res-in text-3xl sm:text-4xl font-display text-white mt-1 tabular-nums"
+          style={{ animationDelay: '120ms', '--lm': lockColor }}
+        >
           {shownScore.toLocaleString()}
         </div>
-        <div className="text-[9px] label-tiny text-slate-500">Points</div>
+        <div className="text-[8px] rdg-unit text-slate-500 mt-1">Points</div>
       </div>
 
       <div className="flex-1 flex flex-col justify-center gap-3 px-6 sm:px-8 py-4 min-w-0">
@@ -232,7 +238,8 @@ export default function ResultScreen({
         <div className="flex gap-2">
           <button
             onClick={onPlayAgain}
-            className={`flex-1 py-3 rounded-[13px] bg-gradient-to-r ${accent} text-white font-extrabold text-xs uppercase tracking-wider cursor-pointer active:scale-[0.97] transition-transform`}
+            className="lock-btn flex-1"
+            style={{ '--lb': lockColor }}
           >
             Play Again
           </button>

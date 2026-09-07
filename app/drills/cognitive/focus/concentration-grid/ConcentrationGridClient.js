@@ -901,8 +901,8 @@ export default function ConcentrationGridClient() {
               <div className="w-11 h-11 mx-auto rounded-[14px] bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center mb-3 shadow-[0_0_22px_rgba(6,182,212,.35)]">
                 <Compass className="w-[22px] h-[22px] text-white" />
               </div>
-              <h1 className="font-display text-[32px] sm:text-[38px] text-white">Concentration Grid</h1>
-              <p className="text-[9px] label-tiny text-slate-500 mt-1">45s per board</p>
+              <h1 className="lock-mark snap font-display text-[32px] sm:text-[38px] text-white mx-auto" style={{ '--lm': '#06b6d4' }}>Concentration Grid</h1>
+              <p className="text-[9px] rdg-unit text-slate-500 mt-2">45s per board</p>
 
               <div className="flex flex-col gap-1.5 text-left mt-3.5">
                 <HowToRow icon={<Eye className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />} node={<>Tap the numbers in order from 1</>} />
@@ -910,17 +910,20 @@ export default function ConcentrationGridClient() {
                 <HowToRow icon={<Ban className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />} node={<>Hits add time, misses cost it</>} />
               </div>
 
-              <div className="grid grid-cols-3 gap-1.5 mt-3.5">
-                <MiniStat label="Best" value={bestScore} color="text-yellow-400" />
-                <MiniStat label="Combo" value={`${bestCombo}x`} color="text-orange-400" />
-                <MiniStat label="Level" value={`Lv.${bestGrid - 2}`} color="text-cyan-400" />
-              </div>
+              {bestScore > 0 && (
+                <div className="grid grid-cols-3 gap-1.5 mt-3.5">
+                  <MiniStat label="Best" value={bestScore} color="text-yellow-400" />
+                  <MiniStat label="Combo" value={`${bestCombo}x`} color="text-orange-400" />
+                  <MiniStat label="Level" value={`Lv.${bestGrid - 2}`} color="text-cyan-400" />
+                </div>
+              )}
 
               <button
                 onClick={enterDrill}
-                className="w-full mt-3.5 py-[11px] rounded-[13px] bg-gradient-to-r from-cyan-600 to-blue-600 font-bold text-[12.5px] tracking-wide active:scale-[0.97] transition-transform shadow-[0_0_20px_rgba(6,182,212,.3)] cursor-pointer text-white"
+                className="lock-btn mt-3.5"
+                style={{ '--lb': '#06b6d4' }}
               >
-                START
+                Start
               </button>
             </div>
           </div>
@@ -985,6 +988,7 @@ export default function ConcentrationGridClient() {
             summary={endSummary}
             bestScore={bestScore}
             accent="from-cyan-600 to-blue-600"
+            lockColor="#06b6d4"
             synth={audioSynth}
             onPlayAgain={enterDrill}
             onShare={shareResult}
@@ -1065,8 +1069,8 @@ function HowToRow({ icon, node }) {
 function MiniStat({ label, value, color }) {
   return (
     <div className="rounded-[9px] border border-white/5 bg-white/[0.02] py-1.5 px-1 text-center">
-      <div className={`text-[12px] font-hud font-bold ${color}`}>{value}</div>
-      <div className="text-[7.5px] label-tiny text-slate-500 mt-0.5">{label}</div>
+      <div className={`text-[16px] font-display tabular ${color}`}>{value}</div>
+      <div className="text-[7px] rdg-unit text-slate-500 mt-0.5">{label}</div>
     </div>
   );
 }

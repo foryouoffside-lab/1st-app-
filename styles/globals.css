@@ -1874,6 +1874,67 @@ body.is-drill-page footer {
   background:#fff; animation: fxXpFlash .34s ease-out both;
 }
 
+/* ── Signature: the Lock + the Readout ──────────────────────────────────────
+   The start card and the result card share one visual language so a
+   screenshot of either reads as the same object. Nothing here touches the
+   inside of a drill — only the two framing screens.
+
+     --lb  button accent (dark text sits on it)
+     --lm  bracket colour for a locked title/score
+
+   The Lock is our press: a solid accent fill with two corner brackets that
+   pull IN on :active — no fake drop-shadow, no travel to speak of. The
+   Readout is how a number arrives: it settles (transform only, so a dropped
+   frame can only cost the motion, never the digits), with its unit set in
+   mono like a gear label. */
+.lock-btn {
+  position:relative; display:block; width:100%; border:0; cursor:pointer;
+  border-radius:12px; padding:13px 0;
+  font-family:var(--font-mono), 'IBM Plex Mono', ui-monospace, monospace;
+  font-size:12px; font-weight:600; letter-spacing:.18em; text-transform:uppercase;
+  color:#050508; background:var(--lb, #8b5cf6);
+  transition:transform .09s ease, filter .09s ease;
+}
+.lock-btn::before, .lock-btn::after {
+  content:''; position:absolute; width:7px; height:7px;
+  border:2px solid rgba(0,0,0,.5); transition:inset .09s ease, top .09s ease, left .09s ease, right .09s ease, bottom .09s ease;
+}
+.lock-btn::before { top:5px; left:5px; border-right:0; border-bottom:0; }
+.lock-btn::after  { bottom:5px; right:5px; border-left:0; border-top:0; }
+.lock-btn:active { transform:translateY(1px); filter:brightness(.93); }
+.lock-btn:active::before { top:7px; left:7px; }
+.lock-btn:active::after  { bottom:7px; right:7px; }
+
+/* A title or a score, clamped by two accent brackets. */
+.lock-mark { position:relative; display:inline-block; padding:5px 13px; }
+.lock-mark::before, .lock-mark::after {
+  content:''; position:absolute; width:10px; height:10px; border:2px solid var(--lm, #8b5cf6);
+}
+.lock-mark::before { top:0; left:0; border-right:0; border-bottom:0; }
+.lock-mark::after  { bottom:0; right:0; border-left:0; border-top:0; }
+.lock-mark.snap::before { animation: fxLockSnap .4s cubic-bezier(.2,1.5,.35,1) both; }
+.lock-mark.snap::after  { animation: fxLockSnap .4s cubic-bezier(.2,1.5,.35,1) .1s both; }
+@keyframes fxLockSnap {
+  0%   { opacity:0; transform:translate(var(--lsx,-12px), var(--lsy,-12px)) scale(1.5); }
+  100% { opacity:1; transform:translate(0,0) scale(1); }
+}
+.lock-mark.snap::after { --lsx:12px; --lsy:12px; }
+
+/* The Readout: a gear-label unit next to a display-face value. Value keeps
+   whatever size class the caller gives it; this is just the unit + the
+   settle. Transform only — a dropped frame costs the motion, not the number. */
+.rdg-unit {
+  font-family:var(--font-mono), 'IBM Plex Mono', ui-monospace, monospace;
+  text-transform:uppercase; letter-spacing:.15em; font-weight:500;
+  color:var(--text-faint);
+}
+@keyframes fxRdgSettle {
+  0%  { transform:translateY(3px) scale(.965); }
+  60% { transform:translateY(-1px) scale(1.008); }
+  100%{ transform:translateY(0) scale(1); }
+}
+.fx-rdg-settle { animation: fxRdgSettle .5s cubic-bezier(.2,1.5,.35,1) both; }
+
 /* ── Quick Dodge: compositor-driven hazard layer ─────────────────────────────
    The hazards used to be repainted into a full-screen 2D canvas every frame.
    That is the one structural difference between this drill and
