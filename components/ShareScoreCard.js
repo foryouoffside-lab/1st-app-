@@ -204,9 +204,10 @@ function resolveFonts() {
       return document.fonts?.check?.(`bold 32px ${family}`) ? stack : null;
     };
     const ui = pick('--font-inter') || FALLBACK;
-    return { ui, display: pick('--font-anton') || ui };
+    const display = pick('--font-anton') || ui;
+    return { ui, display, mono: pick('--font-mono') || ui };
   } catch {
-    return { ui: FALLBACK, display: FALLBACK };
+    return { ui: FALLBACK, display: FALLBACK, mono: FALLBACK };
   }
 }
 
