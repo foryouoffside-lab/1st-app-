@@ -283,6 +283,75 @@ service cloud.firestore {
       allow create, update, delete: if request.auth != null && request.auth.uid == uid;
     }
 
+    // Friend requests + friendships — ONE doc per relationship, id is
+    // [uidA, uidB].sort().join('_') so it's derivable from either side and
+    // the collection is self-bounding at one row per pair. See lib/friends.js.
+    //
+    // status is only ever 'pending' | 'accepted'. A decline is a DELETE, not
+    // a 'declined' status, so a later re-request is a clean create and no
+    // pair is ever permanently blocked.
+    match /friendRequests/{pairId} {
+      // Only the two people named in the doc can read it. Every clause below
+      // is a SEPARATE ownership field on purpose: Firestore validates a query
+      // against the rule BEFORE running it and can't infer that `users`
+      // always contains `to` and `from`, so each listener in lib/friends.js
+      // needs its own filter field spelled out here or the query is rejected
+      // outright (even against an empty collection):
+      //   listenFriends           -> where('users','array-contains',me)
+      //   listenIncomingRequests  -> where('to','==',me)
+      //   listenOutgoingRequests  -> where('from','==',me)
+      // These are equivalent in practice — the create rule pins
+      // `users` to exactly [from, to] — so this widens nothing.
+      //
+      // `resource == null` lets a signed-in user getDoc() a pair doc that
+      // doesn't exist yet (sendFriendRequest checks for an existing
+      // request/friendship before creating one); without it that first read
+      // throws permission-denied instead of returning "not found".
+      allow read: if request.auth != null && (
+        resource == null
+        || request.auth.uid in resource.data.users
+        || request.auth.uid == resource.data.from
+        || request.auth.uid == resource.data.to
+      );
+
+      // Sender opens a pending request to someone else. The doc id must be
+      // the sorted-pair id of exactly these two uids (checked both
+      // orderings, since rules can't sort), and `users` must be exactly
+      // [from, to] with no extra entries.
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(
+             ['users', 'from', 'to', 'fromName', 'toName', 'status', 'createdAt', 'respondedAt'])
+        && request.resource.data.from == request.auth.uid
+        && request.resource.data.to is string
+        && request.resource.data.from != request.resource.data.to
+        && request.resource.data.status == 'pending'
+        && request.resource.data.users.hasOnly([request.resource.data.from, request.resource.data.to])
+        && request.resource.data.users.size() == 2
+        && (pairId == request.resource.data.from + '_' + request.resource.data.to
+            || pairId == request.resource.data.to + '_' + request.resource.data.from)
+        && request.resource.data.fromName.size() <= 40
+        && request.resource.data.toName.size() <= 40;
+
+      // Only the RECIPIENT of a still-pending request may accept it, and the
+      // only thing that write may touch is status -> 'accepted' (+ the
+      // respondedAt stamp). No other transition exists.
+      allow update: if request.auth != null
+        && resource.data.status == 'pending'
+        && resource.data.to == request.auth.uid
+        && request.resource.data.status == 'accepted'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'respondedAt']);
+
+      // Delete covers three actions, all of which are just "remove the row":
+      //  - decline  : the recipient drops a pending request
+      //  - cancel   : the sender withdraws a pending request
+      //  - unfriend : either party ends an accepted friendship
+      allow delete: if request.auth != null && (
+        (resource.data.status == 'pending'
+          && (resource.data.from == request.auth.uid || resource.data.to == request.auth.uid))
+        || (resource.data.status == 'accepted' && request.auth.uid in resource.data.users)
+      );
+    }
+
     // Everything else is denied by default.
     match /{document=**} {
       allow read, write: if false;

@@ -31,6 +31,7 @@ function renderCard(card, scale) {
   const {
     score, bestScore, accuracy, bestCombo, rating, newBest,
     visualHits = undefined, numberHits = undefined, drillName, playerName,
+    duel = undefined,
   } = card;
   const isNewBest = newBest && score >= bestScore && bestScore > 0;
 
@@ -57,7 +58,7 @@ function renderCard(card, scale) {
 
   drawShareCard(ctx, {
     score, bestScore, accuracy, bestCombo, rating: normalizeRating(rating), isNewBest,
-    drillName, playerName: handle, visualHits, numberHits,
+    drillName, playerName: handle, visualHits, numberHits, duel,
     fonts: resolveFonts(),
   });
   perf(`canvas alloc ${scale}x`, t0, tAlloc);
@@ -438,6 +439,7 @@ function cardKey(card) {
     card.drillName, card.score, card.bestScore, card.accuracy, card.bestCombo,
     normalizeRating(card.rating)?.letter, card.newBest ? 1 : 0, card.playerName,
     card.visualHits, card.numberHits,
+    card.duel && `${card.duel.outcome}:${card.duel.myScore}:${card.duel.oppScore}:${card.duel.oppName}`,
   ].join('|');
 }
 

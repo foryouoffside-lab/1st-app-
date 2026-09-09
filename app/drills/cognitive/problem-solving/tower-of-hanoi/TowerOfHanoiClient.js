@@ -285,7 +285,7 @@ export default function TowerOfHanoiClient() {
   const searchParams = useSearchParams();
   const challengeId = searchParams ? searchParams.get('challengeId') : null;
   const isChallenge = !!challengeId;
-  const totalTime = isChallenge ? 30 : TOTAL_TIME;
+  const totalTime = isChallenge ? 45 : TOTAL_TIME;
 
   const [isClient, setIsClient] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -475,19 +475,25 @@ export default function TowerOfHanoiClient() {
       totalOverdrives: (prevSaved.totalOverdrives || 0) + overdriveCountRef.current,
       totalPerfectSolves: (prevSaved.totalPerfectSolves || 0) + perfectSolvesRef.current,
     };
-    saveData(updated);
-    setBestScore(updated.bestScore);
-    setBestCombo(updated.bestCombo);
-    setBestLevel(updated.bestLevel);
+    // A duel is NOT a solo run (30s, level-3 start, its own penalties, its own
+    // EIQ/win-loss system) — it must never touch solo progression, above all
+    // not saveLeaderboardEntrySync → saveDrillResult, which banks solo XP,
+    // extends the daily streak, and ticks off a daily-challenge slot.
+    if (!isChallenge) {
+      saveData(updated);
+      setBestScore(updated.bestScore);
+      setBestCombo(updated.bestCombo);
+      setBestLevel(updated.bestLevel);
 
-    saveLeaderboardEntrySync({
-      drillId: 'tower-of-hanoi',
-      drillName: 'Tower of Hanoi',
-      category: 'cognitive',
-      score: finalScore,
-      accuracy,
-      bestCombo: bestComboRef.current,
-    });
+      saveLeaderboardEntrySync({
+        drillId: 'tower-of-hanoi',
+        drillName: 'Tower of Hanoi',
+        category: 'cognitive',
+        score: finalScore,
+        accuracy,
+        bestCombo: bestComboRef.current,
+      });
+    }
 
     setEndSummary({
       progress,

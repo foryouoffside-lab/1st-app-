@@ -61,11 +61,20 @@ export default function ChallengeStatusToast() {
     }
   }, [outgoingChallenge, router]);
 
+  // The decline notice dismisses itself — it carries no action, so there is
+  // nothing lost by letting it slide away on its own. The X stays for anyone
+  // who wants it gone sooner.
+  useEffect(() => {
+    if (!declinedNotice) return undefined;
+    const t = setTimeout(() => setDeclinedNotice(null), 4000);
+    return () => clearTimeout(t);
+  }, [declinedNotice]);
+
   if (!declinedNotice) return null;
 
   return (
     <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[9999] w-full max-w-md px-4 pointer-events-none">
-      <div className="bg-neutral-900/95 border border-red-500/40 backdrop-blur-md rounded-2xl p-4 flex items-center justify-between gap-3 pointer-events-auto shadow-[0_0_25px_rgba(239,68,68,0.2)]">
+      <div className="bg-[#12131c] border border-red-500/30 rounded-2xl p-4 flex items-center justify-between gap-3 pointer-events-auto shadow-[0_8px_30px_rgba(0,0,0,.5)]">
         <div className="flex items-center gap-2.5 min-w-0">
           <Swords className="w-4 h-4 text-red-400 shrink-0" />
           <p className="text-xs text-neutral-200 min-w-0 truncate">

@@ -299,7 +299,7 @@ export default function MultiTaskingClient() {
   const searchParams = useSearchParams();
   const challengeId = searchParams ? searchParams.get('challengeId') : null;
   const isChallenge = !!challengeId;
-  const totalTime = isChallenge ? 30 : TOTAL_TIME;
+  const totalTime = isChallenge ? 45 : TOTAL_TIME;
   const matchStartAt = useDuelMatchStart(challengeId);
 
   const [isClient, setIsClient] = useState(false);
@@ -762,19 +762,25 @@ export default function MultiTaskingClient() {
       totalSessions: prevSaved.totalSessions + 1,
       totalOverdrives: (prevSaved.totalOverdrives || 0) + overdriveCountRef.current,
     };
-    saveData(updated);
-    setBestScore(updated.bestScore);
-    setBestCombo(updated.bestCombo);
-    setBestLevel(updated.bestLevel);
+    // A duel is NOT a solo run (30s, level-3 start, its own penalties, its own
+    // EIQ/win-loss system) — it must never touch solo progression, above all
+    // not saveLeaderboardEntrySync → saveDrillResult, which banks solo XP,
+    // extends the daily streak, and ticks off a daily-challenge slot.
+    if (!isChallenge) {
+      saveData(updated);
+      setBestScore(updated.bestScore);
+      setBestCombo(updated.bestCombo);
+      setBestLevel(updated.bestLevel);
 
-    saveLeaderboardEntrySync({
-      drillId: 'multi-tasking',
-      drillName: 'Multi-Tasking',
-      category: 'cognitive',
-      score: finalScore,
-      accuracy,
-      bestCombo: bestComboRef.current,
-    });
+      saveLeaderboardEntrySync({
+        drillId: 'multi-tasking',
+        drillName: 'Multi-Tasking',
+        category: 'cognitive',
+        score: finalScore,
+        accuracy,
+        bestCombo: bestComboRef.current,
+      });
+    }
 
     setEndSummary({
       progress,

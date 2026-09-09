@@ -89,18 +89,18 @@ export default function ChallengeNotificationBanner() {
           the "this is a duel" signal; the backdrop-blur is gone (it bought
           nothing over an opaque card and cost a compositor pass on every
           frame it was on screen). */}
-      <div className="pointer-events-auto flex items-center gap-3 rounded-2xl border border-purple-500/40 bg-[#12131c] p-3 shadow-[0_8px_30px_rgba(0,0,0,.55),0_0_20px_rgba(168,85,247,.12)]">
+      <div className="pointer-events-auto flex items-center gap-3 rounded-2xl border border-violet-500/30 bg-[#12131c] p-3 shadow-[0_8px_30px_rgba(0,0,0,.5)]">
         <div className="relative shrink-0">
           {activeChallenge.fromPhoto ? (
             <img
               src={activeChallenge.fromPhoto}
               alt={activeChallenge.fromName}
               referrerPolicy="no-referrer"
-              className="h-11 w-11 rounded-full border border-purple-500/40 object-cover"
+              className="h-11 w-11 rounded-full border border-white/10 object-cover"
             />
           ) : (
-            <div className="flex h-11 w-11 items-center justify-center rounded-full border border-purple-500/40 bg-purple-600/15">
-              <Swords className="h-5 w-5 text-purple-300" />
+            <div className="flex h-11 w-11 items-center justify-center rounded-full border border-[#232433] bg-[#1a1b26]">
+              <Swords className="h-5 w-5 text-violet-300" />
             </div>
           )}
           {/* Static dot. The old one was two stacked spans, the upper running
@@ -116,13 +116,13 @@ export default function ChallengeNotificationBanner() {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <span className="truncate text-sm font-black text-white">{activeChallenge.fromName}</span>
-            <span className="shrink-0 rounded-full border border-purple-500/30 bg-purple-500/15 px-1.5 py-px text-[9px] font-black uppercase tracking-wider text-purple-300">
+            <span className="shrink-0 rounded-full border border-violet-500/25 bg-violet-500/15 px-1.5 py-px text-[9px] font-black uppercase tracking-wider text-violet-300">
               Challenge
             </span>
           </div>
           {/* Just the drill. "wants to duel in" was a sentence wrapped around
               the only word here that carries information. */}
-          <p className="mt-0.5 truncate text-xs font-bold text-purple-300">{activeChallenge.drillName}</p>
+          <p className="mt-0.5 truncate text-xs font-bold text-violet-300">{activeChallenge.drillName}</p>
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">

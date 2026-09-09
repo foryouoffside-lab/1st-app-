@@ -299,7 +299,7 @@ export default function GridMemorizationClient() {
   const searchParams = useSearchParams();
   const challengeId = searchParams ? searchParams.get('challengeId') : null;
   const isChallenge = !!challengeId;
-  const totalTime = isChallenge ? 30 : TOTAL_TIME;
+  const totalTime = isChallenge ? 45 : TOTAL_TIME;
 
   const [loading, setLoading] = useState(true);
   const [isClient, setIsClient] = useState(false);
@@ -415,11 +415,17 @@ export default function GridMemorizationClient() {
       bestLevel: Math.max(saved.bestLevel || 1, bestLevelRunRef.current),
       totalSessions: (saved.totalSessions || 0) + 1,
     };
-    saveData(updated);
+    // A duel is NOT a solo run (30s, level-3 start, its own penalties, its own
+    // EIQ/win-loss system) — it must never touch solo progression, above all
+    // not saveLeaderboardEntrySync → saveDrillResult, which banks solo XP,
+    // extends the daily streak, and ticks off a daily-challenge slot.
+    if (!isChallenge) {
+      saveData(updated);
 
-    setBestScore(updated.bestScore);
-    setBestCombo(updated.bestCombo);
-    setBestLevel(updated.bestLevel);
+      setBestScore(updated.bestScore);
+      setBestCombo(updated.bestCombo);
+      setBestLevel(updated.bestLevel);
+    }
 
     const daily = isChallenge
       ? { isDailyDrill: false, wouldCompleteSet: false }
@@ -438,14 +444,16 @@ export default function GridMemorizationClient() {
       dailyChallengeSetComplete: daily.wouldCompleteSet,
     });
 
-    saveLeaderboardEntrySync({
-      drillId: 'grid-memorization',
-      drillName: 'Grid Memorization',
-      category: 'cognitive',
-      score: finalTotalScore,
-      accuracy: finalAccuracy,
-      bestCombo: bestStreakRef.current,
-    });
+    if (!isChallenge) {
+      saveLeaderboardEntrySync({
+        drillId: 'grid-memorization',
+        drillName: 'Grid Memorization',
+        category: 'cognitive',
+        score: finalTotalScore,
+        accuracy: finalAccuracy,
+        bestCombo: bestStreakRef.current,
+      });
+    }
 
     setEndSummary({
       progress,
@@ -959,9 +967,9 @@ export default function GridMemorizationClient() {
         {gameState === 'countdown' && !isChallenge && (
           <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/55">
             <span className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">Get Ready</span>
-            <div className="relative w-28 h-28 rounded-full border-[3px] border-indigo-500/20 flex items-center justify-center">
-              <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-indigo-400 border-r-indigo-400 animate-spin" style={{ animationDuration: '0.7s' }} />
-              <span key={countdownVal} className="fx-pop-in text-5xl font-display bg-gradient-to-b from-white to-indigo-300 bg-clip-text text-transparent">
+            <div className="relative w-28 h-28 rounded-full border-[3px] border-violet-500/20 flex items-center justify-center">
+              <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-violet-400 border-r-violet-400 animate-spin" style={{ animationDuration: '0.7s' }} />
+              <span key={countdownVal} className="fx-pop-in text-5xl font-display bg-gradient-to-b from-white to-violet-300 bg-clip-text text-transparent">
                 {countdownVal}
               </span>
             </div>

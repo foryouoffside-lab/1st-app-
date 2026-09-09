@@ -55,7 +55,9 @@ export default function DrillStartCard({
         )}
       </div>
 
-      <div className={`flex-1 flex flex-col justify-center ${landscape ? 'max-w-[520px] mx-auto w-full' : ''}`}>
+      {/* Name block sits a touch above the optical centre — a dead-centred
+          title forces the eye down to find it; lifting it ~10% reads first. */}
+      <div className={`flex-1 flex flex-col justify-center pb-[10vh] ${landscape ? 'max-w-[520px] mx-auto w-full pb-[6vh]' : ''}`}>
         <h1
           className="lock-mark snap font-display text-white inline-block self-start"
           style={nameStyle}

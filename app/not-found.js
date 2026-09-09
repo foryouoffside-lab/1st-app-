@@ -15,7 +15,7 @@ export default function NotFound() {
         <div className="flex justify-center">
           <Link
             href="/"
-            className="px-6 py-3 bg-gradient-to-r from-blue-600 to-violet-600 text-white rounded-lg font-semibold hover:shadow-lg transition-all transform hover:scale-[1.02]"
+            className="px-6 py-3 bg-gradient-to-r from-blue-600 to-violet-600 text-white rounded-xl font-semibold hover:shadow-lg transition-all transform hover:scale-[1.02]"
           >
             Go Home
           </Link>

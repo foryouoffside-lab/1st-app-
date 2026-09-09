@@ -115,7 +115,7 @@ function UsernameStep({ pendingSignup, completeSignup }) {
 
   return (
     <Frame>
-      <div className="rounded-[24px] border border-[var(--line)] bg-[var(--card)] p-7 shadow-[0_24px_60px_rgba(0,0,0,.55)]">
+      <div className="rounded-2xl border border-[var(--line)] bg-[var(--card)] p-7">
         <div className="flex flex-col items-center text-center mb-7">
           <div className="relative mb-4">
             <img
@@ -146,18 +146,18 @@ function UsernameStep({ pendingSignup, completeSignup }) {
               value={name}
               onChange={(e) => { setName(e.target.value); setError(''); }}
               placeholder="Enter a unique name"
-              className="w-full bg-black/40 border border-white/10 rounded-[13px] py-3.5 pl-11 pr-4 text-[13px] text-white placeholder-slate-600 focus:outline-none focus:border-violet-500/50 transition-colors"
+              className="w-full bg-black/40 border border-white/10 rounded-xl py-3.5 pl-11 pr-4 text-[13px] text-white placeholder-slate-600 focus:outline-none focus:border-violet-500/50 transition-colors"
             />
           </div>
 
           {error && (
-            <p className="text-[11px] text-rose-400 font-medium bg-rose-500/10 border border-rose-500/20 rounded-[10px] px-3 py-2">{error}</p>
+            <p className="text-[11px] text-rose-400 font-medium bg-rose-500/10 border border-rose-500/20 rounded-xl px-3 py-2">{error}</p>
           )}
 
           <button
             type="submit"
             disabled={submitting || name.trim().length < 3}
-            className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:brightness-110 text-white font-bold py-[13px] rounded-[13px] transition-all duration-200 active:scale-[0.98] shadow-[0_0_24px_rgba(139,92,246,.3)] disabled:opacity-40 disabled:active:scale-100 text-[13px] tracking-wide"
+            className="w-full flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-500 text-white font-bold py-[13px] rounded-xl transition-colors duration-200 active:scale-[0.98] disabled:opacity-40 disabled:active:scale-100 text-[13px] tracking-wide"
           >
             {submitting ? (
               <>
@@ -297,8 +297,8 @@ export default function AuthGate({ children }) {
                 is what made the wordmark look stranded. */}
             <div className="mt-9 space-y-2">
               {FEATURES.map(({ icon: Icon, label, blurb }) => (
-                <div key={label} className="flex items-center gap-3 rounded-[13px] border border-white/[0.06] bg-white/[0.025] px-3.5 py-3">
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] bg-violet-400/10 text-violet-300">
+                <div key={label} className="flex items-center gap-3 rounded-xl border border-white/[0.06] bg-white/[0.025] px-3.5 py-3">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-violet-400/10 text-violet-300">
                     <Icon className="w-4 h-4" />
                   </span>
                   <span className="min-w-0">
@@ -321,7 +321,7 @@ export default function AuthGate({ children }) {
             <button
               onClick={handleSignIn}
               disabled={signingIn}
-              className="w-full flex items-center justify-center gap-3 bg-white hover:bg-slate-100 text-slate-900 font-bold py-[15px] rounded-[14px] transition-all duration-200 active:scale-[0.98] shadow-[0_10px_30px_rgba(0,0,0,.45)] disabled:opacity-60 disabled:active:scale-100 text-[13.5px] tracking-[-0.01em]"
+              className="w-full flex items-center justify-center gap-3 bg-white hover:bg-slate-100 text-slate-900 font-bold py-[15px] rounded-xl transition-all duration-200 active:scale-[0.98] disabled:opacity-60 disabled:active:scale-100 text-[13.5px] tracking-[-0.01em]"
             >
               {signingIn ? (
                 <>

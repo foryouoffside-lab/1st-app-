@@ -51,10 +51,11 @@ const config: CapacitorConfig = {
       resizeOnFullScreen: true,
     },
     LocalNotifications: {
-      // No custom drawable asset shipped yet, so this tints the OS's
-      // built-in fallback icon rather than a proper monochrome brand icon.
-      // Swap in a real `smallIcon` (a white silhouette drawable under
-      // android/app/src/main/res/drawable) later for a polished look.
+      // The white target-mark silhouette at
+      // android/app/src/main/res/drawable/ic_stat_notify.xml — replaces the
+      // OS's generic "i" fallback. `iconColor` tints it (and the app name)
+      // in the expanded notification.
+      smallIcon: 'ic_stat_notify',
       iconColor: '#7c3aed',
     },
   },

@@ -34,7 +34,7 @@ export default function BottomNav() {
   return (
     <>
       <div className="h-[72px] md:hidden" aria-hidden="true" />
-      <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-white/[.08] bg-[#0a0b14]/95 backdrop-blur-xl md:hidden" aria-label="Main navigation" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+      <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-[var(--line)] bg-[var(--panel)] md:hidden" aria-label="Main navigation" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
         <div className="mx-auto flex h-16 max-w-lg items-center justify-around px-1">
           {TABS.map(({ label, href, icon: Icon, active }) => {
             const isActive = active(pathname, hash, searchParams);

@@ -6,7 +6,7 @@ import { Volume2, VolumeX } from 'lucide-react';
 
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade } from '../../../../../lib/scoringEngine';
 import {
-  levelForHits, rampMs, rampToFloor, applyHit, applyMistake, startLevel,
+  levelForHits, rampMs, rampToFloor, startLevel,
   scoringMaxLevel, scoringLives,
 } from '../../../../../lib/drillRules';
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
@@ -25,15 +25,13 @@ import DrillStartCard from '../../../../../components/drill/DrillStartCard';
 // ============================================================
 // TUNING CONSTANTS
 // ============================================================
+// A hard 45s. Skill cannot extend it (see the SPRINT note below) — this is a
+// plain countdown, not the shared earn-time clock.
 const TOTAL_TIME = 45.0;
 
-// How a solo run is won and lost — the clock as the only fail state, what a hit
-// earns, what a mistake costs — is defined once in lib/drillRules.js and shared
-// by every drill. Read that file for the model and the reasoning.
-//
-// Drill-local dials below. Both were `start - (level-1)/(MAX_LEVEL-1) * range`,
-// only valid while a ceiling existed; uncapped that fraction runs past 1 and
-// walks each value through its floor into negative. Decay curves instead.
+// Drill-local difficulty dials. The ramp (window, shade delta, grid size) still
+// runs off correct-action count so the board keeps escalating across the 45s;
+// each value decays toward a floor rather than a fixed slope.
 const WINDOW_START_MS = 3000;
 const WINDOW_FLOOR_MS = 1250;
 const SHADE_DELTA_FLOOR = 4.5;  // below this the two shades are indistinguishable
@@ -59,19 +57,15 @@ const SHADE_DELTA = 9; // Base lightness percentage difference
 // 0.45 actions/sec, so the shared value would leave level 40 unreachable.
 const HITS_PER_LEVEL = 2;
 
-// Seconds a correct find buys, overriding the shared TIME_PER_HIT.
-//
-// The shared 1.0s is calibrated for a drill you can act on about twice a
-// second. This one gives you a whole visual search per round — about 0.45
-// actions/sec — and against a clock that drains 1s per second that made
-// refilling arithmetically impossible at ANY accuracy. Every run was therefore
-// exactly TOTAL_TIME long and skill could not extend it, which is the endurance
-// model silently not running.
-//
-// 2.1, derived from the drill's own round window (~1.48s between finds mid-run),
-// which puts break-even at 80% like every other drill. 3.0 was over-generous:
-// it dropped the bar to 71% and stretched a good run past seven minutes.
-const TIME_PER_HIT = 2.1;
+// ── Shade Finder runs the SPRINT format, not the shared endurance economy ────
+// A "spot the odd shade" hunt is a chore stretched over four or five minutes —
+// visual search is fatiguing and monotonous in a way the twitch drills aren't.
+// So this drill alone: a hard 45-second clock that skill CANNOT extend (no
+// earn-time), and 5 lives — a wrong tap or a missed round costs one, run over
+// at zero. Because the clock is fixed, the lives are what make it a challenge:
+// rush and lose lives, play safe and find fewer. The `if (!isChallenge)`
+// branches keep duels on their own fixed rules, untouched.
+const SPRINT_LIVES = 5;
 const GRID_START = 7;
 const GRID_MAX = 9;
 // 15, not 3. The board is the one dial here that can only arrive whole, so it
@@ -346,6 +340,7 @@ export default function ShadeFinderClient() {
   const [bestLevel, setBestLevel] = useState(1);
 
   const [score, setScore] = useState(0);
+  const [lives, setLives] = useState(SPRINT_LIVES);
   // The live "Lv." HUD badge was the only thing that ever READ this, so the
   // React state went with it. The ramp itself runs off levelRef, which the
   // game loop already uses; keeping a useState in step with it only bought a
@@ -369,6 +364,7 @@ export default function ShadeFinderClient() {
   const levelRef = useRef(1);
   const bestLevelRunRef = useRef(1);
   const mistakesRef = useRef(0);
+  const livesRef = useRef(SPRINT_LIVES);
   const correctActionsRef = useRef(0);
   const totalActionsRef = useRef(0);
   const timeRemainingRef = useRef(totalTime);
@@ -453,13 +449,9 @@ export default function ShadeFinderClient() {
     let total = pts.total;
 
     scoreRef.current += total;
-    // Buy back a slice of the clock. Solo only - challenge/Arena keeps its fixed
-    // 30s deadline, which both duel players share and nothing may move. No state
-    // is set here: the existing clock interval redraws the seconds when the
-    // displayed number changes, so this costs nothing per hit.
-    if (!isChallenge) {
-      timeRemainingRef.current = applyHit({ timeRemaining: timeRemainingRef.current, level: levelRef.current, hits: correctActionsRef.current, reward: TIME_PER_HIT });
-    }
+    // No earn-time in either mode: solo is the fixed 45s SPRINT (see
+    // SPRINT_LIVES), Arena keeps its shared fixed deadline. The clock only ever
+    // drains.
     comboRef.current = comboBefore + 1;
     bestComboRef.current = Math.max(bestComboRef.current, comboRef.current);
     correctActionsRef.current += 1;
@@ -486,10 +478,10 @@ export default function ShadeFinderClient() {
     if (isChallenge) {
       scoreRef.current = Math.max(0, scoreRef.current - 5);
     } else {
-      const after = applyMistake({ timeRemaining: timeRemainingRef.current });
-      timeRemainingRef.current = after.timeRemaining;
-      runOverRef.current = after.runOver;
-      setTimeRemaining(Math.ceil(timeRemainingRef.current));
+      // Sprint format: a wrong tap / missed round costs a life, not time.
+      livesRef.current = Math.max(0, livesRef.current - 1);
+      setLives(livesRef.current);
+      runOverRef.current = livesRef.current <= 0;
     }
 
     triggerFlash('red');
@@ -499,8 +491,8 @@ export default function ShadeFinderClient() {
     if (!isChallenge && runOverRef.current) endGameRef.current?.();
   }, [triggerFlash, isChallenge]);
 
-  // No `reason` argument — running out of time is the only way a solo run can
-  // end now, so there is nothing left to distinguish.
+  // Ends on the 45s clock or on losing the last life — the result screen is the
+  // same either way, so callers pass a reason for readability only.
   const endGame = useCallback(async () => {
     if (!gameActiveRef.current) return;
     gameActiveRef.current = false;
@@ -565,6 +557,7 @@ export default function ShadeFinderClient() {
       accuracy,
       bestCombo: bestComboRef.current,
       level: bestLevelRunRef.current,
+      livesLeft: livesRef.current,
       isNewBest,
       xpEarned: xpResult.xp,
       prevBest: prevSaved.bestScore,
@@ -638,9 +631,10 @@ export default function ShadeFinderClient() {
   const scheduleHeartbeat = useCallback(() => {
     if (isChallenge) return;
     if (!gameActiveRef.current) return;
-    // Time is the only danger there is now — the lives term went with the lives.
+    // Danger pulses on either axis: the last 10 seconds, or the last 2 lives.
     const dangerFromTime = timeRemainingRef.current <= 10 ? (10 - timeRemainingRef.current) / 10 : 0;
-    const danger = Math.min(1, Math.max(0, dangerFromTime));
+    const dangerFromLives = livesRef.current <= 2 ? (3 - livesRef.current) / 3 : 0;
+    const danger = Math.min(1, Math.max(0, dangerFromTime, dangerFromLives));
     // Clamped: an unclamped tempo goes NEGATIVE once danger exceeds ~1.69, and
     // a setTimeout with a negative delay fires
     // immediately — turning this self-rescheduling callback into a tight loop
@@ -711,10 +705,11 @@ export default function ShadeFinderClient() {
 
     scoreRef.current = 0; comboRef.current = 0; bestComboRef.current = 0;
     levelRef.current = runStartLevel; bestLevelRunRef.current = runStartLevel; mistakesRef.current = 0; correctActionsRef.current = 0; totalActionsRef.current = 0;
+    livesRef.current = SPRINT_LIVES;
     timeRemainingRef.current = totalTime;
     runOverRef.current = false;
 
-    setScore(0); setTimeRemaining(totalTime);
+    setScore(0); setLives(SPRINT_LIVES); setTimeRemaining(totalTime);
     setDangerLevel(0);
     setGridCells([]);
     setEndSummary(null); setFlashes([]);
@@ -824,8 +819,8 @@ export default function ShadeFinderClient() {
             tagline="Find the one square that's a shade off"
             rules={[
               'Find the odd square out',
-              'Grid grows, contrast shrinks',
-              'Hits add time, misses cost it',
+              '45-second sprint · grid grows',
+              '5 lives · a wrong tap costs one',
             ]}
             bestStrip={bestScore > 0 ? [
               { value: bestScore.toLocaleString(), label: 'Best · PTS' },
@@ -840,8 +835,19 @@ export default function ShadeFinderClient() {
         {/* ── PLAYING / COUNTDOWN SCREEN ── */}
         {(phase === 'playing' || phase === 'countdown') && (
           <>
-            <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
+            <div className="absolute top-5 left-5 z-40 flex flex-col gap-2 pointer-events-none select-none">
               <span className="text-2xl font-hud font-bold text-white leading-none tabular-nums">{score}</span>
+              {/* Life pips — brand-violet bars, not hearts, to stay inside the
+                  one-accent design. Empties dim, don't disappear, so the count
+                  reads at a glance. */}
+              <div className="flex gap-1">
+                {Array.from({ length: SPRINT_LIVES }).map((_, i) => (
+                  <span
+                    key={i}
+                    className={`h-1.5 w-3.5 rounded-full transition-colors ${i < lives ? 'bg-violet-400' : 'bg-white/12'}`}
+                  />
+                ))}
+              </div>
             </div>
 
             {/* Timer overlay top-right */}
@@ -905,6 +911,7 @@ export default function ShadeFinderClient() {
             summary={endSummary}
             bestScore={bestScore}
             synth={audioSynth}
+            extraStats={[{ label: 'Lives Left', value: `${endSummary.livesLeft ?? 0}/${SPRINT_LIVES}` }]}
             onPlayAgain={enterDrill}
             onShare={shareResult}
           />

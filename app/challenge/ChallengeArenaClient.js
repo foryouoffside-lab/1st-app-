@@ -12,7 +12,13 @@ import {
   tierForEiq, EIQ_TIERS, DUEL_DRILLS, getServerClockOffset, isInviteFresh,
   isPlayerBusy, arenaLockoutRemainingMs, FORFEIT_GRACE_COUNT,
 } from '../../lib/challengeEngine';
-import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, updateDoc, serverTimestamp, getCountFromServer } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, updateDoc, serverTimestamp, getCountFromServer, documentId } from 'firebase/firestore';
+import {
+  searchUserByName, sendFriendRequest, acceptFriendRequest, declineFriendRequest,
+  cancelFriendRequest, removeFriend, friendPairId,
+  listenIncomingRequests, listenOutgoingRequests, listenFriends,
+} from '../../lib/friends';
+import { isPresenceFresh } from '../../lib/presence';
 
 // Leaderboard results survive tab switches and remounts for a minute. Opening
 // the tab used to mean sitting on a spinner through a full network round trip
@@ -46,9 +52,11 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { ARENA_ENABLED } from '../../lib/featureFlags';
 import {
   Swords, Trophy, Mail, Users, Zap, Check, Search, Target, Flame,
-  BarChart3, X, WifiOff, Crown, ArrowUp, ArrowDown
+  BarChart3, X, WifiOff, Crown, ArrowUp, ArrowDown, UserPlus, UserCheck, UserX, Clock
 } from 'lucide-react';
 import { useOnlineStatus, isOnline } from '../../lib/useOnlineStatus';
+import { getPlayerLevel } from '../../lib/progressStore';
+import LevelBadge from '../../components/LevelBadge';
 
 // How long to wait for a matched opponent to accept before withdrawing the
 // invite and dropping back to idle, and how recent an incoming matchmaking
@@ -133,6 +141,11 @@ export default function ChallengeArenaClient() {
   // must never do. So: fifty profiles, plus your own number if you are below
   // them. Resolved with a server-side count, which reads no documents.
   const [ownRank, setOwnRank] = useState(null);
+  // The viewer's own XP training level — read from the local progress store so
+  // their own badge shows immediately, even before AuthContext has pushed the
+  // level onto their profile doc. Other players' levels come off their user
+  // doc (p.level).
+  const [myLevel, setMyLevel] = useState(0);
   // Open-lobby posts from other players only. Direct invites addressed to this
   // user arrive separately via ChallengeContext; the two are merged into
   // `pendingInvites` below.
@@ -145,6 +158,24 @@ export default function ChallengeArenaClient() {
   const [sentChallengeId, setSentChallengeId] = useState(null);
   const [challengeStatusMessage, setChallengeStatusMessage] = useState('');
   const [hiddenGlobalInvites, setHiddenGlobalInvites] = useState([]);
+  // Player card the profile sheet is showing, or null. { player, rank } —
+  // rank is the board position (null when the player is off the top 50).
+  const [profilePlayer, setProfilePlayer] = useState(null);
+
+  // ── Friends ─────────────────────────────────────────────────────────────
+  // One relationship doc per pair (friendRequests/{sortedPairId}); see
+  // lib/friends.js. These three listeners are keyed on `uid` (never the
+  // `user` object) and each is a bounded query.
+  const [friends, setFriends] = useState([]);               // [{ pairId, uid, displayName, since }]
+  const [incomingFriendReqs, setIncomingFriendReqs] = useState([]);
+  const [outgoingFriendReqs, setOutgoingFriendReqs] = useState([]);
+  const [friendProfiles, setFriendProfiles] = useState({}); // uid -> full users doc (photo + live eiq)
+  const [playersScope, setPlayersScope] = useState('online'); // 'online' | 'friends'
+  const [boardScope, setBoardScope] = useState('global');     // 'global' | 'friends'
+  const [addFriendOpen, setAddFriendOpen] = useState(false);
+  const [addFriendQuery, setAddFriendQuery] = useState('');
+  const [addFriendBusy, setAddFriendBusy] = useState(false);
+  const [addFriendResult, setAddFriendResult] = useState(null); // { player } | { error } | null
   // Set when the player cancels the waiting modal before the invite's own
   // addDoc has come back with an id. Without it there was nothing to cancel
   // yet — the write landed a moment later and left a live invite up that the
@@ -199,6 +230,8 @@ export default function ChallengeArenaClient() {
     // Ranks/Invites/Results and sit on top of a screen it has nothing to do
     // with — a tab tap clearly means "I'm done with this sheet".
     setDuelPickerFor(null);
+    setProfilePlayer(null);
+    setAddFriendOpen(false);
     const tab = searchParams.get('tab');
     if (tab === 'leaderboard') {
       setActiveTab('leaderboard');
@@ -479,6 +512,50 @@ export default function ChallengeArenaClient() {
     })();
     return () => { cancelled = true; };
   }, [db, activeTab]);
+
+  // 3b. Friends — three bounded listeners, always on while the Arena is open
+  // (a friend request can arrive on any tab, and the sub-tab count dots need
+  // it). Keyed on `uid`, never the `user` object.
+  useEffect(() => {
+    if (!ARENA_ENABLED || !db || !uid) return;
+    const unsubs = [
+      listenFriends(db, uid, setFriends),
+      listenIncomingRequests(db, uid, setIncomingFriendReqs),
+      listenOutgoingRequests(db, uid, setOutgoingFriendReqs),
+    ];
+    return () => unsubs.forEach((u) => { try { u(); } catch (e) {} });
+  }, [db, uid]);
+
+  // The viewer's own training level, for their own badge on the profile sheet.
+  // Refreshed on focus so a level-up earned elsewhere in the app shows here.
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => getPlayerLevel().then((lv) => { if (!cancelled) setMyLevel(lv.level || 0); }).catch(() => {});
+    load();
+    window.addEventListener('focus', load);
+    return () => { cancelled = true; window.removeEventListener('focus', load); };
+  }, []);
+
+  // 3c. Hydrate friends with their real user docs (avatar + live EIQ/W-L +
+  // live presence) — the relationship doc only carries a name. One live
+  // listener per 10 friends (`documentId() in [...]`), so a friend coming
+  // online / going offline flips their dot and Duel button within a heartbeat.
+  useEffect(() => {
+    if (!ARENA_ENABLED || !db || friends.length === 0) { setFriendProfiles({}); return; }
+    const ids = friends.map((f) => f.uid).filter(Boolean);
+    const chunks = [];
+    for (let i = 0; i < ids.length; i += 10) chunks.push(ids.slice(i, i + 10));
+    const map = {};
+    const unsubs = chunks.map((chunk) => onSnapshot(
+      query(collection(db, 'users'), where(documentId(), 'in', chunk)),
+      (snap) => {
+        snap.forEach((d) => { map[d.id] = { uid: d.id, ...d.data() }; });
+        setFriendProfiles({ ...map });
+      },
+      (e) => console.error('friend profiles listener failed', e),
+    ));
+    return () => unsubs.forEach((u) => { try { u(); } catch (e) {} });
+  }, [db, friends]);
 
   // 5. Fetch this user's duel history (Results tab).
   //
@@ -869,6 +946,75 @@ export default function ChallengeArenaClient() {
     }
   };
 
+  // ── Friend actions ──────────────────────────────────────────────────────
+  const runAddFriendSearch = async () => {
+    if (!db || !user) return;
+    const name = addFriendQuery.trim();
+    if (!name) return;
+    setAddFriendBusy(true);
+    setAddFriendResult(null);
+    try {
+      const found = await searchUserByName(db, name);
+      if (!found) setAddFriendResult({ error: 'No player with that exact username.' });
+      else if (found.uid === user.uid) setAddFriendResult({ error: "That's you." });
+      else setAddFriendResult({ player: found });
+    } finally {
+      setAddFriendBusy(false);
+    }
+  };
+
+  const handleSendFriendRequest = async (targetPlayer) => {
+    if (!db || !user || !targetPlayer?.uid) return;
+    try {
+      const outcome = await sendFriendRequest(db, user, targetPlayer);
+      if (outcome === 'already-friends') alert(`You and ${targetPlayer.displayName} are already friends.`);
+      else if (outcome === 'incoming') alert(`${targetPlayer.displayName} already sent you a request — check the Invites tab.`);
+      // 'sent' / 'already-pending' need no alert; the listeners update the UI.
+    } catch (e) {
+      console.error('send friend request failed', e);
+      alert('Could not send that friend request.');
+    }
+  };
+
+  const handleAcceptFriendRequest = async (req) => {
+    try { await acceptFriendRequest(db, req.id); }
+    catch (e) { console.error('accept friend request failed', e); }
+  };
+  const handleDeclineFriendRequest = async (req) => {
+    try { await declineFriendRequest(db, req.id); }
+    catch (e) { console.error('decline friend request failed', e); }
+  };
+  const handleCancelFriendRequest = async (targetUid) => {
+    if (!user) return;
+    try { await cancelFriendRequest(db, friendPairId(user.uid, targetUid)); }
+    catch (e) { console.error('cancel friend request failed', e); }
+  };
+  const handleRemoveFriend = async (targetUid) => {
+    if (!user) return;
+    if (!confirm('Remove this friend?')) return;
+    try { await removeFriend(db, friendPairId(user.uid, targetUid)); }
+    catch (e) { console.error('remove friend failed', e); }
+  };
+
+  // Badges shown on the profile sheet — all derived from the public user
+  // doc, no extra reads and no new fields. `rank` is the board position
+  // passed in (may be null).
+  const badgesFor = (p, rank) => {
+    const out = [];
+    const w = p.wins || 0;
+    const l = p.losses || 0;
+    const duels = w + l;
+    if (rank === 1) out.push({ label: 'Champion', cls: 'text-yellow-400 border-yellow-400/30 bg-yellow-400/10' });
+    else if (rank && rank <= 3) out.push({ label: 'Top 3', cls: 'text-slate-200 border-slate-400/30 bg-slate-400/10' });
+    else if (rank && rank <= 10) out.push({ label: 'Top 10', cls: 'text-violet-300 border-violet-400/30 bg-violet-400/10' });
+    if ((p.streak || 0) >= 7) out.push({ label: 'On a streak', cls: 'text-orange-300 border-orange-500/30 bg-orange-500/10' });
+    if (w >= 100) out.push({ label: 'Centurion', cls: 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10' });
+    if (duels >= 20 && w / duels >= 0.7) out.push({ label: 'Sharpshooter', cls: 'text-cyan-300 border-cyan-400/30 bg-cyan-400/10' });
+    const created = p.createdAt?.toMillis ? p.createdAt.toMillis() : (p.createdAt?.seconds ? p.createdAt.seconds * 1000 : 0);
+    if (created && Date.now() - created > 90 * 24 * 60 * 60 * 1000) out.push({ label: 'Veteran', cls: 'text-neutral-300 border-[#33344a] bg-[#1a1b26]' });
+    return out;
+  };
+
   // The actual opponent list: who is really here, ranked by how close they
   // are to you, capped at ARENA_OPPONENT_LIMIT.
   //
@@ -938,6 +1084,27 @@ export default function ChallengeArenaClient() {
   const lockedOut = lockoutMs > 0;
   const lockoutMinutes = Math.max(1, Math.ceil(lockoutMs / 60000));
 
+  // Deep link from an Arena Challenge card on /daily: `?duel=<drillSlug>`
+  // jumps here and auto-starts matchmaking for that exact drill (no drill
+  // picker). Fires once — the param is stripped straight afterward so a
+  // refresh doesn't re-queue — and only when the player is actually free to
+  // duel (online, not locked out, not already searching / in a flow).
+  const duelDeepLinkRef = useRef('');
+  useEffect(() => {
+    if (!ARENA_ENABLED) return;
+    const slug = searchParams?.get('duel');
+    if (!slug || duelDeepLinkRef.current === slug) return;
+    if (!user || !db) return;
+    const drill = DUEL_DRILLS.find((d) => d.slug === slug);
+    if (!drill) { router.replace('/challenge'); return; }
+    duelDeepLinkRef.current = slug;
+    router.replace('/challenge');
+    if (lockedOut) { alert(`Arena locked for ~${lockoutMinutes} more min.`); return; }
+    if (!online) { setOfflineNotice('You need an internet connection to start a duel.'); return; }
+    if (matchmakingState !== 'idle' || selectedOpponent || sentChallengeId) return;
+    startMatchmaking(drill);
+  }, [searchParams, user, db, lockedOut, online, matchmakingState]);
+
   // Open-lobby posts the user has dismissed from their own inbox are filtered
   // out here, at render, rather than inside the invites listener — see the
   // note on that effect. Invites that have aged past INVITE_TTL_MS go too:
@@ -949,7 +1116,77 @@ export default function ChallengeArenaClient() {
     [pendingInvites, hiddenGlobalInvites, presenceCheckedAt]
   );
 
-  const renderAvatar = (userObj, sizeClass = "w-10 h-10", borderClass = "border border-neutral-800") => {
+  // ── Friend-derived views ────────────────────────────────────────────────
+  const friendUidSet = useMemo(() => new Set(friends.map((f) => f.uid)), [friends]);
+  const outgoingReqUids = useMemo(() => new Set(outgoingFriendReqs.map((r) => r.to)), [outgoingFriendReqs]);
+  const incomingReqByUid = useMemo(() => {
+    const m = {};
+    incomingFriendReqs.forEach((r) => { m[r.from] = r; });
+    return m;
+  }, [incomingFriendReqs]);
+  const onlineUidSet = useMemo(() => new Set(freshPlayers.map((p) => p.uid)), [freshPlayers]);
+
+  // A friend is "online" when their user doc's presence heartbeat is fresh
+  // (see lib/presence.js). There's no app-wide heartbeat (that write cost
+  // wasn't worth it), so in practice this means "has the Arena open" — which
+  // is also when they're most likely to accept a duel. Falls back to the
+  // top-40 online list if their profile hasn't hydrated yet.
+  const friendOnline = (uid) => isPresenceFresh(friendProfiles[uid]) || onlineUidSet.has(uid);
+  // Name dot: green when online, amber when offline. Binary on purpose — on the
+  // friends list "can I duel them now" is the only question the dot answers.
+  const friendDotColor = (uid) => (friendOnline(uid) ? '#22c55e' : '#f59e0b');
+
+  // Relationship of the signed-in user to some other uid.
+  const friendStateFor = (targetUid) => {
+    if (!targetUid || !user) return 'none';
+    if (targetUid === user.uid) return 'self';
+    if (friendUidSet.has(targetUid)) return 'friend';
+    if (outgoingReqUids.has(targetUid)) return 'outgoing';
+    if (incomingReqByUid[targetUid]) return 'incoming';
+    return 'none';
+  };
+
+  // Friends as full rows (relationship + hydrated user doc), name-sorted.
+  const friendRows = useMemo(() => {
+    return friends
+      .map((f) => {
+        const p = friendProfiles[f.uid] || {};
+        return {
+          pairId: f.pairId,
+          uid: f.uid,
+          displayName: p.displayName || f.displayName || 'Player',
+          photoURL: p.photoURL || '',
+          eiq: p.eiq || 0,
+          wins: p.wins || 0,
+          losses: p.losses || 0,
+          streak: p.streak || 0,
+          createdAt: p.createdAt || null,
+        };
+      })
+      .sort((a, b) => a.displayName.localeCompare(b.displayName));
+  }, [friends, friendProfiles]);
+
+  // The Friends-only leaderboard: you + your friends, ranked by EIQ.
+  const friendsBoard = useMemo(() => {
+    if (!user) return [];
+    const rows = [
+      { uid: user.uid, displayName: user.displayName, photoURL: user.photoURL, eiq: user.eiq || 0, wins: user.wins || 0, losses: user.losses || 0, streak: user.streak || 0, createdAt: user.createdAt || null },
+      ...friendRows,
+    ];
+    return rows.sort((a, b) => (b.eiq || 0) - (a.eiq || 0));
+  }, [user, friendRows]);
+  const friendsBoardRanks = useMemo(() => {
+    const out = [];
+    let lastEiq = null; let lastRank = 0;
+    friendsBoard.forEach((u, i) => {
+      const e = u.eiq || 0;
+      if (e !== lastEiq) { lastRank = i + 1; lastEiq = e; }
+      out.push(lastRank);
+    });
+    return out;
+  }, [friendsBoard]);
+
+  const renderAvatar = (userObj, sizeClass = "w-10 h-10", borderClass = "border border-[#232433]") => {
     if (userObj.photoURL) {
       return <img src={userObj.photoURL} alt={userObj.displayName} referrerPolicy="no-referrer" className={`${sizeClass} rounded-full ${borderClass} object-cover`} />;
     }
@@ -965,7 +1202,7 @@ export default function ChallengeArenaClient() {
     if (challenge.status !== 'completed') {
       return { 
         label: challenge.status === 'pending' ? 'Pending' : challenge.status === 'accepted' ? 'Active' : 'Declined', 
-        color: 'text-neutral-400 bg-neutral-900/60 border-neutral-800' 
+        color: 'text-neutral-400 bg-[#12131c] border-[#232433]' 
       };
     }
     
@@ -1021,13 +1258,23 @@ export default function ChallengeArenaClient() {
     platinum: 'text-cyan-300 bg-cyan-400/10 border-cyan-400/30',
     diamond:  'text-violet-300 bg-violet-400/10 border-violet-400/30',
   };
-  const tierClsFor = (id) => TIER_CLS[id] || 'text-neutral-400 bg-neutral-800/40 border-neutral-700';
+  const tierClsFor = (id) => TIER_CLS[id] || 'text-neutral-400 bg-[#1a1b26] border-[#33344a]';
 
   // Solid equivalents of the pill colours, for the dot that replaced the TIER
   // column on each row.
   const TIER_DOT = {
     bronze: '#d97706', silver: '#cbd5e1', gold: '#facc15',
     platinum: '#67e8f9', diamond: '#c4b5fd',
+  };
+
+  // On the board, a player who is online right now shows a green dot instead
+  // of their tier dot — same slot, but it says "here now, tap to duel" rather
+  // than restating the EIQ column. Falls back to the tier colour otherwise.
+  const ONLINE_DOT = '#22c55e';
+  const dotColorFor = (uid, tierId) => {
+    const isSelf = uid && user && uid === user.uid;
+    if ((isSelf && online) || (!isSelf && onlineUidSet.has(uid))) return ONLINE_DOT;
+    return TIER_DOT[tierId] || '#525252';
   };
 
   // The board's column widths, declared once. The header row and every player
@@ -1058,7 +1305,6 @@ export default function ChallengeArenaClient() {
   const myEiq = user?.eiq || 0;
   const myTier = tierForEiq(myEiq);
   const nextTier = EIQ_TIERS.find(t => t.minEiq > myEiq) || null;
-  const tierProgress = nextTier ? Math.min(100, Math.round((myEiq / nextTier.minEiq) * 100)) : 100;
 
   // Where the player sits. Inside the top fifty that is just their row index;
   // below it, `ownRank` carries the server-side count (it is deliberately null
@@ -1111,8 +1357,8 @@ export default function ChallengeArenaClient() {
   if (!ARENA_ENABLED) {
     return (
       <div className="min-h-screen bg-[#050508] text-slate-100 flex flex-col items-center justify-center p-6 text-center" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
-        <div className="w-16 h-16 bg-purple-600/10 border border-purple-500/30 rounded-2xl flex items-center justify-center mb-6">
-          <Swords className="w-8 h-8 text-purple-400" />
+        <div className="w-16 h-16 bg-[#1a1b26] border border-[#232433] rounded-2xl flex items-center justify-center mb-6">
+          <Swords className="w-8 h-8 text-violet-400" />
         </div>
         <h1 className="font-display text-2xl text-white mb-2">Arena — Coming Soon</h1>
         <p className="text-sm text-neutral-400 max-w-xs leading-relaxed">
@@ -1132,7 +1378,7 @@ export default function ChallengeArenaClient() {
           {/* A. RANKINGS PAGE VIEW (tab === 'leaderboard') */}
           {/* ──────────────────────────────────────────────────────── */}
           {activeTab === 'leaderboard' && (
-            <div className="space-y-5 arena-view-in">
+            <div className="flex flex-col gap-5 arena-view-in">
               {/* Ranks Header. The "GLOBAL STANDINGS" kicker that sat above
                   the h1 restated it, and then "Your Standing" said the word a
                   third time two inches down. The explainer line under it
@@ -1143,162 +1389,134 @@ export default function ChallengeArenaClient() {
                 <h1 className="font-display text-[28px] text-white">Arena Rankings</h1>
               </div>
 
-              {/* Your Standing — the board is fifty rows deep and the player's
-                  own row can be anywhere in it (or off it entirely). This puts
-                  their tier, EIQ and the distance to the next tier at the top,
-                  so the one row they always care about never has to be hunted
-                  for. */}
-              {user && (
-                <div className="relative overflow-hidden rounded-3xl border border-purple-500/25 bg-gradient-to-br from-purple-950/30 via-[#0d0a17] to-[#09090e] shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_16px_40px_-16px_rgba(126,34,206,0.45)]">
-                  {/* Summit motif — an original SkillDrills mark: angular
-                      ridgelines rising to a lit apex, standing for rank,
-                      progression and the climb. Purely decorative: it sits
-                      behind the numbers on the right and is masked so it
-                      fades out well before the name, and it is never touched
-                      by the rank-change work below. */}
-                  <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-                    <div
-                      className="absolute inset-y-0 right-0 w-44"
-                      style={{
-                        WebkitMaskImage: 'linear-gradient(to right, transparent, #000 62%)',
-                        maskImage: 'linear-gradient(to right, transparent, #000 62%)',
-                      }}
+              {/* Global vs Friends. Global = the top 50 by EIQ. Friends =
+                  you + everyone you've added, ranked among yourselves. */}
+              <div className="flex rounded-xl border border-[#232433] bg-[#0e0f16] p-1">
+                {[['global', 'Global'], ['friends', `Friends (${friends.length})`]].map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setBoardScope(id)}
+                    className={`flex-1 rounded-xl py-1.5 text-[11px] font-black transition-colors ${
+                      boardScope === id ? 'bg-[#1a1b26] text-white' : 'text-neutral-500 hover:text-neutral-300'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {/* ── FRIENDS BOARD ── */}
+              {boardScope === 'friends' && (
+                friendRows.length === 0 ? (
+                  <div className="rounded-2xl border border-[#232433] bg-[#12131c] px-5 py-10 text-center">
+                    <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl border border-[#232433] bg-[#1a1b26] text-violet-300">
+                      <Users className="h-5 w-5" />
+                    </div>
+                    <h3 className="font-display text-lg text-white">No friends yet</h3>
+                    <p className="mx-auto mt-1 max-w-xs text-[11px] leading-relaxed text-neutral-500">
+                      Add players by username to see how you rank against just your friends.
+                    </p>
+                    <button
+                      onClick={() => setAddFriendOpen(true)}
+                      className="mt-4 inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-xs font-black text-white transition hover:bg-violet-500 active:scale-[.98]"
                     >
-                      <svg viewBox="0 0 220 170" preserveAspectRatio="xMaxYMax slice" className="h-full w-full">
-                        <defs>
-                          <linearGradient id="sd-summit-a" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0" stopColor="#a855f7" stopOpacity="0.42" />
-                            <stop offset="1" stopColor="#a855f7" stopOpacity="0" />
-                          </linearGradient>
-                          <linearGradient id="sd-summit-b" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0" stopColor="#c4b5fd" stopOpacity="0.32" />
-                            <stop offset="1" stopColor="#7c3aed" stopOpacity="0" />
-                          </linearGradient>
-                        </defs>
-                        <path d="M20 170 L104 44 L188 170 Z" fill="url(#sd-summit-b)" />
-                        <path d="M96 170 L150 66 L210 170 L150 170 Z" fill="url(#sd-summit-a)" />
-                        <path d="M150 66 L161 82 L150 89 L139 82 Z" fill="#ede9fe" fillOpacity="0.8" />
-                        <line x1="150" y1="66" x2="150" y2="34" stroke="#ede9fe" strokeOpacity="0.38" strokeWidth="1.5" />
-                      </svg>
-                    </div>
+                      <UserPlus className="h-3.5 w-3.5" />
+                      Add a friend
+                    </button>
                   </div>
-
-                  <div className="relative p-4">
-                    <div className="mb-3.5 flex items-start justify-between">
-                      <div className="flex items-center gap-1.5">
-                        <Crown className="h-3.5 w-3.5 text-purple-300" />
-                        <span className="text-[10px] font-black uppercase tracking-widest text-purple-300">Your Standing</span>
-                      </div>
-                      <span className="text-[9px] font-black uppercase tracking-[0.2em] text-neutral-500">EIQ</span>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex min-w-0 items-center gap-3">
-                        {/* Position on the board — deliberately the strongest
-                            element on the card, set in Anton (display face)
-                            and given its own column rather than sitting inline
-                            with the avatar/name. Absent only while the rank is
-                            still resolving. Font size steps down for longer
-                            rank numbers so it never crowds the EIQ value on a
-                            narrow phone.
-
-                            The up/down badge under the number renders only
-                            when rankChange is non-null, i.e. only when this
-                            visit's rank actually differs from the one stored
-                            on the LAST visit (see the effect above) — never on
-                            every render, and never invented when nothing
-                            moved. rank-climb-in / rank-fall-in are one-shot
-                            mount animations (see globals.css); they don't loop
-                            and don't need to be manually removed afterward. */}
-                        {myRank !== null && (
-                          <div className="shrink-0">
-                            <span className="mb-1 block text-[8px] font-black uppercase tracking-[0.22em] text-neutral-500">Rank</span>
-                            <span
-                              className={`block font-display text-white ${
-                                myRank >= 1000 ? 'text-[27px]' : myRank >= 100 ? 'text-[33px]' : 'text-[42px]'
-                              } ${rankChange ? (rankChange.direction === 'up' ? 'rank-climb-in' : 'rank-fall-in') : ''}`}
-                            >
-                              #{myRank.toLocaleString()}
-                            </span>
-                            {rankChange && (
-                              <div
-                                className={`rank-badge-in mt-1.5 inline-flex items-center gap-0.5 rounded-full border px-1.5 py-[1px] text-[8px] font-black tabular-nums ${rankTheme.text} ${rankTheme.rowBorder} ${rankTheme.rowBg}`}
-                              >
-                                {rankChange.direction === 'up'
-                                  ? <ArrowUp className="h-2 w-2" strokeWidth={3} />
-                                  : <ArrowDown className="h-2 w-2" strokeWidth={3} />}
-                                {rankChange.delta}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                        {renderAvatar(user, 'w-11 h-11 border border-purple-500/20 shrink-0')}
-                        <div className="min-w-0">
-                          <div className="flex min-w-0 items-center gap-1.5">
-                            <span className="truncate text-sm font-semibold text-white">{user.displayName}</span>
-                            <span className="shrink-0 rounded-full border border-purple-400/30 bg-purple-500/20 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider text-purple-200">
-                              You
-                            </span>
-                          </div>
-                          <span className={`mt-1.5 inline-block rounded border px-1.5 py-0.5 text-[8.5px] font-black uppercase tracking-wider ${tierClsFor(myTier.id)}`}>
-                            {myTier.name}
-                          </span>
-                        </div>
-                      </div>
-                      {/* EIQ is what the whole page ranks on, so on your own
-                          card it stays a hero number — set in IBM Plex Mono
-                          (the numeric HUD face) and kept the app-wide EIQ
-                          yellow so it reads as the same value as the fifty
-                          rows directly beneath it. Steps down for large
-                          scores so it never collides with the rank. */}
-                      <div className="shrink-0 text-right leading-none">
-                        <span
-                          className={`block font-hud font-semibold tabular-nums text-yellow-400 ${
-                            myEiq >= 10000 ? 'text-[22px]' : myEiq >= 1000 ? 'text-[26px]' : 'text-[32px]'
+                ) : (
+                  <div className="flex flex-col gap-2.5">
+                    {friendsBoard.map((row, idx) => {
+                      const isMe = user && row.uid === user.uid;
+                      const rank = friendsBoardRanks[idx];
+                      return (
+                        <div
+                          key={row.uid}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setProfilePlayer({ player: row, rank })}
+                          className={`${BOARD_COLS} cursor-pointer rounded-2xl border p-3.5 transition-colors ${
+                            isMe ? 'border-violet-500/30 bg-[#16131f]' : 'border-[#232433] bg-[#12131c] hover:border-[#33344a]'
                           }`}
                         >
-                          {myEiq.toLocaleString()}
-                        </span>
-                      </div>
-                    </div>
+                          <span className="text-center text-xs font-black tabular-nums text-neutral-500">{rank}</span>
+                          <div className="flex min-w-0 items-center gap-2.5">
+                            {renderAvatar(row, 'w-9 h-9 border border-[#232433] shrink-0')}
+                            <span
+                              className="h-2 w-2 shrink-0 rounded-full"
+                              style={{ background: isMe ? (online ? '#22c55e' : '#f59e0b') : friendDotColor(row.uid) }}
+                              title={(isMe ? online : friendOnline(row.uid)) ? 'Online now' : 'Offline'}
+                            />
+                            <span className="truncate text-sm font-black leading-tight text-white">{row.displayName}</span>
+                            {isMe && (
+                              <span className="shrink-0 rounded-full border border-violet-500/30 bg-violet-500/15 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider text-violet-300">You</span>
+                            )}
+                          </div>
+                          <span className={`text-right text-sm font-black tabular-nums ${(row.eiq || 0) > 0 ? 'text-yellow-400' : 'text-neutral-600'}`}>
+                            {(row.eiq || 0).toLocaleString()}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
-
-                  {/* Footer strip: how far to the next rung. Deliberately
-                      untouched by the rank-movement work above — tier and
-                      rank are two different systems (see the comment on
-                      RANK_CHANGE_THEME), and this bar's own progress
-                      animation already existed and does its own job. Hidden
-                      at Diamond, where there is no next tier to count
-                      toward. */}
-                  {nextTier && (
-                    <div className="border-t border-purple-500/15 bg-black/20">
-                      {/* A 0%-wide fill is an invisible bar, which is exactly
-                          the state a new player is in. The track keeps a
-                          visible floor so there is always something to grow. */}
-                      <div className="h-0.5 bg-white/[.06]">
-                        <div
-                          className="h-full bg-purple-400 transition-all duration-500"
-                          style={{ width: `${Math.max(tierProgress, 2)}%` }}
-                        />
-                      </div>
-                      <div className="flex items-center justify-between gap-3 px-4 py-2.5">
-                        <span className="text-[11px] text-neutral-400">
-                          Next tier: <span className="font-bold text-white">{nextTier.name}</span>
-                        </span>
-                        {/* The remaining distance, not the raw fraction — the
-                            hexagon that used to sit here meant nothing. */}
-                        <span className="shrink-0 text-[11px] tabular-nums text-neutral-400">
-                          <span className="font-bold text-white">{(nextTier.minEiq - myEiq).toLocaleString()}</span> EIQ to go
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </div>
+                )
               )}
 
-              {leaderboardUsers.length === 0 ? (
-                <div className="text-center py-16 bg-[#12131c] border border-neutral-800/60 rounded-3xl">
-                  <div className="w-12 h-12 bg-neutral-900 rounded-full flex items-center justify-center border border-neutral-800 mx-auto mb-3">
+              {/* Champion — the current #1. The top of this page belongs to
+                  whoever leads the board, not to the viewer; the viewer's own
+                  "Your Standing" recap sits at the very bottom. Tap for the
+                  full profile. Hidden until at least one real EIQ exists. */}
+              {boardScope === 'global' && !boardUnplayed && leaderboardUsers[0] && (() => {
+                const champ = leaderboardUsers[0];
+                const champTier = tierForEiq(champ.eiq);
+                const champW = champ.wins || 0;
+                const champL = champ.losses || 0;
+                return (
+                  <button
+                    type="button"
+                    onClick={() => setProfilePlayer({ player: champ, rank: 1 })}
+                    className="w-full overflow-hidden rounded-2xl border border-[#26273a] bg-[#12131c] p-4 text-left transition-colors hover:border-[#33344a] active:scale-[.99]"
+                  >
+                    <div className="mb-3 flex items-center gap-1.5">
+                      <Crown className="h-3.5 w-3.5 text-yellow-500" />
+                      <span className="text-[10px] font-black uppercase tracking-widest text-yellow-500/90">Champion</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {renderAvatar(champ, 'w-14 h-14 border border-white/10 shrink-0')}
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-base font-bold text-white">{champ.displayName}</div>
+                        <span className={`mt-1 inline-block rounded border px-1.5 py-0.5 text-[8.5px] font-black uppercase tracking-wider ${tierClsFor(champTier.id)}`}>
+                          {champTier.name}
+                        </span>
+                      </div>
+                      <div className="shrink-0 text-right leading-none">
+                        <span className="block font-hud text-[28px] font-semibold tabular-nums text-yellow-400">
+                          {(champ.eiq || 0).toLocaleString()}
+                        </span>
+                        <span className="text-[9px] font-black uppercase tracking-[0.2em] text-neutral-500">EIQ</span>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex items-center gap-4 border-t border-white/[.06] pt-2.5 text-[11px] text-neutral-400">
+                      <span><span className="font-bold text-white">{champW}</span> W</span>
+                      <span><span className="font-bold text-white">{champL}</span> L</span>
+                      <span><span className="font-bold text-white">{champW + champL}</span> duels</span>
+                      <span className="ml-auto font-semibold text-violet-300">View profile</span>
+                    </div>
+                  </button>
+                );
+              })()}
+
+              {/* Your Standing is NOT in this scroll flow — it's a fixed bar
+                  pinned just above the bottom nav (see the JSX near the end of
+                  this component), so the player's rank stays on screen while
+                  the board scrolls. This spacer just reserves the room the
+                  fixed bar would otherwise cover on the last rows. */}
+              {user && <div className="order-last h-28" aria-hidden="true" />}
+
+              {boardScope === 'global' && (leaderboardUsers.length === 0 ? (
+                <div className="text-center py-16 bg-[#12131c] border border-[#232433] rounded-2xl">
+                  <div className="w-12 h-12 bg-[#1a1b26] rounded-full flex items-center justify-center border border-[#232433] mx-auto mb-3">
                     <Trophy className="w-5 h-5 text-neutral-500 animate-pulse" />
                   </div>
                   <h3 className="font-display text-base text-neutral-300">Calculating Standings</h3>
@@ -1312,7 +1530,7 @@ export default function ChallengeArenaClient() {
                       the query returned, not a ranking. Saying so is better
                       than printing 1st / 2nd / 3rd over a three-way tie. */}
                   {boardUnplayed && (
-                    <div className="rounded-2xl border border-neutral-800/60 bg-[#12131c] px-4 py-3">
+                    <div className="rounded-2xl border border-[#232433] bg-[#12131c] px-4 py-3">
                       <p className="text-[11px] leading-relaxed text-neutral-400">
                         No duels played yet — everyone is on 0 EIQ.
                         <span className="text-white font-bold"> The first win takes the top spot.</span>
@@ -1322,16 +1540,20 @@ export default function ChallengeArenaClient() {
 
 
                   {leaderboardUsers.map((userObj, idx) => {
+                    // The #1 player already has the Champion card at the top of
+                    // the page, so don't repeat them as the first row here.
+                    if (!boardUnplayed && idx === 0) return null;
                     const isCurrentUser = user && user.uid === userObj.uid;
                     const tier = tierForEiq(userObj.eiq);
                     const rank = boardRanks[idx];
 
-                    // Podium accents only where a podium has actually been
-                    // earned — on an all-zero board the top three rows are just
-                    // the first three names.
-                    const podiumBorder = boardUnplayed
-                      ? 'border-neutral-800/60'
-                      : rank === 1 ? 'border-yellow-500/30' : rank === 2 ? 'border-slate-400/25' : rank === 3 ? 'border-amber-600/25' : 'border-neutral-800/60';
+                    // Every row carries the same neutral hairline. Coloured
+                    // podium borders were dropped: standard competition ranking
+                    // ties everyone on 0 EIQ at rank 3, so the "3rd place" amber
+                    // border spread to most of the board and just read as the
+                    // cards being outlined in yellow. Rank still shows in the
+                    // number column; #1 keeps a subtle violet ring.
+                    const podiumBorder = 'border-[#232433]';
 
                     // Same rank-change event as the Your Standing card above
                     // (see rankChange/RANK_CHANGE_THEME), applied here only
@@ -1351,20 +1573,24 @@ export default function ChallengeArenaClient() {
                     return (
                       <div
                         key={userObj.uid}
-                        className={`${BOARD_COLS} p-3.5 rounded-3xl border transition-all duration-300 ${rowAnim} ${
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setProfilePlayer({ player: userObj, rank: boardUnplayed ? null : rank })}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setProfilePlayer({ player: userObj, rank: boardUnplayed ? null : rank }); } }}
+                        className={`${BOARD_COLS} cursor-pointer p-3.5 rounded-2xl border transition-colors duration-200 ${rowAnim} ${
                           isCurrentUser
-                            ? 'bg-purple-950/10 border-purple-500/30 shadow-[0_0_15px_rgba(139,92,246,0.05)]'
-                            : `bg-[#12131c] ${podiumBorder} hover:border-neutral-700`
+                            ? 'bg-[#16131f] border-violet-500/30'
+                            : `bg-[#12131c] ${podiumBorder} hover:border-[#33344a]`
                         }`}
                         style={{ animationDelay: `${Math.min(idx, 12) * 18}ms` }}
                       >
-                        {/* Rank — plain numbers; first place keeps a thin gold
+                        {/* Rank — plain numbers; first place keeps a thin violet
                             ring. Nothing at all while the board is unplayed,
                             because there is no position to report. */}
                         {boardUnplayed ? (
                           <span className="text-center text-xs font-black text-neutral-700">—</span>
                         ) : rank === 1 ? (
-                          <span className="flex h-6 w-6 items-center justify-center rounded-full border border-yellow-500/50 text-[11px] font-black tabular-nums text-yellow-400">
+                          <span className="flex h-6 w-6 items-center justify-center rounded-full border border-violet-500/50 text-[11px] font-black tabular-nums text-violet-300">
                             1
                           </span>
                         ) : (
@@ -1376,26 +1602,27 @@ export default function ChallengeArenaClient() {
                         {/* Player. The tier is a dot here rather than the pill
                             it used to be: same information, none of the width. */}
                         <div className="flex items-center gap-2.5 min-w-0">
-                          {renderAvatar(userObj, 'w-9 h-9 border border-neutral-800 shrink-0')}
+                          {renderAvatar(userObj, 'w-9 h-9 border border-[#232433] shrink-0')}
                           <span
                             className="h-2 w-2 shrink-0 rounded-full"
-                            style={{ background: TIER_DOT[tier.id] || '#525252' }}
-                            title={tier.name}
+                            style={{ background: dotColorFor(userObj.uid, tier.id) }}
+                            title={onlineUidSet.has(userObj.uid) ? 'Online now' : tier.name}
                           />
                           <div className="flex items-center gap-1.5 min-w-0">
                             <span className="text-sm font-black text-white leading-tight truncate">
                               {userObj.displayName}
                             </span>
                             {isCurrentUser && (
-                              <span className="text-[8px] bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 py-0.5 rounded-full font-black uppercase tracking-wider shrink-0">
+                              <span className="text-[8px] bg-violet-500/15 text-violet-300 border border-violet-500/25 px-1.5 py-0.5 rounded-full font-black uppercase tracking-wider shrink-0">
                                 You
                               </span>
                             )}
                           </div>
                         </div>
 
-                        {/* EIQ */}
-                        <span className="text-right text-sm font-black text-yellow-400 tabular-nums">
+                        {/* EIQ — yellow only when there's a real score to show;
+                            a column of yellow zeros was just visual noise. */}
+                        <span className={`text-right text-sm font-black tabular-nums ${(userObj.eiq || 0) > 0 ? 'text-yellow-400' : 'text-neutral-600'}`}>
                           {(userObj.eiq || 0).toLocaleString()}
                         </span>
                       </div>
@@ -1412,7 +1639,7 @@ export default function ChallengeArenaClient() {
                       explanation for why a below-fifty player has no row of
                       their own still earns its place. */}
                   {ownRank !== null && (
-                    <p className="mt-4 pt-4 border-t border-neutral-800/80 text-center text-[11px] text-neutral-600">
+                    <p className="mt-4 pt-4 border-t border-[#232433] text-center text-[11px] text-neutral-600">
                       Only the top 50 are listed. Climb into them to appear on the board.
                     </p>
                   )}
@@ -1422,9 +1649,9 @@ export default function ChallengeArenaClient() {
                       the empty space carries the one thing it should: the way
                       to change what is on the board. */}
                   {leaderboardUsers.length < 10 && (
-                    <div className="mt-4 rounded-3xl border border-neutral-800/60 bg-[#12131c] p-5 text-center">
-                      <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-2xl border border-purple-500/25 bg-purple-500/10">
-                        <Swords className="h-5 w-5 text-purple-300" />
+                    <div className="mt-4 rounded-2xl border border-[#232433] bg-[#12131c] p-5 text-center">
+                      <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl border border-[#232433] bg-[#1a1b26]">
+                        <Swords className="h-5 w-5 text-violet-300" />
                       </div>
                       <h3 className="font-display text-lg text-white">
                         {leaderboardUsers.length === 1
@@ -1436,7 +1663,7 @@ export default function ChallengeArenaClient() {
                       </p>
                       <button
                         onClick={() => setActiveTab('players')}
-                        className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-violet-600 px-5 py-2.5 text-xs font-black text-white transition hover:bg-violet-500 active:scale-[.98]"
+                        className="mt-4 inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-xs font-black text-white transition hover:bg-violet-500 active:scale-[.98]"
                       >
                         Find an opponent
                         <Swords className="h-3.5 w-3.5" />
@@ -1444,7 +1671,7 @@ export default function ChallengeArenaClient() {
                     </div>
                   )}
                 </div>
-              )}
+              ))}
             </div>
           )}
 
@@ -1463,17 +1690,17 @@ export default function ChallengeArenaClient() {
                   of a game screen is a misfire waiting to happen. It lives on
                   Progress, under Account, with the rest of them. */}
               <div className="flex items-center gap-2">
-                <Swords className="w-5 h-5 text-purple-400 shrink-0" />
+                <Swords className="w-5 h-5 text-violet-400 shrink-0" />
                 <h1 className="font-display text-[28px] text-white">Reflex Arena</h1>
               </div>
 
               {/* Sub-tab controllers */}
-              <div className="flex bg-neutral-950 p-1 border border-neutral-900 rounded-2xl">
+              <div className="flex bg-[#0e0f16] p-1 border border-[#232433] rounded-2xl">
                 <button
                   onClick={() => router.push('/challenge')}
                   className={`flex-1 py-2 px-3 rounded-xl text-[11px] font-black transition duration-200 flex items-center justify-center gap-1 cursor-pointer ${
                     activeTab === 'players' 
-                      ? 'bg-neutral-900 text-white border border-neutral-800' 
+                      ? 'bg-[#1a1b26] text-white border border-[#232433]' 
                       : 'text-neutral-500 hover:text-white'
                   }`}
                 >
@@ -1485,14 +1712,14 @@ export default function ChallengeArenaClient() {
                   onClick={() => router.push('/challenge?tab=invites')}
                   className={`flex-1 py-2 px-3 rounded-xl text-[11px] font-black transition duration-200 flex items-center justify-center gap-1 relative cursor-pointer ${
                     activeTab === 'invites' 
-                      ? 'bg-neutral-900 text-white border border-neutral-800' 
+                      ? 'bg-[#1a1b26] text-white border border-[#232433]' 
                       : 'text-neutral-500 hover:text-white'
                   }`}
                 >
                   <Mail className="w-3.5 h-3.5" />
                   Invites
-                  {visibleInvites.length > 0 && (
-                    <span className="absolute top-1.5 right-1 w-1.5 h-1.5 bg-purple-500 rounded-full" />
+                  {(visibleInvites.length + incomingFriendReqs.length) > 0 && (
+                    <span className="absolute top-1.5 right-1 w-1.5 h-1.5 bg-violet-500 rounded-full" />
                   )}
                 </button>
 
@@ -1500,7 +1727,7 @@ export default function ChallengeArenaClient() {
                   onClick={() => router.push('/challenge?tab=results')}
                   className={`flex-1 py-2 px-3 rounded-xl text-[11px] font-black transition duration-200 flex items-center justify-center gap-1 cursor-pointer ${
                     activeTab === 'results' 
-                      ? 'bg-neutral-900 text-white border border-neutral-800' 
+                      ? 'bg-[#1a1b26] text-white border border-[#232433]' 
                       : 'text-neutral-500 hover:text-white'
                   }`}
                 >
@@ -1530,21 +1757,50 @@ export default function ChallengeArenaClient() {
               {/* ARENA TAB 1: FIND PLAYERS */}
               {activeTab === 'players' && (
                 <div className="space-y-4">
+                  {/* Online (matchmaking pool) vs Friends (people you added).
+                      The duel card below serves both; only the list swaps. */}
+                  <div className="flex items-center gap-2">
+                    <div className="flex flex-1 rounded-xl border border-[#232433] bg-[#0e0f16] p-1">
+                      {[['online', `Online (${freshPlayers.length})`], ['friends', `Friends (${friends.length})`]].map(([id, label]) => (
+                        <button
+                          key={id}
+                          type="button"
+                          onClick={() => setPlayersScope(id)}
+                          className={`flex-1 rounded-xl py-1.5 text-[11px] font-black transition-colors ${
+                            playersScope === id ? 'bg-[#1a1b26] text-white' : 'text-neutral-500 hover:text-neutral-300'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => { setAddFriendOpen(true); setAddFriendResult(null); setAddFriendQuery(''); }}
+                      aria-label="Add friend"
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#232433] bg-[#12131c] text-violet-300 transition-colors hover:border-[#33344a] hover:text-violet-200"
+                    >
+                      <UserPlus className="h-4 w-4" />
+                    </button>
+                  </div>
+
                   {/* One "start a duel" card, not two. These were two full
                       cards with identical structure sitting on top of each
                       other — same job, one automatic and one manual — and the
                       green button put a colour the app uses nowhere else
                       (except "done") next to a violet one, so neither read as
                       the primary action. Now: one card, one primary button,
-                      one quiet secondary. */}
-                  <div className="rounded-3xl border border-purple-500/20 bg-[#12131c] p-5">
+                      one quiet secondary.
+                      Online tab only — on the Friends tab every row has its own
+                      Duel button, so this generic card is just noise there. */}
+                  {playersScope === 'online' && (
+                  <div className="rounded-2xl border border-[#232433] bg-[#12131c] p-5">
                     <div className="flex items-center gap-3">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-purple-500/20 bg-purple-500/10 text-purple-400">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#232433] bg-[#1a1b26] text-violet-300">
                         <Swords className="h-5 w-5" />
                       </div>
                       <div className="min-w-0">
                         <h4 className="text-sm font-black text-white">Start a duel</h4>
-                        <p className="mt-0.5 text-[11px] text-neutral-500">Get matched by EIQ, or post an invite anyone can take.</p>
                       </div>
                     </div>
 
@@ -1566,7 +1822,7 @@ export default function ChallengeArenaClient() {
                         className={`flex flex-1 items-center justify-center gap-2 rounded-2xl px-4 py-2.5 text-xs font-black transition active:scale-[.98] ${
                           online && !lockedOut
                             ? 'bg-violet-600 text-white hover:bg-violet-500 cursor-pointer'
-                            : 'bg-neutral-800 text-neutral-500 cursor-not-allowed'
+                            : 'bg-[#1a1b26] text-neutral-500 cursor-not-allowed'
                         }`}
                       >
                         <Target className="h-3.5 w-3.5" />
@@ -1577,19 +1833,20 @@ export default function ChallengeArenaClient() {
                         disabled={!online || lockedOut}
                         className={`flex flex-1 items-center justify-center rounded-2xl border px-4 py-2.5 text-xs font-black transition active:scale-[.98] ${
                           online && !lockedOut
-                            ? 'border-purple-500/30 bg-purple-500/10 text-purple-300 hover:bg-purple-500/20 cursor-pointer'
-                            : 'border-neutral-800 bg-neutral-900 text-neutral-600 cursor-not-allowed'
+                            ? 'border-[#232433] bg-[#1a1b26] text-violet-300 hover:border-[#33344a] cursor-pointer'
+                            : 'border-[#232433] bg-[#1a1b26] text-neutral-600 cursor-not-allowed'
                         }`}
                       >
                         Post Invite
                       </button>
                     </div>
                   </div>
+                  )}
 
                   {/* Search moved below the actions, and only shown when there
                       is a list to search. A search box over zero players is a
                       control that cannot do anything. */}
-                  {freshPlayers.length > 0 && (
+                  {playersScope === 'online' && freshPlayers.length > 0 && (
                     <div className="relative">
                       <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-4 h-4 text-neutral-600" />
                       <input
@@ -1597,15 +1854,93 @@ export default function ChallengeArenaClient() {
                         placeholder="Search online users..."
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
-                        className="w-full bg-[#12131c] border border-neutral-800 rounded-2xl py-3 pl-11 pr-4 text-sm text-white placeholder-neutral-650 focus:outline-none focus:border-purple-500/40 transition-colors"
+                        className="w-full bg-[#12131c] border border-[#232433] rounded-2xl py-3 pl-11 pr-4 text-sm text-white placeholder-neutral-650 focus:outline-none focus:border-violet-500/40 transition-colors"
                       />
                     </div>
                   )}
 
+                  {/* ── FRIENDS list ── */}
+                  {playersScope === 'friends' && (
+                    friendRows.length === 0 ? (
+                      <div className="rounded-2xl border border-[#232433] bg-[#12131c] px-5 py-8 text-center">
+                        <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl border border-[#232433] bg-[#1a1b26] text-violet-300">
+                          <Users className="h-5 w-5" />
+                        </div>
+                        <h3 className="font-display text-lg text-white">No friends yet</h3>
+                        <p className="mx-auto mt-1 max-w-xs text-[11px] leading-relaxed text-neutral-500">
+                          Add players by their username to duel them in one tap and see a friends-only leaderboard.
+                        </p>
+                        <button
+                          onClick={() => { setAddFriendOpen(true); setAddFriendResult(null); setAddFriendQuery(''); }}
+                          className="mt-4 inline-flex items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-xs font-black text-white transition hover:bg-violet-500 active:scale-[.98]"
+                        >
+                          <UserPlus className="h-3.5 w-3.5" />
+                          Add a friend
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="grid gap-3">
+                        {friendRows.map((f) => {
+                          const fTier = tierForEiq(f.eiq);
+                          const fOnline = friendOnline(f.uid);
+                          // Duel is only worth offering when BOTH sides can
+                          // actually connect: your own connection is up, you're
+                          // not locked out, and the friend is online right now.
+                          const canDuel = fOnline && online && !lockedOut;
+                          return (
+                            <div
+                              key={f.uid}
+                              className="flex items-center justify-between gap-4 rounded-2xl border border-[#232433] bg-[#12131c] p-4 transition-colors hover:border-[#33344a]"
+                            >
+                              <button
+                                type="button"
+                                onClick={() => setProfilePlayer({ player: friendProfiles[f.uid] || f, rank: null })}
+                                className="flex min-w-0 items-center gap-3 text-left"
+                              >
+                                <div className="relative shrink-0">
+                                  {renderAvatar(f, 'w-11 h-11 border border-[#232433]')}
+                                  {fOnline && <span className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border border-[#12131c] bg-emerald-500" />}
+                                </div>
+                                <div className="min-w-0">
+                                  <h4 className="flex items-center gap-1.5 text-sm font-bold text-neutral-100">
+                                    <span
+                                      className="h-2 w-2 shrink-0 rounded-full"
+                                      style={{ background: friendDotColor(f.uid) }}
+                                      title={fOnline ? 'Online now' : 'Offline'}
+                                    />
+                                    <span className="truncate">{f.displayName}</span>
+                                  </h4>
+                                  <p className="mt-1 flex items-center gap-1.5 text-[10px] text-neutral-500">
+                                    <strong className={(f.eiq || 0) > 0 ? 'text-yellow-400' : 'text-neutral-600'}>{(f.eiq || 0).toLocaleString()}</strong> EIQ
+                                    <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: TIER_DOT[fTier.id] || '#525252' }} />
+                                    {fTier.name}
+                                  </p>
+                                </div>
+                              </button>
+                              <button
+                                onClick={() => handleDuelPlayer(f)}
+                                disabled={!canDuel}
+                                title={!fOnline ? `${f.displayName.split(' ')[0]} is offline` : undefined}
+                                className={`flex shrink-0 items-center gap-1 rounded-xl border px-3.5 py-2.5 text-xs font-black transition ${
+                                  !canDuel
+                                    ? 'cursor-not-allowed border-[#232433] bg-[#1a1b26] text-neutral-600'
+                                    : 'border-[#232433] bg-[#12131c] text-violet-300 hover:bg-violet-600 hover:text-white active:scale-95'
+                                }`}
+                              >
+                                <Zap className="h-3.5 w-3.5 fill-current" />
+                                {online && !lockedOut && !fOnline ? 'Offline' : 'Duel'}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )
+                  )}
+
                   {/* Online Opponents list */}
-                  {filteredPlayers.length === 0 ? (
-                    <div className="rounded-3xl border border-neutral-800/60 bg-[#12131c] px-5 py-8 text-center">
-                      <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-2xl border border-neutral-800 bg-neutral-900 text-neutral-500">
+                  {playersScope === 'online' && (filteredPlayers.length === 0 ? (
+                    <div className="rounded-2xl border border-[#232433] bg-[#12131c] px-5 py-8 text-center">
+                      <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-2xl border border-[#232433] bg-[#1a1b26] text-neutral-500">
                         <Users className="h-5 w-5" />
                       </div>
                       <h3 className="font-display text-lg text-white">
@@ -1625,11 +1960,11 @@ export default function ChallengeArenaClient() {
                         return (
                           <div 
                             key={player.uid}
-                            className="bg-[#12131c] border border-neutral-800/60 hover:border-purple-500/30 rounded-3xl p-4 flex items-center justify-between gap-4 transition-all duration-300"
+                            className="bg-[#12131c] border border-[#232433] hover:border-[#33344a] rounded-2xl p-4 flex items-center justify-between gap-4 transition-all duration-300"
                           >
                             <div className="flex items-center gap-3">
                               <div className="relative shrink-0">
-                                {renderAvatar(player, "w-11 h-11 border border-neutral-800")}
+                                {renderAvatar(player, "w-11 h-11 border border-[#232433]")}
                                 <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 border border-[#12131c] rounded-full"></span>
                               </div>
                               <div>
@@ -1637,7 +1972,7 @@ export default function ChallengeArenaClient() {
                                   <span>{player.displayName}</span>
                                   {player.streak >= 3 && (
                                     <span className="bg-orange-500/10 text-orange-400 text-[8.5px] px-1.5 py-0.5 rounded-full border border-orange-500/20 font-black uppercase tracking-wider flex items-center gap-0.5">
-                                      <Flame className="w-2.5 h-2.5 fill-orange-400 animate-pulse" /> Hot
+                                      <Flame className="w-2.5 h-2.5 fill-orange-400" /> Hot
                                     </span>
                                   )}
                                 </h4>
@@ -1659,10 +1994,10 @@ export default function ChallengeArenaClient() {
                             <button
                               onClick={() => handleDuelPlayer(player)}
                               disabled={lockedOut}
-                              className={`flex items-center gap-1 border px-3.5 py-2.5 rounded-xl text-xs font-black transition duration-200 shadow-md ${
+                              className={`flex items-center gap-1 border px-3.5 py-2.5 rounded-xl text-xs font-black transition duration-200 ${
                                 lockedOut
-                                  ? 'border-neutral-800 bg-neutral-900 text-neutral-600 cursor-not-allowed'
-                                  : 'bg-purple-600/10 hover:bg-purple-600 text-purple-400 hover:text-white border-purple-500/20 active:scale-95 cursor-pointer'
+                                  ? 'border-[#232433] bg-[#1a1b26] text-neutral-600 cursor-not-allowed'
+                                  : 'bg-[#12131c] hover:bg-violet-600 text-violet-300 hover:text-white border-[#232433] active:scale-95 cursor-pointer'
                               }`}
                             >
                               <Zap className="w-3.5 h-3.5 fill-current" />
@@ -1672,20 +2007,58 @@ export default function ChallengeArenaClient() {
                         );
                       })}
                     </div>
-                  )}
+                  ))}
                 </div>
               )}
 
               {/* ARENA TAB 2: INCOMING INVITES */}
               {activeTab === 'invites' && (
                 <div className="space-y-3">
-                  {visibleInvites.length === 0 ? (
+                  {/* Friend requests — sit above duel invites: accepting one is
+                      a lasting relationship, a duel invite is a one-off. */}
+                  {incomingFriendReqs.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-violet-300">
+                        <UserPlus className="h-3 w-3" />
+                        Friend requests
+                      </div>
+                      {incomingFriendReqs.map((req) => (
+                        <div key={req.id} className="flex items-center justify-between gap-3 rounded-2xl border border-[#232433] bg-[#12131c] p-3.5">
+                          <div className="flex min-w-0 items-center gap-3">
+                            {renderAvatar({ displayName: req.fromName }, 'w-10 h-10 border border-[#232433]')}
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-bold text-white">{req.fromName}</p>
+                              <p className="text-[11px] text-neutral-500">wants to be friends</p>
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <button
+                              onClick={() => handleDeclineFriendRequest(req)}
+                              aria-label="Decline"
+                              className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#1a1b26] text-neutral-300 transition hover:bg-neutral-700 hover:text-white"
+                            >
+                              <UserX className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={() => handleAcceptFriendRequest(req)}
+                              className="flex items-center gap-1 rounded-xl bg-violet-600 px-3.5 py-2 text-xs font-black text-white transition hover:bg-violet-500"
+                            >
+                              <Check className="h-3.5 w-3.5" />
+                              Accept
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {visibleInvites.length === 0 && incomingFriendReqs.length > 0 ? null : visibleInvites.length === 0 ? (
                     /* Half the height it was, and it ends on a way out. The
                        old copy — "Your challenge request inbox is currently
                        empty" — was the heading above it reworded, and left the
                        tab as a dead end. */
-                    <div className="rounded-3xl border border-neutral-800/60 bg-[#12131c] px-5 py-8 text-center">
-                      <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-2xl border border-neutral-800 bg-neutral-900 text-neutral-500">
+                    <div className="rounded-2xl border border-[#232433] bg-[#12131c] px-5 py-8 text-center">
+                      <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-2xl border border-[#232433] bg-[#1a1b26] text-neutral-500">
                         <Mail className="h-5 w-5" />
                       </div>
                       <h3 className="font-display text-lg text-white">No invites waiting</h3>
@@ -1705,15 +2078,15 @@ export default function ChallengeArenaClient() {
                       {visibleInvites.map((invite) => (
                         <div 
                           key={invite.id}
-                          className="bg-[#12131c] border-2 border-purple-500/30 rounded-3xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                          className="bg-[#12131c] border border-violet-500/30 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
                         >
                           <div className="flex items-center gap-3">
-                            {renderAvatar({ photoURL: invite.fromPhoto, displayName: invite.fromName }, "w-10 h-10 border border-purple-500/20")}
+                            {renderAvatar({ photoURL: invite.fromPhoto, displayName: invite.fromName }, "w-10 h-10 border border-[#232433]")}
                             <div>
                               <div className="flex items-center gap-2">
                                 <h4 className="font-bold text-sm text-neutral-100">{invite.fromName}</h4>
                                 {invite.toUid === 'global' && (
-                                  <span className="bg-purple-500/10 text-purple-400 border border-purple-500/20 text-[9px] px-1.5 py-0.5 rounded font-black uppercase tracking-wider">
+                                  <span className="bg-violet-500/15 text-violet-300 border border-violet-500/25 text-[9px] px-1.5 py-0.5 rounded font-black uppercase tracking-wider">
                                     Open Lobby
                                   </span>
                                 )}
@@ -1722,7 +2095,7 @@ export default function ChallengeArenaClient() {
                                 {invite.toUid === 'global' 
                                   ? "Challenges anyone to a reflex battle in " 
                                   : "Challenges you to a reflex battle in "}
-                                <strong className="text-purple-300">{invite.drillName}</strong>
+                                <strong className="text-violet-300">{invite.drillName}</strong>
                               </p>
                             </div>
                           </div>
@@ -1749,10 +2122,10 @@ export default function ChallengeArenaClient() {
                               onClick={() => handleAcceptInvite(invite)}
                               disabled={lockedOut}
                               title={lockedOut ? `Duelling reopens in ${lockoutMinutes} minute${lockoutMinutes === 1 ? '' : 's'}` : undefined}
-                              className={`flex items-center gap-1 px-4 py-2 text-xs font-bold rounded-xl shadow-md transition ${
+                              className={`flex items-center gap-1 px-4 py-2 text-xs font-bold rounded-xl transition ${
                                 lockedOut
-                                  ? 'bg-neutral-900 border border-neutral-800 text-neutral-600 cursor-not-allowed'
-                                  : 'bg-purple-600 hover:bg-purple-500 text-white cursor-pointer'
+                                  ? 'bg-[#1a1b26] border border-[#232433] text-neutral-600 cursor-not-allowed'
+                                  : 'bg-violet-600 hover:bg-violet-500 text-white cursor-pointer'
                               }`}
                             >
                               <Check className="w-3.5 h-3.5" />
@@ -1776,7 +2149,7 @@ export default function ChallengeArenaClient() {
                       and one row of three supporting stats replaces all of it.
                       Laid out to match the Your Standing card on Rankings, so
                       your EIQ looks the same on both screens. */}
-                  <div className="rounded-3xl border border-neutral-800 bg-[#12131c] overflow-hidden">
+                  <div className="rounded-2xl border border-[#232433] bg-[#12131c] overflow-hidden">
                     <div className="p-5">
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex items-center gap-1.5">
@@ -1799,7 +2172,7 @@ export default function ChallengeArenaClient() {
                     {/* The supporting three, given equal weight — none of them
                         is the headline, and the old layout made Wins/Losses
                         look like it. */}
-                    <div className="grid grid-cols-3 divide-x divide-neutral-800/80 border-t border-neutral-800/80 bg-black/20">
+                    <div className="grid grid-cols-3 divide-x divide-neutral-800/80 border-t border-[#232433] bg-black/20">
                       <div className="px-3 py-3 text-center">
                         <span className="block text-[9px] font-black uppercase tracking-wider text-neutral-500">Wins</span>
                         <span className="mt-1 block text-base font-black tabular-nums text-emerald-400">{user?.wins || 0}</span>
@@ -1826,9 +2199,9 @@ export default function ChallengeArenaClient() {
                          History" was the same words in a bigger font. Half the
                          height now, and it ends on the way out of the empty
                          state instead of a dead end. */
-                      <div className="rounded-3xl border border-neutral-800/60 bg-[#12131c] px-5 py-8 text-center">
-                        <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-2xl border border-purple-500/25 bg-purple-500/10">
-                          <Swords className="h-5 w-5 text-purple-300" />
+                      <div className="rounded-2xl border border-[#232433] bg-[#12131c] px-5 py-8 text-center">
+                        <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-2xl border border-[#232433] bg-[#1a1b26]">
+                          <Swords className="h-5 w-5 text-violet-300" />
                         </div>
                         <h3 className="font-display text-lg text-white">No duels yet</h3>
                         <p className="mx-auto mt-1 max-w-xs text-[11px] leading-relaxed text-neutral-500">
@@ -1851,10 +2224,7 @@ export default function ChallengeArenaClient() {
                           const oppScore = isSender ? (item.toScore || 0) : (item.fromScore || 0);
 
                           const outcome = getChallengeOutcome(item);
-                          const accentBar = outcome.label === 'Victory' ? 'bg-emerald-500'
-                            : outcome.label === 'Defeat' ? 'bg-red-500'
-                            : outcome.label === 'Draw' ? 'bg-slate-500'
-                            : 'bg-neutral-700';
+                          const won = outcome.label === 'Victory';
                           const scoreTotal = Math.max(userScore + oppScore, 1);
                           // Someone walked out before either player finished, so
                           // no final score was ever submitted by either side.
@@ -1869,12 +2239,10 @@ export default function ChallengeArenaClient() {
                           return (
                             <div
                               key={item.id}
-                              className="relative bg-[#12131c] border border-neutral-800/65 rounded-3xl pl-5 pr-4 py-4 flex items-center justify-between gap-4 overflow-hidden"
+                              className="bg-[#12131c] border border-[#232433] rounded-2xl p-4 flex items-center justify-between gap-4"
                             >
-                              <div className={`absolute left-0 top-0 bottom-0 w-1 ${accentBar}`} />
-
                               <div className="flex items-center gap-3 min-w-0">
-                                <div className="w-10 h-10 rounded-xl bg-neutral-950 border border-neutral-800/80 flex items-center justify-center text-lg shadow-inner shrink-0">
+                                <div className="w-10 h-10 rounded-xl bg-[#0e0f16] border border-[#232433] flex items-center justify-center text-lg shrink-0">
                                   {item.toUid === 'global' ? '🌐' : '⚔️'}
                                 </div>
                                 <div className="min-w-0">
@@ -1892,10 +2260,10 @@ export default function ChallengeArenaClient() {
                                   )}
                                   {item.status === 'completed' && !endedEarly && (
                                     <div className="mt-2 flex items-center gap-2 tabular-nums">
-                                      <span className="text-xs font-black text-purple-300">{userScore}</span>
-                                      <div className="flex-1 h-1 rounded-full bg-neutral-950 border border-neutral-800/60 overflow-hidden min-w-[48px] max-w-[80px]">
+                                      <span className={`text-xs font-black ${won ? 'text-white' : 'text-violet-300'}`}>{userScore}</span>
+                                      <div className="flex-1 h-1 rounded-full bg-[#0e0f16] border border-[#232433] overflow-hidden min-w-[48px] max-w-[80px]">
                                         <div
-                                          className={`h-full rounded-full ${accentBar}`}
+                                          className="h-full rounded-full bg-violet-500"
                                           style={{ width: `${Math.round((userScore / scoreTotal) * 100)}%` }}
                                         />
                                       </div>
@@ -1926,11 +2294,262 @@ export default function ChallengeArenaClient() {
         </div>
       </div>
 
+      {/* MODAL: Player profile — opened by tapping any board row, the
+          Champion card, or the viewer's own Your Standing card. Shows the
+          Arena record, plus the player's XP training level (synced to their
+          profile doc as a rank badge — see LevelBadge). Their raw drill
+          scores and per-drill history still live only on their own device. */}
+      {profilePlayer && (() => {
+        const p = profilePlayer.player || {};
+        const pRank = profilePlayer.rank;
+        const isSelf = user && p.uid === user.uid;
+        const pTier = tierForEiq(p.eiq);
+        const pW = p.wins || 0;
+        const pL = p.losses || 0;
+        const pDuels = pW + pL;
+        const pWr = pDuels > 0 ? Math.round((pW / pDuels) * 100) : 0;
+        const stats = [
+          ['Tier', pTier.name],
+          ['EIQ', (p.eiq || 0).toLocaleString()],
+          ['Duels played', pDuels.toLocaleString()],
+          ['Win rate', pDuels > 0 ? `${pWr}%` : '—'],
+          ['Record', `${pW}W · ${pL}L`],
+          ['Day streak', (p.streak || 0).toLocaleString()],
+        ];
+        const relation = friendStateFor(p.uid);
+        const badges = badgesFor(p, pRank);
+        // Own level comes from the local progress store (instant); another
+        // player's from their synced profile doc.
+        const pLevel = isSelf ? (myLevel || p.level) : p.level;
+        const canChallenge = !isSelf && onlineUidSet.has(p.uid) && !lockedOut && online;
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
+            style={{ padding: '16px' }}
+            onClick={() => setProfilePlayer(null)}
+          >
+            <div
+              className="w-full max-w-sm rounded-2xl border border-[#232433] bg-[#0f1018] p-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between">
+                <span className="text-[10px] font-black uppercase tracking-widest text-neutral-500">Player profile</span>
+                <button
+                  type="button"
+                  onClick={() => setProfilePlayer(null)}
+                  aria-label="Close"
+                  className="-mr-2 -mt-2 flex h-8 w-8 items-center justify-center rounded-xl text-neutral-500 transition-colors hover:bg-white/5 hover:text-white"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="mt-2 flex flex-col items-center text-center">
+                {renderAvatar(p, 'w-20 h-20 border border-white/10')}
+                <div className="mt-3 flex items-center gap-1.5">
+                  <span className="text-lg font-bold text-white">{p.displayName || 'Player'}</span>
+                  {isSelf && (
+                    <span className="rounded-full border border-violet-500/30 bg-violet-500/15 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider text-violet-300">
+                      You
+                    </span>
+                  )}
+                </div>
+                <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5">
+                  {pLevel >= 1 && <LevelBadge level={pLevel} />}
+                  <span className={`rounded border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider ${tierClsFor(pTier.id)}`}>
+                    {pTier.name}
+                  </span>
+                  <span className="inline-flex items-center gap-1 rounded border border-[#33344a] bg-[#1a1b26] px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-neutral-300">
+                    <Trophy className="h-2.5 w-2.5" />
+                    {pRank ? `Rank #${Number(pRank).toLocaleString()}` : 'Unranked'}
+                  </span>
+                  {badges.map((b) => (
+                    <span key={b.label} className={`rounded border px-2 py-0.5 text-[9px] font-black uppercase tracking-wider ${b.cls}`}>
+                      {b.label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* Friend + challenge actions */}
+              {!isSelf && (
+                <div className="mt-4 flex gap-2">
+                  {relation === 'friend' ? (
+                    <button
+                      onClick={() => { handleRemoveFriend(p.uid); }}
+                      className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-[#232433] bg-[#12131c] py-2.5 text-xs font-black text-neutral-300 transition hover:border-rose-500/30 hover:text-rose-300"
+                    >
+                      <UserCheck className="h-3.5 w-3.5" /> Friends
+                    </button>
+                  ) : relation === 'outgoing' ? (
+                    <button
+                      onClick={() => handleCancelFriendRequest(p.uid)}
+                      className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-[#232433] bg-[#12131c] py-2.5 text-xs font-black text-neutral-400 transition hover:text-white"
+                    >
+                      <Clock className="h-3.5 w-3.5" /> Requested
+                    </button>
+                  ) : relation === 'incoming' ? (
+                    <button
+                      onClick={() => handleAcceptFriendRequest(incomingReqByUid[p.uid])}
+                      className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-violet-600 py-2.5 text-xs font-black text-white transition hover:bg-violet-500"
+                    >
+                      <Check className="h-3.5 w-3.5" /> Accept request
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleSendFriendRequest(p)}
+                      className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-violet-600 py-2.5 text-xs font-black text-white transition hover:bg-violet-500"
+                    >
+                      <UserPlus className="h-3.5 w-3.5" /> Add friend
+                    </button>
+                  )}
+                  {canChallenge && (
+                    <button
+                      onClick={() => { setProfilePlayer(null); handleDuelPlayer(p); }}
+                      className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-[#232433] bg-[#12131c] py-2.5 text-xs font-black text-violet-300 transition hover:bg-violet-600 hover:text-white"
+                    >
+                      <Zap className="h-3.5 w-3.5 fill-current" /> Duel
+                    </button>
+                  )}
+                </div>
+              )}
+
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                {stats.map(([label, value]) => (
+                  <div key={label} className="rounded-xl border border-[#232433] bg-[#12131c] p-3">
+                    <div className="text-[9px] font-black uppercase tracking-[0.14em] text-neutral-500">{label}</div>
+                    <div className="mt-1 font-hud text-lg font-semibold tabular-nums text-white">{value}</div>
+                  </div>
+                ))}
+              </div>
+
+              <p className="mt-4 text-center text-[10px] leading-relaxed text-neutral-600">
+                Arena record and training rank. Drill scores and history stay on that player&apos;s device.
+              </p>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* MODAL: Add a friend by username. The username is the exact,
+          case-insensitive handle a player picked at sign-up (immutable) —
+          resolved through the usernames/{nameLower} reservation collection. */}
+      {addFriendOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
+          style={{ padding: '16px' }}
+          onClick={() => setAddFriendOpen(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border border-[#232433] bg-[#0f1018] p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between">
+              <span className="text-[10px] font-black uppercase tracking-widest text-neutral-500">Add a friend</span>
+              <button
+                type="button"
+                onClick={() => setAddFriendOpen(false)}
+                aria-label="Close"
+                className="-mr-2 -mt-2 flex h-8 w-8 items-center justify-center rounded-xl text-neutral-500 transition-colors hover:bg-white/5 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => { e.preventDefault(); runAddFriendSearch(); }}
+              className="mt-3 flex gap-2"
+            >
+              <input
+                type="text"
+                autoFocus
+                value={addFriendQuery}
+                onChange={(e) => setAddFriendQuery(e.target.value)}
+                placeholder="Exact username"
+                className="min-w-0 flex-1 rounded-xl border border-[#232433] bg-[#12131c] px-3.5 py-2.5 text-sm text-white placeholder-neutral-600 focus:border-violet-500/40 focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={addFriendBusy || !addFriendQuery.trim()}
+                className={`shrink-0 rounded-xl px-4 py-2.5 text-xs font-black transition ${
+                  addFriendBusy || !addFriendQuery.trim()
+                    ? 'cursor-not-allowed bg-[#1a1b26] text-neutral-500'
+                    : 'bg-violet-600 text-white hover:bg-violet-500'
+                }`}
+              >
+                {addFriendBusy ? '…' : 'Search'}
+              </button>
+            </form>
+
+            {addFriendResult?.error && (
+              <p className="mt-3 text-[11px] text-neutral-500">{addFriendResult.error}</p>
+            )}
+
+            {addFriendResult?.player && (() => {
+              const found = addFriendResult.player;
+              const rel = friendStateFor(found.uid);
+              const fTier = tierForEiq(found.eiq);
+              return (
+                <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-[#232433] bg-[#12131c] p-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    {renderAvatar(found, 'w-10 h-10 border border-[#232433]')}
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-bold text-white">{found.displayName}</p>
+                      <p className="text-[10px] text-neutral-500">
+                        <span className={(found.eiq || 0) > 0 ? 'text-yellow-400' : 'text-neutral-600'}>{(found.eiq || 0).toLocaleString()}</span> EIQ · {fTier.name}
+                      </p>
+                    </div>
+                  </div>
+                  {rel === 'friend' ? (
+                    <span className="shrink-0 text-[11px] font-black text-emerald-400">Friends ✓</span>
+                  ) : rel === 'outgoing' ? (
+                    <span className="shrink-0 text-[11px] font-black text-neutral-500">Requested</span>
+                  ) : rel === 'incoming' ? (
+                    <button
+                      onClick={() => handleAcceptFriendRequest(incomingReqByUid[found.uid])}
+                      className="shrink-0 rounded-xl bg-violet-600 px-3 py-2 text-xs font-black text-white transition hover:bg-violet-500"
+                    >
+                      Accept
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleSendFriendRequest(found)}
+                      className="flex shrink-0 items-center gap-1 rounded-xl bg-violet-600 px-3 py-2 text-xs font-black text-white transition hover:bg-violet-500"
+                    >
+                      <UserPlus className="h-3.5 w-3.5" /> Add
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
+
+            {outgoingFriendReqs.length > 0 && (
+              <div className="mt-4">
+                <p className="mb-1.5 text-[10px] font-black uppercase tracking-widest text-neutral-500">Pending</p>
+                <div className="space-y-1.5">
+                  {outgoingFriendReqs.map((r) => (
+                    <div key={r.id} className="flex items-center justify-between gap-2 rounded-xl border border-[#232433] bg-[#12131c] px-3 py-2">
+                      <span className="truncate text-xs text-neutral-300">{r.toName}</span>
+                      <button
+                        onClick={() => handleCancelFriendRequest(r.to)}
+                        className="shrink-0 text-[11px] font-bold text-neutral-500 transition hover:text-rose-300"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* MODAL: Pick which drill to duel in — shown before a direct invite,
           open lobby post, or matchmaking queue join actually goes out. */}
       {duelPickerFor && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
           style={{ padding: '16px', paddingBottom: 'calc(16px + env(safe-area-inset-bottom))' }}
         >
           {/* Height cap uses dvh (the VISIBLE viewport) plus a hard px cap —
@@ -1940,18 +2559,18 @@ export default function ChallengeArenaClient() {
               while its bottom sat hidden under the Android nav area: nothing
               overflowed, so nothing scrolled. */}
           <div
-            className="w-full max-w-sm bg-[#0a0a12] border border-neutral-800/80 rounded-3xl p-6 shadow-2xl relative flex flex-col"
+            className="w-full max-w-sm bg-[#0f1018] border border-[#232433] rounded-2xl p-6 shadow-2xl relative flex flex-col"
             style={{ maxHeight: 'min(70dvh, 460px)' }}
           >
             <button
               onClick={() => setDuelPickerFor(null)}
-              className="absolute top-4 right-4 w-8 h-8 bg-neutral-900 border border-neutral-800 rounded-full flex items-center justify-center text-neutral-400 hover:text-white shrink-0"
+              className="absolute top-4 right-4 w-8 h-8 bg-[#1a1b26] border border-[#232433] rounded-full flex items-center justify-center text-neutral-400 hover:text-white shrink-0"
             >
               <X className="w-4 h-4" />
             </button>
 
             <div className="flex items-center gap-2 mb-4 shrink-0">
-              <Swords className="w-5 h-5 text-purple-500" />
+              <Swords className="w-5 h-5 text-violet-500" />
               <h3 className="font-bold text-lg text-white">Pick a Drill</h3>
             </div>
 
@@ -1963,10 +2582,10 @@ export default function ChallengeArenaClient() {
                 <button
                   key={drill.slug}
                   onClick={() => handlePickDuelDrill(drill)}
-                  className="w-full flex items-center justify-between gap-3 bg-neutral-900/60 border border-neutral-800/80 hover:border-purple-500/40 rounded-xl p-3.5 text-left transition"
+                  className="w-full flex items-center justify-between gap-3 bg-[#12131c] border border-[#232433] hover:border-[#33344a] rounded-xl p-3.5 text-left transition"
                 >
                   <span className="text-sm font-bold text-neutral-100">{drill.name}</span>
-                  <Zap className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                  <Zap className="w-3.5 h-3.5 text-violet-400 shrink-0" />
                 </button>
               ))}
             </div>
@@ -1976,12 +2595,12 @@ export default function ChallengeArenaClient() {
 
       {/* MODAL: Matchmaking Request Waiting Spinner */}
       {selectedOpponent && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
-          <div className="w-full max-w-sm bg-[#0a0a12] border border-neutral-800/80 rounded-3xl p-6 text-center shadow-2xl relative">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
+          <div className="w-full max-w-sm bg-[#0f1018] border border-[#232433] rounded-2xl p-6 text-center shadow-2xl relative">
             <div className="relative flex items-center justify-center mx-auto mb-6">
-              <div className="absolute w-20 h-20 rounded-full border-4 border-t-purple-600 border-r-transparent border-b-transparent border-l-transparent animate-spin"></div>
-              <div className="w-14 h-14 bg-neutral-900 rounded-full flex items-center justify-center border border-neutral-800">
-                <Swords className="w-6 h-6 text-purple-500 animate-pulse" />
+              <div className="absolute w-20 h-20 rounded-full border-4 border-t-violet-600 border-r-transparent border-b-transparent border-l-transparent animate-spin"></div>
+              <div className="w-14 h-14 bg-[#1a1b26] rounded-full flex items-center justify-center border border-[#232433]">
+                <Swords className="w-6 h-6 text-violet-400" />
               </div>
             </div>
 
@@ -1994,7 +2613,7 @@ export default function ChallengeArenaClient() {
 
             <button
               onClick={cancelSentChallenge}
-              className="mt-3 w-full py-2.5 bg-neutral-900 border border-neutral-800 rounded-xl text-xs font-semibold text-neutral-400 hover:text-red-400 hover:border-red-500/20 transition-all duration-200 cursor-pointer"
+              className="mt-3 w-full py-2.5 bg-[#1a1b26] border border-[#232433] rounded-xl text-xs font-semibold text-neutral-400 hover:text-red-400 hover:border-red-500/20 transition-all duration-200 cursor-pointer"
             >
               Cancel Request
             </button>
@@ -2004,12 +2623,12 @@ export default function ChallengeArenaClient() {
 
       {/* MODAL: Automated Matchmaking Search */}
       {matchmakingState !== 'idle' && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
-          <div className="w-full max-w-sm bg-[#0a0a12] border border-neutral-800/80 rounded-3xl p-6 text-center shadow-2xl relative">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
+          <div className="w-full max-w-sm bg-[#0f1018] border border-[#232433] rounded-2xl p-6 text-center shadow-2xl relative">
             <div className="relative flex items-center justify-center mx-auto mb-6">
               <div className="absolute w-20 h-20 rounded-full border-4 border-t-emerald-500 border-r-transparent border-b-transparent border-l-transparent animate-spin"></div>
-              <div className="w-14 h-14 bg-neutral-900 rounded-full flex items-center justify-center border border-neutral-800">
-                <Target className="w-6 h-6 text-emerald-400 animate-pulse" />
+              <div className="w-14 h-14 bg-[#1a1b26] rounded-full flex items-center justify-center border border-[#232433]">
+                <Target className="w-6 h-6 text-emerald-400" />
               </div>
             </div>
 
@@ -2028,10 +2647,73 @@ export default function ChallengeArenaClient() {
                 those 20 seconds was back out of the app. */}
             <button
               onClick={cancelMatchmaking}
-              className="mt-6 w-full py-2.5 bg-neutral-900 border border-neutral-800 rounded-xl text-xs font-semibold text-neutral-400 hover:text-red-400 hover:border-red-500/20 transition-all duration-200 cursor-pointer"
+              className="mt-6 w-full py-2.5 bg-[#1a1b26] border border-[#232433] rounded-xl text-xs font-semibold text-neutral-400 hover:text-red-400 hover:border-red-500/20 transition-all duration-200 cursor-pointer"
             >
               {matchmakingState === 'found' ? 'Cancel' : 'Cancel Search'}
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Your Standing — pinned just above the bottom nav on the Rankings
+          tab, so the player's own rank/EIQ stays visible while the board
+          scrolls (it's a fixed constant, not a list entry). Same plain-row
+          look as the board rows; only the Champion card up top is special.
+          Solid page-coloured backdrop strip so scrolled rows vanish cleanly
+          behind it. The h-28 spacer in the leaderboard flow reserves the
+          matching room. */}
+      {activeTab === 'leaderboard' && user && (
+        <div
+          className="fixed inset-x-0 z-40 border-t border-[#1b1c28] bg-[#050508] px-4 pb-2.5 pt-2.5"
+          style={{ bottom: 'calc(64px + env(safe-area-inset-bottom))' }}
+        >
+          <div className="mx-auto max-w-xl">
+            <span className="mb-1.5 block px-1 text-[10px] font-black uppercase tracking-widest text-neutral-500">Your standing</span>
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => setProfilePlayer({ player: user, rank: myRank })}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setProfilePlayer({ player: user, rank: myRank }); } }}
+              className={`${BOARD_COLS} cursor-pointer rounded-2xl border border-violet-500/30 bg-[#16131f] p-3 transition-colors hover:border-violet-500/50 ${
+                rankChange ? (rankChange.direction === 'up' ? 'rank-row-flash-up' : 'rank-row-flash-down') : ''
+              }`}
+            >
+              {myRank !== null ? (
+                <span className="text-center text-xs font-black tabular-nums text-neutral-500">{myRank.toLocaleString()}</span>
+              ) : (
+                <span className="text-center text-xs font-black text-neutral-700">—</span>
+              )}
+
+              <div className="flex min-w-0 items-center gap-2.5">
+                {renderAvatar(user, 'w-9 h-9 border border-[#232433] shrink-0')}
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: dotColorFor(user?.uid, myTier.id) }} title={online ? 'Online now' : myTier.name} />
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate text-sm font-black leading-tight text-white">{user.displayName}</span>
+                  <span className="shrink-0 rounded-full border border-violet-500/25 bg-violet-500/15 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider text-violet-300">You</span>
+                  {rankChange && (
+                    <span className={`inline-flex shrink-0 items-center gap-0.5 rounded-full border px-1 py-[1px] text-[8px] font-black tabular-nums ${rankTheme.text} ${rankTheme.rowBorder} ${rankTheme.rowBg}`}>
+                      {rankChange.direction === 'up'
+                        ? <ArrowUp className="h-2 w-2" strokeWidth={3} />
+                        : <ArrowDown className="h-2 w-2" strokeWidth={3} />}
+                      {rankChange.delta}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <span className={`text-right text-sm font-black tabular-nums ${myEiq > 0 ? 'text-yellow-400' : 'text-neutral-600'}`}>
+                {myEiq.toLocaleString()}
+              </span>
+            </div>
+
+            {nextTier && (
+              <div className="mt-1.5 flex items-center justify-between gap-3 px-1 text-[11px] text-neutral-500">
+                <span>Next tier: <span className="font-bold text-neutral-300">{nextTier.name}</span></span>
+                <span className="shrink-0 tabular-nums">
+                  <span className="font-bold text-neutral-300">{(nextTier.minEiq - myEiq).toLocaleString()}</span> EIQ to go
+                </span>
+              </div>
+            )}
           </div>
         </div>
       )}

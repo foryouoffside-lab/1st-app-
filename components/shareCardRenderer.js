@@ -95,20 +95,29 @@ export function drawShareCard(ctx, data) {
   const {
     score = 0, bestScore = 0, accuracy = 0, bestCombo = 0,
     rating, isNewBest = false, drillName = 'Drill', playerName = null,
-    linkText = 'SKILLDRILLS.ONLINE', fonts,
+    linkText = 'SKILLDRILLS.ONLINE', fonts, duel = null,
   } = data;
 
   const UI = fonts?.ui || FALLBACK_UI;
   const DISPLAY = fonts?.display || UI;
   const MONO = fonts?.mono || UI;
 
+  // Duel result: the grade badge becomes W / L / D in the outcome colour and
+  // the hero line is the head-to-head scoreline instead of one number.
+  const OUTCOME = {
+    win:  { letter: 'W', hex: '#34d399', label: 'VICTORY' },
+    loss: { letter: 'L', hex: '#f87171', label: 'DEFEAT' },
+    draw: { letter: 'D', hex: MUTED,     label: 'DRAW' },
+  };
+  const duelOutcome = duel ? (OUTCOME[duel.outcome] || OUTCOME.draw) : null;
+
   // The drills only forward letter/label/emoji, so the tier (and its colour)
   // is recovered from the letter here rather than changing 24 call sites.
   const tier = getGradeByLetter(rating?.letter);
-  const tierHex = tier?.hex || MUTED;
+  const tierHex = duelOutcome?.hex || tier?.hex || MUTED;
   // Encouraging wording on the public image; the in-app screen keeps `label`.
-  const label = (tier?.shareLabel || rating?.label || tier?.label || '').toUpperCase();
-  const letter = rating?.letter || '—';
+  const label = (duelOutcome?.label || tier?.shareLabel || rating?.label || tier?.label || '').toUpperCase();
+  const letter = duelOutcome?.letter || rating?.letter || '—';
   const accent = isNewBest ? PB_GOLD : BRAND;
 
   ctx.textBaseline = 'alphabetic';
@@ -178,7 +187,9 @@ export function drawShareCard(ctx, data) {
   trackedText(ctx, hShown, CARD_W - 44 - trackedWidth(ctx, hShown, 2), 54, 2);
 
   // ── Score — the hero, clamped by the Lock ──────────────────────────────
-  const scoreText = score.toLocaleString();
+  const scoreText = duel
+    ? `${Number(duel.myScore).toLocaleString()} – ${Number(duel.oppScore).toLocaleString()}`
+    : score.toLocaleString();
   let scoreSize = 96;
   ctx.font = `${scoreSize}px ${DISPLAY}`;
   while (ctx.measureText(scoreText).width > 400 && scoreSize > 52) {
@@ -187,35 +198,51 @@ export function drawShareCard(ctx, data) {
   }
   const sx = 44;
   const sy = 206;
-  const sw = ctx.measureText(scoreText).width;
   ctx.fillStyle = '#ffffff';
   ctx.fillText(scoreText, sx, sy);
 
-  // Corner brackets: top-left and bottom-right, in the accent. Box tracks the
-  // Anton cap height (~0.72 of the size, no descender) so it hugs the digits.
-  const lx = sx - 14;
-  const ly = sy - Math.round(scoreSize * 0.73);
-  const lw = sw + 28;
-  const lh = Math.round(scoreSize * 0.80);
+  // Corner brackets: top-left and bottom-right, in the accent, framing the
+  // score with the SAME gap on every side. Measured off the glyphs' real ink
+  // box (actualBoundingBox*), not a cap-height guess — Anton's side bearings
+  // and true cap height made the estimated box lopsided, worst on the duel
+  // "0 – 113" scoreline. Falls back to the estimate where the extended metrics
+  // aren't reported.
+  const m = ctx.measureText(scoreText);
+  const hasInk = typeof m.actualBoundingBoxAscent === 'number'
+    && typeof m.actualBoundingBoxRight === 'number';
+  const inkLeft  = hasInk ? sx - m.actualBoundingBoxLeft   : sx;
+  const inkRight = hasInk ? sx + m.actualBoundingBoxRight   : sx + m.width;
+  const inkTop   = hasInk ? sy - m.actualBoundingBoxAscent  : sy - scoreSize * 0.72;
+  const inkBot   = hasInk ? sy + m.actualBoundingBoxDescent : sy + scoreSize * 0.04;
+
+  const margin = 16;
   const len = 20;
+  const tlx = inkLeft - margin;
+  const tly = inkTop - margin;
+  const brx = inkRight + margin;
+  const bry = inkBot + margin;
   ctx.strokeStyle = accent;
   ctx.lineWidth = 3;
   ctx.lineCap = 'butt';
   ctx.beginPath();
-  ctx.moveTo(lx, ly + len); ctx.lineTo(lx, ly); ctx.lineTo(lx + len, ly);
-  ctx.moveTo(lx + lw - len, ly + lh); ctx.lineTo(lx + lw, ly + lh); ctx.lineTo(lx + lw, ly + lh - len);
+  ctx.moveTo(tlx, tly + len); ctx.lineTo(tlx, tly); ctx.lineTo(tlx + len, tly);
+  ctx.moveTo(brx - len, bry); ctx.lineTo(brx, bry); ctx.lineTo(brx, bry - len);
   ctx.stroke();
 
-  // POINTS + the delta on a personal best.
+  // SCORE (or VS OPPONENT in a duel) + the delta on a personal best. Anchored
+  // a clear gap below the bottom bracket (which sits at inkBot + margin), so a
+  // short score's bracket arm and this row can't collide.
+  const labelY = Math.round(bry + 18);
   ctx.font = `500 11px ${MONO}`;
   ctx.fillStyle = DIM;
-  const ptsW = trackedText(ctx, 'POINTS', sx, sy + 28, 3);
-  if (isNewBest && bestScore > 0 && score > bestScore) {
+  const heroLabel = duel ? `VS ${(duel.oppName || 'OPPONENT').toUpperCase()}` : 'SCORE';
+  const ptsW = trackedText(ctx, heroLabel, sx, labelY, 3);
+  if (!duel && isNewBest && bestScore > 0 && score > bestScore) {
     ctx.fillStyle = '#34d399';
-    trackedText(ctx, `NEW BEST  ·  +${(score - bestScore).toLocaleString()}`, sx + ptsW + 20, sy + 28, 2);
-  } else if (isNewBest) {
+    trackedText(ctx, `NEW BEST  ·  +${(score - bestScore).toLocaleString()}`, sx + ptsW + 20, labelY, 2);
+  } else if (!duel && isNewBest) {
     ctx.fillStyle = '#34d399';
-    trackedText(ctx, 'NEW BEST', sx + ptsW + 20, sy + 28, 2);
+    trackedText(ctx, 'NEW BEST', sx + ptsW + 20, labelY, 2);
   }
 
   // ── Grade badge (right) ────────────────────────────────────────────────
@@ -254,7 +281,7 @@ export function drawShareCard(ctx, data) {
 
   ctx.fillStyle = '#ffffff';
   ctx.font = `22px ${DISPLAY}`;
-  ctx.fillText('CAN YOU BEAT THIS?', 44, fy + 6);
+  ctx.fillText(duel ? 'CAN YOU BEAT ME?' : 'CAN YOU BEAT THIS?', 44, fy + 6);
 
   ctx.fillStyle = accent;
   ctx.font = `600 12px ${MONO}`;

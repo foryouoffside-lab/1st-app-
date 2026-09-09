@@ -5,13 +5,14 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { collection, limit, onSnapshot, query, where } from 'firebase/firestore';
 import {
-  ArrowRight, CheckCircle2, Crown, Flag, Play, Swords,
-  Target
+  ArrowRight, CheckCircle2, ChevronRight, Crown, Flag, Flame, Play, Swords,
+  Target, TrendingUp
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { acceptChallenge } from '../lib/challengeEngine';
+import { acceptChallenge, tierForEiq } from '../lib/challengeEngine';
 import { ARENA_ENABLED } from '../lib/featureFlags';
 import { getDailyChallenge } from '../lib/dailyChallenge';
+import { getPlayerLevel, getStreak, getTopScores } from '../lib/progressStore';
 import { DRILL_INDEX, byEngagement } from '../lib/drillIndex';
 import { DRILL_GROUPS, getDrillGroup, getGroupIcon } from '../lib/drillGroups';
 import DrillPreview, { hasAnimatedPreview } from '../components/DrillPreview';
@@ -51,12 +52,27 @@ export default function HomePageClient() {
   const [daily, setDaily] = useState(null);
   const [arenaChallenges, setArenaChallenges] = useState([]);
   const [dashboardReady, setDashboardReady] = useState(false);
+  // Small solo-progress summary for the home card (level/streak/best are all
+  // local reads; EIQ/tier come from the signed-in profile).
+  const [progress, setProgress] = useState(null);
 
   useEffect(() => {
     async function loadDashboard() {
       try {
-        const today = await getDailyChallenge();
+        const [today, lvl, streak, top] = await Promise.all([
+          getDailyChallenge(),
+          getPlayerLevel(),
+          getStreak(),
+          getTopScores(1),
+        ]);
         setDaily(today);
+        setProgress({
+          level: lvl.level,
+          xpInLevel: lvl.xpInLevel,
+          xpToNext: lvl.xpToNext,
+          streak: streak.current,
+          best: top[0]?.best || 0,
+        });
       } catch (error) {
         console.error('Unable to load home dashboard', error);
       } finally {
@@ -147,7 +163,7 @@ export default function HomePageClient() {
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-300">SkillDrills</p>
             <h1 className="mt-1 text-2xl font-black tracking-tight text-white">Ready to improve, {displayName}?</h1>
           </div>
-          <Link href="/challenge?tab=leaderboard" aria-label="Open leaderboard" className="flex h-11 w-11 items-center justify-center rounded-2xl border border-amber-300/20 bg-amber-300/10 text-amber-300 transition hover:bg-amber-300/20">
+          <Link href="/challenge?tab=leaderboard" aria-label="Open leaderboard" className="flex h-11 w-11 items-center justify-center rounded-xl border border-[#232433] bg-[#12131c] text-amber-400 transition-colors hover:border-[#33344a]">
             <Crown className="h-5 w-5" />
           </Link>
         </header>
@@ -156,47 +172,26 @@ export default function HomePageClient() {
             (mounted once in AppShellClient) so there's a single notification surface
             instead of a duplicate inline card competing with it here. */}
 
-        {/* 2. Daily Challenge — a compact entry banner, not a dashboard.
-             The three-drill breakdown, streak detail and everything else
-             now lives on /daily (see app/daily/DailyClient.js); this is
-             only the doorway to it, and the whole card is the link. Its
-             copy tracks the real daily state (not started / in progress /
-             done) but never lists the individual drills. */}
-        <Link href="/daily" className={`daily-banner group mb-6 ${dailyDone ? 'is-done' : ''}`}>
-          <svg className="daily-banner-bg" viewBox="0 0 170 80" preserveAspectRatio="xMaxYMid slice" aria-hidden="true">
-            {/* A rising ridgeline to a small planted flag — "finish the
-                day's set, move forward". Kept faint by the CSS. */}
-            <path d="M0 72 L38 56 L70 63 L104 32 L138 44 L170 30" fill="none" stroke="currentColor" strokeWidth="1.5" />
-            <path d="M104 32 L104 14 L120 19 L104 24 Z" fill="currentColor" />
-          </svg>
-
+        {/* 2. Daily Challenge — a slim tap-through to /daily, not a
+             dashboard. Icon, label, a quiet state hint, chevron. The
+             three-drill breakdown and streak detail live on /daily
+             (see app/daily/DailyClient.js). Solid surfaces only — no
+             translucent / blurred "glass". */}
+        <Link href="/daily" className={`daily-banner mb-6 ${dailyDone ? 'is-done' : ''}`}>
           <span className="daily-banner-ic">
-            {dailyDone ? <CheckCircle2 className="h-5 w-5" /> : <Flag className="h-5 w-5" />}
+            {dailyDone ? <CheckCircle2 className="h-[18px] w-[18px]" /> : <Flag className="h-[18px] w-[18px]" />}
           </span>
-
-          <span className="daily-banner-body">
-            <span className="daily-banner-k">Daily Challenge</span>
-            <span className="daily-banner-title">
-              {!dashboardReady
-                ? `Today's ${dailyTotal} drills`
-                : dailyDone
-                  ? `${dailyTotal} / ${dailyTotal} complete`
-                  : dailyStarted
-                    ? `${daily.completedCount} / ${dailyTotal} complete`
-                    : `Complete today's ${dailyTotal} drills`}
-            </span>
-            <span className="daily-banner-sub">
-              {dashboardReady && dailyDone ? (
-                'Daily challenge complete ✓'
-              ) : (
-                <>
-                  <b className="font-hud">2&times;</b> XP · {dashboardReady && dailyStarted ? 'Continue' : 'Keep your streak'}
-                </>
-              )}
-            </span>
+          <span className="daily-banner-label">Daily Challenge</span>
+          <span className="daily-banner-state">
+            {!dashboardReady
+              ? ''
+              : dailyDone
+                ? 'Done'
+                : dailyStarted
+                  ? `${daily.completedCount}/${dailyTotal}`
+                  : 'Start'}
           </span>
-
-          <ArrowRight className="daily-banner-arrow" />
+          <ChevronRight className="daily-banner-chev" />
         </Link>
 
         {/* 3. Category browser.
@@ -273,6 +268,57 @@ export default function HomePageClient() {
           })}
         </div>
 
+        {/* 5b. Your progress — a compact recap (level · EIQ + tier · best score,
+             a streak pill, an XP bar) that sits above Arena so the page still
+             has substance on the common case where nobody else is online. The
+             whole card links to /progress. Level/streak/best are local reads;
+             EIQ/tier come from the signed-in profile, so it only renders when
+             signed in (the home page is behind AuthGate anyway). */}
+        {user && progress && (() => {
+          const tier = tierForEiq(user.eiq || 0);
+          return (
+            <section className="mt-8">
+              <SectionHeading icon={TrendingUp} title="Your progress" action="View" href="/progress" />
+              <Link href="/progress" className="block rounded-2xl border border-[#232433] bg-[#12131c] p-4 transition-colors hover:border-[#33344a]">
+                <div className="mb-3 flex items-center gap-2.5">
+                  {user.photoURL ? (
+                    <img src={user.photoURL} alt="" referrerPolicy="no-referrer" className="h-10 w-10 shrink-0 rounded-full border border-white/10 object-cover" />
+                  ) : (
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/10 bg-violet-600 text-xs font-bold text-white">
+                      {(user.displayName || '??').slice(0, 2).toUpperCase()}
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-bold text-white">{user.displayName || 'Player'}</p>
+                    <span className="mt-0.5 inline-block rounded border border-amber-500/25 bg-amber-500/10 px-1.5 py-0.5 text-[8.5px] font-black uppercase tracking-wider text-amber-400">
+                      {tier.name}
+                    </span>
+                  </div>
+                  {progress.streak > 0 && (
+                    <span className="flex shrink-0 items-center gap-1 rounded-xl border border-orange-500/20 bg-orange-500/10 px-2 py-1 text-[11px] font-black text-orange-300">
+                      <Flame className="h-3 w-3 fill-orange-400" />
+                      {progress.streak}d
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <StatTile label="Level" value={progress.level} />
+                  <StatTile label="EIQ" value={(user.eiq || 0).toLocaleString()} />
+                  <StatTile label="Best score" value={progress.best.toLocaleString()} />
+                </div>
+
+                <div className="mt-3 h-1 overflow-hidden rounded-full bg-white/[.06]">
+                  <div className="h-full bg-violet-500" style={{ width: `${Math.max(2, (progress.xpInLevel / 1000) * 100)}%` }} />
+                </div>
+                <p className="mt-1.5 text-[10px] text-slate-500">
+                  {progress.xpToNext.toLocaleString()} XP to level {progress.level + 1}
+                </p>
+              </Link>
+            </section>
+          );
+        })()}
+
         {/* 6. Live Arena Matches — full-width flat cards (spans the same width as a
              2-column category row), stacked when there's more than one challenge.
              Arena is off for now (see lib/featureFlags.js) — shows a Coming Soon
@@ -284,40 +330,49 @@ export default function HomePageClient() {
               <p className="-mt-2 mb-3 text-xs text-slate-400">Join a live duel or create your own.</p>
               <div className="flex flex-col gap-3">
                 {arenaChallenges.map(challenge => (
-                  <article key={challenge.id} className="rounded-2xl border border-fuchsia-300/20 bg-gradient-to-br from-fuchsia-500/15 to-[#111526] p-4 flex items-center gap-4">
+                  <article key={challenge.id} className="flex items-center gap-4 rounded-2xl border border-[#232433] bg-[#12131c] p-4">
                     <div className="min-w-0 flex-1">
-                      <span className="inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.14em] text-fuchsia-200">
-                        <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" /> Live duel
+                      <span className="inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.14em] text-violet-300">
+                        <span className="h-2 w-2 rounded-full bg-emerald-400" /> Live duel
                       </span>
                       <h3 className="mt-2 truncate font-display text-xl text-white">{challenge.drillName || 'Arena Challenge'}</h3>
-                      <p className="mt-0.5 truncate text-xs text-slate-300">Posted by {challenge.fromName || 'a player'}</p>
+                      <p className="mt-0.5 truncate text-xs text-slate-400">Posted by {challenge.fromName || 'a player'}</p>
                     </div>
                     <button
                       onClick={() => joinArenaChallenge(challenge)}
-                      className="flex shrink-0 items-center justify-center gap-2 rounded-xl bg-fuchsia-400 px-4 py-2.5 text-xs font-black text-slate-950 transition hover:bg-fuchsia-300 active:scale-[.98]"
+                      className="flex shrink-0 items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-black text-white transition hover:bg-violet-500 active:scale-[.98]"
                     >
                       <Play className="h-3.5 w-3.5 fill-current" /> Join
                     </button>
                   </article>
                 ))}
                 {arenaChallenges.length === 0 && (
-                  <div className="rounded-2xl border border-white/[0.08] bg-neutral-900/40 p-5 flex flex-col justify-center items-center text-center">
-                    <Swords className="h-6 w-6 text-neutral-600 mb-2" />
+                  <div className="flex flex-col items-center justify-center rounded-2xl border border-[#232433] bg-[#12131c] p-5 text-center">
+                    <Swords className="mb-2 h-6 w-6 text-neutral-600" />
                     <span className="text-xs font-bold text-neutral-300">No active duels</span>
-                    <span className="text-[10px] text-neutral-500 mt-1">Visit the Arena tab to publish a challenge.</span>
+                    <span className="mt-1 text-[10px] text-neutral-500">Visit the Arena tab to publish a challenge.</span>
                   </div>
                 )}
               </div>
             </>
           ) : (
-            <div className="rounded-2xl border border-white/[0.08] bg-neutral-900/40 p-5 flex flex-col justify-center items-center text-center">
-              <Swords className="h-6 w-6 text-neutral-600 mb-2" />
+            <div className="flex flex-col items-center justify-center rounded-2xl border border-[#232433] bg-[#12131c] p-5 text-center">
+              <Swords className="mb-2 h-6 w-6 text-neutral-600" />
               <span className="text-xs font-bold text-neutral-300">Coming soon</span>
-              <span className="text-[10px] text-neutral-500 mt-1">Live 1v1 duels are being tuned up for mobile.</span>
+              <span className="mt-1 text-[10px] text-neutral-500">Live 1v1 duels are being tuned up for mobile.</span>
             </div>
           )}
         </section>
       </main>
+    </div>
+  );
+}
+
+function StatTile({ label, value }) {
+  return (
+    <div className="rounded-xl border border-[#232433] bg-[#0e0f16] p-2.5 text-center">
+      <div className="font-hud text-lg font-semibold tabular-nums text-white">{value}</div>
+      <div className="mt-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">{label}</div>
     </div>
   );
 }

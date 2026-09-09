@@ -3,10 +3,11 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
-  CheckCircle2, Play, Flame,
+  CheckCircle2, Play, Flame, Swords,
   Layers, Grid3x3, Shield, Crosshair, Contrast, Copy, Brain, Puzzle, Fingerprint, Zap,
 } from 'lucide-react';
 import { getDailyChallenge } from '../../lib/dailyChallenge';
+import { getArenaChallenge } from '../../lib/arenaChallenge';
 import { getStreak } from '../../lib/progressStore';
 import { DRILL_INDEX } from '../../lib/drillIndex';
 
@@ -28,24 +29,91 @@ const DRILL_LOGO = {
   'quick-dodge': Zap,
 };
 
+// One card shape for both the daily drill set and the Arena Challenge set, so
+// they read as siblings. `href` is where a tap goes (a drill page for the
+// daily set, /challenge?duel=<slug> for an Arena Challenge); `meta` is the
+// small line under the name.
+function DrillCard({ drillId, name, meta, completed, href }) {
+  const DrillLogo = DRILL_LOGO[drillId] || Zap;
+  return (
+    <div
+      className="relative rounded-2xl border p-5 transition-colors duration-200"
+      style={{
+        '--a': completed ? '#22c55e' : 'var(--brand-2)',
+        background: 'var(--card)',
+        borderColor: completed ? 'color-mix(in srgb, #22c55e 34%, var(--line))' : 'var(--line)',
+      }}
+    >
+      <div className="flex items-center gap-3.5">
+        <div
+          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border"
+          style={{ background: 'var(--card-raised)', borderColor: 'var(--line)', color: 'var(--a)' }}
+        >
+          <DrillLogo className="w-6 h-6" />
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <h3 className="font-display text-xl text-white leading-none truncate">{name}</h3>
+          <div className="flex items-center gap-1.5 mt-1.5 text-[10px] text-white/60 font-semibold">
+            {meta}
+          </div>
+        </div>
+
+        {completed ? (
+          <div
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border text-emerald-400"
+            style={{ background: 'var(--card-raised)', borderColor: 'color-mix(in srgb, #22c55e 34%, var(--line))' }}
+            aria-label={`${name} completed`}
+          >
+            <CheckCircle2 className="w-5 h-5" />
+          </div>
+        ) : (
+          <Link
+            href={href}
+            aria-label={`Start ${name}`}
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-white transition-transform duration-150 active:scale-90 cursor-pointer"
+            style={{ background: 'var(--a)' }}
+          >
+            <Play className="w-[18px] h-[18px] ml-0.5" fill="currentColor" />
+          </Link>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function DailyClient() {
   const [challenge, setChallenge] = useState(null);
+  const [arena, setArena] = useState(null);
   const [streak, setStreak] = useState(0);
 
   useEffect(() => {
     async function load() {
       try {
-        const [today, s] = await Promise.all([
+        const [today, a, s] = await Promise.all([
           getDailyChallenge(),
+          getArenaChallenge(),
           getStreak()
         ]);
         setChallenge(today);
+        setArena(a);
         setStreak(s.current);
       } catch (error) {
         console.error("Failed to load daily challenge:", error);
       }
     }
     load();
+    // A duel finished in another tab/route updates the Arena set — refresh it
+    // when the player returns to this page rather than showing a stale count.
+    function refreshArena() {
+      getArenaChallenge().then(setArena).catch(() => {});
+    }
+    window.addEventListener('focus', refreshArena);
+    document.addEventListener('visibilitychange', refreshArena);
+    return () => {
+      window.removeEventListener('focus', refreshArena);
+      document.removeEventListener('visibilitychange', refreshArena);
+    };
   }, []);
 
   return (
@@ -56,8 +124,11 @@ export default function DailyClient() {
         <div className="flex items-center justify-between">
           <h1 className="font-display text-[28px] text-white">Today&apos;s Drills</h1>
           {streak > 0 && (
-            <div className="flex items-center gap-1 px-3 py-1.5 rounded-2xl bg-orange-500/15 border border-orange-500/20">
-              <Flame className="w-3.5 h-3.5 text-orange-400 animate-pulse" />
+            <div
+              className="flex items-center gap-1 px-3 py-1.5 rounded-xl border"
+              style={{ background: 'var(--card)', borderColor: 'var(--line)' }}
+            >
+              <Flame className="w-3.5 h-3.5 text-orange-400" />
               <span className="text-xs font-black text-orange-300">{streak}d</span>
             </div>
           )}
@@ -68,76 +139,57 @@ export default function DailyClient() {
             three inches below it just said the same thing twice. */}
         <div className="space-y-4">
           {(challenge?.drills || []).map((drill) => {
-            const completed = drill.completed;
             const details = DRILL_INDEX.find(d => d.id === drill.id) || drill;
-            const duration = details.duration || '45s';
-            const DrillLogo = DRILL_LOGO[drill.id] || Zap;
-
             return (
-              // One accent for all three cards, not one per category. The
-              // per-category version made the set look like three unrelated
-              // offers; today's drills are a single set, so they read as one.
-              // Completed cards still swap to green — that is a state, not a
-              // category, and it needs to stand out from the other two.
-              <div
+              <DrillCard
                 key={drill.id}
-                className="viewfinder-box relative rounded-3xl border p-5 transition-all duration-300"
-                style={{
-                  '--a': completed ? '#22c55e' : 'var(--brand-2)',
-                  background: 'linear-gradient(135deg, color-mix(in srgb, var(--a) 14%, transparent), transparent 62%), var(--card)',
-                  borderColor: 'color-mix(in srgb, var(--a) 26%, transparent)',
-                }}
-              >
-                <div className="viewfinder-corner tl" />
-                <div className="viewfinder-corner tr" />
-                {/* [ logo ]  [ name + metadata, flexes ]  [ play ] — three
-                    fixed-purpose zones so a long name never reaches the
-                    button; it truncates in its own middle column instead. */}
-                <div className="flex items-center gap-3.5">
-                  <div
-                    className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl"
-                    style={{ background: 'color-mix(in srgb, var(--a) 18%, transparent)', color: 'var(--a)' }}
-                  >
-                    <DrillLogo className="w-6 h-6" />
-                  </div>
-
-                  <div className="min-w-0 flex-1">
-                    <h3 className="font-display text-xl text-white leading-none truncate">
-                      {drill.name}
-                    </h3>
-                    <div className="flex items-center gap-1.5 mt-1.5 text-[10px] text-white/60 font-semibold">
-                      <span>{duration}</span>
-                      <span className="text-white/25">&bull;</span>
-                      <span>2&times; XP</span>
-                    </div>
-                  </div>
-
-                  {/* The play button IS the "start" control — completed
-                      drills show a static checkmark instead of a link,
-                      since replaying from here was never something the old
-                      full-width button offered either. */}
-                  {completed ? (
-                    <div
-                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-emerald-400 bg-emerald-500/10 border border-emerald-500/20"
-                      aria-label={`${drill.name} completed`}
-                    >
-                      <CheckCircle2 className="w-5 h-5" />
-                    </div>
-                  ) : (
-                    <Link
-                      href={drill.path || '/drills'}
-                      aria-label={`Start ${drill.name}`}
-                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-white shadow-md transition-transform duration-150 active:scale-90 cursor-pointer"
-                      style={{ background: 'var(--a)' }}
-                    >
-                      <Play className="w-[18px] h-[18px] ml-0.5" fill="currentColor" />
-                    </Link>
-                  )}
-                </div>
-              </div>
+                drillId={drill.id}
+                name={drill.name}
+                completed={drill.completed}
+                href={drill.path || '/drills'}
+                meta={<>
+                  <span>{details.duration || '45s'}</span>
+                  <span className="text-white/25">&bull;</span>
+                  <span>2&times; XP</span>
+                </>}
+              />
             );
           })}
         </div>
+
+        {/* Arena Challenges — a second daily set, cleared by duel play. Same
+            card shape as the drills above; tapping one jumps to the Arena and
+            auto-starts matchmaking for that drill (see ?duel= in
+            ChallengeArenaClient). Finishing one never touches the daily drill
+            set, the streak or best scores — it pays flat XP. */}
+        {arena && arena.drills.length > 0 && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Swords className="w-4 h-4 text-violet-300" />
+                <h2 className="font-display text-[22px] text-white">Arena Challenges</h2>
+              </div>
+              <span className="text-[11px] font-black tabular-nums text-white/50">
+                {arena.completedCount}/{arena.total}
+              </span>
+            </div>
+
+            {arena.drills.map((d) => (
+              <DrillCard
+                key={d.slug}
+                drillId={d.id}
+                name={d.name}
+                completed={d.completed}
+                href={`/challenge?duel=${encodeURIComponent(d.slug)}`}
+                meta={<>
+                  <span>Arena duel</span>
+                  <span className="text-white/25">&bull;</span>
+                  <span>2&times; XP</span>
+                </>}
+              />
+            ))}
+          </div>
+        )}
 
       </div>
     </div>

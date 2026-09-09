@@ -266,7 +266,7 @@ export default function FingerSequencingClient() {
   const searchParams = useSearchParams();
   const challengeId = searchParams ? searchParams.get('challengeId') : null;
   const isChallenge = !!challengeId;
-  const totalTime = isChallenge ? 30 : GAME_DURATION;
+  const totalTime = isChallenge ? 45 : GAME_DURATION;
 
   // === UI & Viewport State ===
   const [phase, setPhase] = useState('start'); // 'start' | 'countdown' | 'playing' | 'rotate-hint' | 'ended'
@@ -516,27 +516,33 @@ export default function FingerSequencingClient() {
       dailyChallengeSetComplete: daily.wouldCompleteSet
     });
 
-    setBestScore(prev => {
-      if (finalScore > prev) {
-        try {
-          localStorage.setItem('sequenceAim_bestScore', finalScore.toString());
-          localStorage.setItem('sequenceAim_bestCombo', bestNodeComboRef.current.toString());
-          localStorage.setItem('sequenceAim_bestReadStreak', bestReadStreakRef.current.toString());
-          localStorage.setItem('sequenceAim_bestLevel', bestLevelRunRef.current.toString());
-        } catch{}
-        return finalScore;
-      }
-      return prev;
-    });
+    // A duel is NOT a solo run (30s, level-3 start, its own penalties, its own
+    // EIQ/win-loss system) — it must never touch solo progression, above all
+    // not saveLeaderboardEntrySync → saveDrillResult, which banks solo XP,
+    // extends the daily streak, and ticks off a daily-challenge slot.
+    if (!isChallenge) {
+      setBestScore(prev => {
+        if (finalScore > prev) {
+          try {
+            localStorage.setItem('sequenceAim_bestScore', finalScore.toString());
+            localStorage.setItem('sequenceAim_bestCombo', bestNodeComboRef.current.toString());
+            localStorage.setItem('sequenceAim_bestReadStreak', bestReadStreakRef.current.toString());
+            localStorage.setItem('sequenceAim_bestLevel', bestLevelRunRef.current.toString());
+          } catch{}
+          return finalScore;
+        }
+        return prev;
+      });
 
-    saveLeaderboardEntrySync({
-      drillId: 'finger-sequencing',
-      drillName: 'Sequence Aim Trainer',
-      category: 'cognitive',
-      score: finalScore,
-      accuracy: finalAcc,
-      bestCombo: bestNodeComboRef.current,
-    });
+      saveLeaderboardEntrySync({
+        drillId: 'finger-sequencing',
+        drillName: 'Sequence Aim Trainer',
+        category: 'cognitive',
+        score: finalScore,
+        accuracy: finalAcc,
+        bestCombo: bestNodeComboRef.current,
+      });
+    }
 
     setEndSummary({
       progress,
@@ -1601,9 +1607,9 @@ export default function FingerSequencingClient() {
         {phase === 'countdown' && !isChallenge && (
           <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/55 select-none">
             <span className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">Get Ready</span>
-            <div className="relative w-28 h-28 rounded-full border-[3px] border-emerald-500/20 flex items-center justify-center">
-              <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-emerald-400 border-r-emerald-400 animate-spin" style={{ animationDuration: '0.7s' }} />
-              <span key={countdownValue} className="fx-pop-in text-5xl font-display bg-gradient-to-b from-white to-emerald-300 bg-clip-text text-transparent">
+            <div className="relative w-28 h-28 rounded-full border-[3px] border-violet-500/20 flex items-center justify-center">
+              <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-violet-400 border-r-violet-400 animate-spin" style={{ animationDuration: '0.7s' }} />
+              <span key={countdownValue} className="fx-pop-in text-5xl font-display bg-gradient-to-b from-white to-violet-300 bg-clip-text text-transparent">
                 {countdownValue > 0 ? countdownValue : 'GO'}
               </span>
             </div>

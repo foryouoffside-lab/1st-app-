@@ -15,7 +15,7 @@
 // same reward system rather than a new one-off style.
 
 import { useEffect, useState } from 'react';
-import { Crown, Zap, Sparkles, Flame } from 'lucide-react';
+import { Crown, Zap, Sparkles, Flame, Swords } from 'lucide-react';
 
 const AUTO_DISMISS_MS = 4500;
 
@@ -31,6 +31,11 @@ function buildLines(detail) {
     lines.push({ icon: Sparkles, color: 'text-cyan-400', text: "All 3 of today's drills complete!" });
   } else if (detail.dailyChallengeCompleted) {
     lines.push({ icon: Sparkles, color: 'text-cyan-400', text: 'Daily challenge complete!' });
+  }
+  if (detail.arenaChallengeSetComplete) {
+    lines.push({ icon: Swords, color: 'text-violet-300', text: "Today's Arena Challenges done!" });
+  } else if (detail.arenaChallengeCompleted) {
+    lines.push({ icon: Swords, color: 'text-violet-300', text: 'Arena Challenge complete!' });
   }
   return lines;
 }
@@ -64,8 +69,8 @@ export default function CelebrationToast() {
   return (
     <div className="fixed top-44 left-1/2 -translate-x-1/2 z-[9999] w-full max-w-md px-4 pointer-events-none">
       <div
-        className="relative overflow-hidden rounded-2xl p-4 pointer-events-auto shadow-[0_0_30px_rgba(139,92,246,0.25)]"
-        style={{ background: 'linear-gradient(180deg, #17122b 0%, #0d0d18 100%)', border: '1px solid rgba(139,92,246,0.25)' }}
+        className="relative overflow-hidden rounded-2xl p-4 pointer-events-auto shadow-[0_4px_20px_rgba(0,0,0,0.4)]"
+        style={{ background: '#12131c', border: '1px solid rgba(139,92,246,0.3)' }}
       >
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
           {[...Array(8)].map((_, i) => (

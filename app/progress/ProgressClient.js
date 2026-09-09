@@ -21,6 +21,7 @@ import { Storage } from '../../lib/storage';
 import { DRILL_INDEX } from '../../lib/drillIndex';
 import { RANK_TIERS, getRankTier } from '../../lib/leaderboard';
 import { DRILL_GROUPS, getDrillGroup } from '../../lib/drillGroups';
+import LevelBadge from '../../components/LevelBadge';
 
 const RADAR_CATEGORIES = DRILL_GROUPS.map(g => ({ slug: g.id, name: g.name }));
 
@@ -460,7 +461,7 @@ export default function ProgressClient() {
               <button
                 onClick={() => fileInputRef.current?.click()}
                 title="Change profile photo"
-                className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-violet-600 hover:bg-violet-500 border-2 border-[#0a0a12] flex items-center justify-center cursor-pointer transition-colors"
+                className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-violet-600 hover:bg-violet-500 border-2 border-[#0e0f16] flex items-center justify-center cursor-pointer transition-colors"
               >
                 <Camera className="w-3 h-3 text-white" />
               </button>
@@ -480,15 +481,18 @@ export default function ProgressClient() {
                   type="text" 
                   value={tempName} 
                   onChange={(e) => setTempName(e.target.value)}
-                  className="bg-neutral-800 border border-neutral-700 rounded-lg px-2.5 py-1 text-sm font-bold text-white max-w-[140px] focus:outline-none focus:border-violet-500"
+                  className="bg-[#12131c] border border-[#232433] rounded-xl px-2.5 py-1 text-sm font-bold text-white max-w-[140px] focus:outline-none focus:border-violet-500"
                   autoFocus
                 />
-                <button onClick={handleSaveName} className="text-xs bg-emerald-400 text-black px-2.5 py-1.5 rounded-lg font-black transition hover:bg-emerald-300">Save</button>
-                <button onClick={() => setEditingName(false)} className="text-xs bg-neutral-700 text-white px-2.5 py-1.5 rounded-lg font-bold">Cancel</button>
+                <button onClick={handleSaveName} className="text-xs bg-emerald-400 text-black px-2.5 py-1.5 rounded-xl font-black transition hover:bg-emerald-300">Save</button>
+                <button onClick={() => setEditingName(false)} className="text-xs bg-neutral-700 text-white px-2.5 py-1.5 rounded-xl font-bold">Cancel</button>
               </div>
             ) : (
               <>
-                <b>{displayName}</b>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <b>{displayName}</b>
+                  <LevelBadge level={level} />
+                </div>
                 <span>Level {level} · {drillsP} drills played</span>
               </>
             )}
@@ -538,8 +542,8 @@ export default function ProgressClient() {
         {/* ── Skill Radar ── */}
         <div>
           <div className="section-label">Skill Profile</div>
-          <div className="radar-wrap bg-[#12131c] border border-neutral-800 rounded-3xl p-4 relative overflow-hidden">
-            <div className="absolute top-2 right-2 flex items-center gap-1.5 bg-neutral-900/40 px-2 py-0.5 rounded-full border border-neutral-800">
+          <div className="radar-wrap bg-[#12131c] border border-neutral-800 rounded-2xl p-4 relative overflow-hidden">
+            <div className="absolute top-2 right-2 flex items-center gap-1.5 bg-[#1a1b26] px-2 py-0.5 rounded-full border border-[#232433]">
               <span className="w-1.5 h-1.5 rounded-full bg-indigo-500"></span>
               <span className="text-[9px] text-neutral-400 font-bold uppercase tracking-wider">Calibration Grid</span>
             </div>
@@ -550,7 +554,7 @@ export default function ProgressClient() {
         {/* ── Consistency Heatmap ── */}
         <div>
           <div className="section-label">Consistency</div>
-          <div className="bg-[#12131c] border border-neutral-800 rounded-3xl p-5">
+          <div className="bg-[#12131c] border border-neutral-800 rounded-2xl p-5">
             <div className="heatmap">
               {heatmapCells.map((cell, idx) => (
                 <i 
@@ -679,8 +683,8 @@ export default function ProgressClient() {
 
       {/* MODAL: Crop & confirm profile photo */}
       {photoFile && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
-          <div className="w-full max-w-xs bg-[#0a0a12] border border-neutral-800 rounded-3xl p-6 shadow-2xl text-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
+          <div className="w-full max-w-xs bg-[#0f1018] border border-[#232433] rounded-2xl p-6 shadow-2xl text-center">
             <h3 className="font-bold text-base text-white mb-4">Adjust Your Photo</h3>
 
             <div className="flex justify-center mb-4">
@@ -715,7 +719,7 @@ export default function ProgressClient() {
               <button
                 onClick={handleCancelPhotoEdit}
                 disabled={uploadingPhoto}
-                className="flex-1 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-white rounded-xl text-sm font-bold transition-colors disabled:opacity-50 cursor-pointer"
+                className="flex-1 py-2.5 bg-[#1a1b26] hover:bg-[#232433] text-white rounded-xl text-sm font-bold transition-colors disabled:opacity-50 cursor-pointer"
               >
                 Cancel
               </button>

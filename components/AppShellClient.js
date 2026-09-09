@@ -14,6 +14,7 @@ import { reportError, identifyUser } from '../lib/crashReporting';
 import { logScreenView, identifyAnalyticsUser } from '../lib/analytics';
 import { ensureDailyReminderScheduled } from '../lib/dailyReminder';
 import { reconcileDrillBests } from '../lib/bestScoreSync';
+import { startPresence } from '../lib/presence';
 import { LocalNotifications } from '@capacitor/local-notifications';
 
 export default function AppShellClient({ children }) {
@@ -69,6 +70,16 @@ export default function AppShellClient({ children }) {
   // signed in (no-ops on web / when already scheduled — see lib/dailyReminder.js).
   useEffect(() => {
     if (user?.uid) ensureDailyReminderScheduled();
+  }, [user?.uid]);
+
+  // App-wide "online" presence — keeps `online`/`lastSeen` current while the
+  // app is open on any screen so a friend's Duel button / online dot is
+  // accurate wherever they are, not just in the Arena. Writes only while
+  // foregrounded (+ one write on background/close); stops on sign-out.
+  // Consumed only by the Friends surfaces — see lib/presence.js.
+  useEffect(() => {
+    if (!user?.uid) return undefined;
+    return startPresence(user.uid);
   }, [user?.uid]);
 
   // Route straight to the Daily tab when the reminder above is tapped.

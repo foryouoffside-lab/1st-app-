@@ -11,14 +11,18 @@ import { useAuth } from '../contexts/AuthContext';
 import { useChallenge } from '../contexts/ChallengeContext';
 import { sendChallenge, sendGlobalChallenge, acceptChallenge, declineChallenge, withdrawChallenge, submitScore, resolveAbandonedMatch, forfeitMatch, getServerClockOffset, ensureMatchStart, markMatchPlaying, isInviteFresh, markInMatch, clearInMatch, BUSY_TTL_MS, DUEL_DRILLS, DUEL_DURATION_MS, tierForEiq, FORFEIT_GRACE_COUNT } from '../lib/challengeEngine';
 import { ARENA_ENABLED } from '../lib/featureFlags';
+import { recordArenaMatch } from '../lib/arenaChallenge';
+import { useShareCard } from './ShareScoreCard';
+import { APP_SHARE_URL } from '../lib/shareLinks';
+import { lockPortrait } from '../lib/orientation';
 import { keepAwake, allowSleep } from '../lib/keepAwake';
 import { enterImmersive, exitImmersive } from '../lib/immersive';
 import { useOnlineStatus } from '../lib/useOnlineStatus';
 import DrillErrorBoundary from './DrillErrorBoundary';
 import { doc, onSnapshot, updateDoc, collection, query, where, limit, orderBy, getDoc } from 'firebase/firestore';
 import {
-  ArrowLeft, Volume2, VolumeX, Swords, CheckCircle2, Trophy, Home, Zap, X,
-  Repeat
+  ArrowLeft, Volume2, VolumeX, Swords, CheckCircle2, Home, Zap, X,
+  Repeat, Share2, ArrowUp, ArrowDown
 } from 'lucide-react';
 
 // There is deliberately no mid-duel score sync any more. One used to live here
@@ -133,6 +137,9 @@ export default function DrillWrapper({
   const [opponentName, setOpponentName] = useState('Opponent');
   const [opponentPhoto, setOpponentPhoto] = useState('');
   const [challengeStatus, setChallengeStatus] = useState('lobby'); // lobby, countdown, playing, finished
+  // XP this duel earned by clearing an Arena Challenge slot (0 = none). Shown
+  // on the result card. Set from recordArenaMatch's return in the listener.
+  const [arenaChallengeXp, setArenaChallengeXp] = useState(0);
   // The visible countdown is always 3 -> 2 -> 1, even though the real lead is
   // MATCH_COUNTDOWN_MS (4s, sized to cover the stamp's round trip). The extra
   // second is absorbed by holding on 3, which is why the display is capped
@@ -324,6 +331,15 @@ export default function DrillWrapper({
         setChallengeStatus('playing');
       } else if (data.status === 'completed') {
         setChallengeStatus('finished');
+        // Credit this finished duel toward today's Arena Challenge set (one of
+        // its two drills clears if it matches). Idempotent per challengeId, so
+        // firing on every 'completed' snapshot (and for both players) is safe.
+        // Purely additive — never touches solo streak or the daily drill set.
+        if (user && challengeId) {
+          recordArenaMatch(challengeId, { drillSlug: data.drillSlug || drillSlug })
+            .then((r) => { if (r && r.xpAwarded > 0) setArenaChallengeXp(r.xpAwarded); })
+            .catch(() => {});
+        }
       } else if (data.status === 'declined') {
         // The opponent turned this match down. This branch didn't exist, so a
         // declined match left the player sitting in "Connecting Players" until
@@ -369,6 +385,14 @@ export default function DrillWrapper({
 
     return () => unsubscribe();
   }, [challengeId, db, user]);
+
+  // The duel result card is portrait, always — the landscape duel drills
+  // (Multi-Tasking, Sequence Aim, Tower of Hanoi) would otherwise show it
+  // sideways. Re-lock to portrait the moment the match finishes; the drill's
+  // own unmount cleanup still restores orientation on the way out.
+  useEffect(() => {
+    if (challengeStatus === 'finished') lockPortrait().catch(() => {});
+  }, [challengeStatus]);
 
   // 2b. Hold an "in a duel right now" claim on this player's profile for as
   // long as they are inside this match, and release it on the way out.
@@ -871,6 +895,32 @@ export default function DrillWrapper({
     }
   };
 
+  // Share card for a finished duel — the head-to-head variant of the drill
+  // score card. Drawn while the result screen sits idle, same mechanism the
+  // solo drills use (see useShareCard). Without this the share button only had
+  // a bare-text fallback, which read as "it just copies a link".
+  const duelFinished = isChallengeMode && challengeStatus === 'finished' && !!challengeData;
+  const duelMyScore = duelFinished ? ((isHost ? challengeData.fromScore : challengeData.toScore) ?? 0) : 0;
+  const duelOppScore = duelFinished ? ((isHost ? challengeData.toScore : challengeData.fromScore) ?? 0) : 0;
+  const duelResult = challengeData?.winner === 'draw'
+    ? 'draw'
+    : challengeData?.winner === user?.uid ? 'win' : 'loss';
+  const shareDuelCard = useShareCard(duelFinished ? {
+    score: duelMyScore,
+    drillName: challengeData.drillName || drillName,
+    playerName: user?.displayName || null,
+    duel: {
+      myScore: duelMyScore,
+      oppScore: duelOppScore,
+      oppName: opponentName && opponentName !== 'Opponent' ? opponentName : null,
+      outcome: duelResult,
+    },
+  } : null, {
+    url: APP_SHARE_URL,
+    title: 'SkillDrills Duel',
+    text: `${duelResult === 'win' ? 'Won' : duelResult === 'draw' ? 'Drew' : 'Lost'} ${duelMyScore}–${duelOppScore} in ${challengeData?.drillName || 'a SkillDrills duel'}`,
+  });
+
   const CATEGORY_GRADIENTS = {
     fps:              'from-red-600 to-orange-500',
     'reaction-speed': 'from-amber-500 to-orange-500',
@@ -1119,9 +1169,9 @@ export default function DrillWrapper({
             and already scoring. */}
         {isChallengeMode && challengeStatus === 'countdown' && !duelUnderway && (
           <div className="absolute inset-0 bg-neutral-950/85 flex flex-col items-center justify-center gap-3 p-6 z-40 text-center backdrop-blur-sm">
-            <span className="text-[11px] font-black uppercase tracking-[0.2em] text-purple-300">Get Ready</span>
-            <div className="relative w-28 h-28 rounded-full border-[3px] border-purple-500/20 flex items-center justify-center">
-              <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-purple-400 border-r-purple-400 animate-spin" style={{ animationDuration: '0.7s' }} />
+            <span className="text-[11px] font-black uppercase tracking-[0.2em] text-violet-300">Get Ready</span>
+            <div className="relative w-28 h-28 rounded-full border-[3px] border-violet-500/20 flex items-center justify-center">
+              <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-violet-400 border-r-violet-400 animate-spin" style={{ animationDuration: '0.7s' }} />
               {/* Solid white, not `bg-clip-text text-transparent` over a
                   gradient. background-clip:text paints nothing at all in
                   Android's WebView when the element is also running a scale
@@ -1132,7 +1182,7 @@ export default function DrillWrapper({
               <span
                 key={countdownNum}
                 className="fx-count-pop text-5xl font-display text-white tabular-nums"
-                style={{ textShadow: '0 0 18px rgba(168,85,247,0.55)' }}
+                style={{ textShadow: '0 0 18px rgba(139,92,246,0.55)' }}
               >
                 {countdownNum > 0 ? countdownNum : 'GO'}
               </span>
@@ -1203,9 +1253,6 @@ export default function DrillWrapper({
                 <div>
                   <h3 className="font-display text-lg text-white">Time's up!</h3>
                   <p className="text-xs text-neutral-400 mt-1">Waiting for {opponentName?.split(' ')[0]} to finish...</p>
-                  <p className="text-[10px] text-neutral-600 mt-2 max-w-[220px] mx-auto leading-relaxed">
-                    If they’ve disconnected, the result is settled automatically in a few seconds.
-                  </p>
                 </div>
               </>
             )}
@@ -1224,263 +1271,200 @@ export default function DrillWrapper({
           const theirScore = (isHost ? challengeData?.toScore : challengeData?.fromScore) ?? 0;
           const myEiqGained = isHost ? challengeData?.fromEiqGained : challengeData?.toEiqGained;
           const myEiqAfter = isHost ? challengeData?.fromEiqAfter : challengeData?.toEiqAfter;
+          const oppEiqGained = isHost ? challengeData?.toEiqGained : challengeData?.fromEiqGained;
+          const oppEiqAfter = isHost ? challengeData?.toEiqAfter : challengeData?.fromEiqAfter;
           const won = challengeData?.winner === user?.uid;
           const draw = challengeData?.winner === 'draw';
+          const outcome = draw ? 'Draw' : won ? 'Victory' : 'Defeat';
           const tier = typeof myEiqAfter === 'number' ? tierForEiq(myEiqAfter) : null;
+          const margin = Math.abs(myScore - theirScore);
+          const myFirst = user?.displayName?.split(' ')[0] || 'You';
+          const oppFirst = opponentName?.split(' ')[0] || 'Opponent';
           // A forfeit result can show a scoreline that contradicts the outcome
-          // (you can lose while "ahead" if you walked out), so say so outright
-          // instead of leaving the player to think the scoring is broken.
+          // (you can lose while "ahead" if you walked out), so say so outright.
           const forfeitedBy = challengeData?.forfeitedBy;
           const iForfeited = forfeitedBy && forfeitedBy === user?.uid;
+          const EiqDelta = ({ v }) => (
+            typeof v === 'number' && v !== 0 ? (
+              <span className={`inline-flex items-center gap-0.5 font-bold tabular-nums ${v > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                {v > 0 ? <ArrowUp className="h-2.5 w-2.5" strokeWidth={3} /> : <ArrowDown className="h-2.5 w-2.5" strokeWidth={3} />}
+                {Math.abs(v)}
+              </span>
+            ) : null
+          );
+
+          // The "head to head" card. Always portrait — DrillWrapper re-locks
+          // the screen to portrait the moment a duel finishes (effect above),
+          // so the landscape duel drills show this the right way up. Full-bleed
+          // tinted ground (.duel-res-bg) behind one flat card.
           return (
-            <div className="absolute inset-0 bg-[#07070d] z-40 overflow-y-auto select-none" style={{ touchAction: 'pan-y', WebkitOverflowScrolling: 'touch' }}>
-              <div className="min-h-full flex items-center justify-center p-4">
-                {/* max-w-3xl, not max-w-md: a duel result renders in the 900x423
-                    LANDSCAPE viewport the duel drills run in, and a 448px column
-                    there left two thirds of the screen empty while crushing the
-                    scoreline into a narrow strip. The card is laid out wide
-                    below and falls back to stacked on genuinely narrow screens. */}
-                <div className="w-full max-w-2xl my-auto text-center">
+            <div className="absolute inset-0 z-40 overflow-y-auto select-none" style={{ touchAction: 'pan-y', WebkitOverflowScrolling: 'touch' }}>
+              <div className="relative flex min-h-full items-center justify-center p-4" style={{ background: '#050508' }}>
+                <div className={`duel-res-bg ${draw ? 'draw' : won ? 'win' : 'lose'}`} aria-hidden="true" />
 
-                  {/* Outcome. This is the one thing the player opened the
-                      screen to find out, so it gets to be the biggest thing on
-                      it — it used to be a 12px pill, smaller than the two score
-                      numbers underneath it. */}
-                  {/* Outcome as a colour-coded chip beside the drill name.
-                      This used to be a 3xl glowing yellow word, deliberately
-                      made "the biggest thing on the screen". That reasoning is
-                      superseded rather than forgotten: the scoreline below is
-                      now the hero at 5xl and the winning side is the only one
-                      rendered in white, so the result still reads instantly —
-                      while the glow (which read arcade rather than premium)
-                      and the height it ate in a 423px landscape viewport are
-                      both gone. */}
-                  <div className="flex items-center justify-center gap-2.5">
-                    <span className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] label-tiny ${
-                      draw ? 'border-neutral-700 bg-white/[0.04] text-neutral-300'
-                        : won ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-400'
-                        : 'border-rose-500/25 bg-rose-500/10 text-rose-400'
-                    }`}>
-                      {draw ? 'Draw' : won ? 'Victory' : 'Defeat'}
-                    </span>
-                    <span className="text-[10px] label-tiny text-neutral-600 truncate">
-                      {challengeData?.drillName}
-                    </span>
-                  </div>
+                <div className="relative z-[1] my-auto w-full max-w-[360px]">
+                  <div className="rounded-[22px] border border-[#232433] bg-[#12131c]/95 p-4">
 
-                  {/* Why the match ended this way, when it wasn't the clock */}
-                  {iForfeited && (
-                    <div className="mt-2 text-[11px] text-red-400/90 font-semibold max-w-xs mx-auto leading-relaxed">
-                      You left the duel — leaving forfeits the match and its EIQ.
-                      {/* The lockout is forgiven for the first few in a row, so
-                          the one that actually triggers it must not arrive
-                          unannounced. Warned only on the last free one, which
-                          is the moment the player can still act on it.
-                          forfeitStreak is already the post-match value here. */}
-                      {user?.forfeitStreak === FORFEIT_GRACE_COUNT && (
-                        <span className="mt-1 block text-amber-400/90">
-                          Leave one more in a row and the Arena locks for 30 minutes.
+                    {/* Head: home · ghost-echo outcome · share */}
+                    <div className="flex items-start justify-between gap-2">
+                      <button
+                        onClick={() => router.push('/challenge')}
+                        aria-label="Back to Arena"
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[11px] border border-[#232433] bg-[#1a1b26] text-neutral-400 transition active:scale-95"
+                      >
+                        <Home className="h-4 w-4" />
+                      </button>
+                      <div className="min-w-0 flex-1 text-center">
+                        <span
+                          className={`duel-res-echo font-display text-[33px] uppercase leading-[0.9] tracking-[0.01em] ${
+                            draw ? 'text-neutral-200' : won ? 'text-white' : 'text-neutral-400'
+                          }`}
+                          data-echo={outcome}
+                        >
+                          {outcome}
                         </span>
-                      )}
-                    </div>
-                  )}
-                  {/* A win where the opponent walked out is shown as an
-                      ORDINARY win: no "you win by forfeit" line, and no
-                      "duel ended early" panel replacing the scoreboard. The
-                      winner sees the same card they'd see after any other
-                      duel — the EIQ still moves, the player who left still
-                      pays for it. Only the person who actually left is told
-                      why (see iForfeited above), since they'd otherwise lose
-                      EIQ with no explanation at all. */}
-                  {(
-                  /* One scoreboard instead of two floating boxes, with the
-                     EIQ result carried in its own footer strip — the same
-                     card-plus-footer shape as Your Standing on the Rankings
-                     page. The winning side takes the accent wash, so the
-                     result reads from the card's colour before any number is
-                     parsed. */
-                  <div className="mt-3 rounded-3xl border border-neutral-800 bg-[#12131c] overflow-hidden">
-                    {/* "Broadcast" layout: the two players FACE each other across
-                        the full width — avatar and name on the outside, scores
-                        meeting in the middle — instead of two stacked centred
-                        columns. A duel result renders in a 900x423 landscape
-                        viewport, where the old narrow grid left most of the
-                        width empty and shrank the scoreline to 3xl. Stacks
-                        vertically below `sm` for any portrait case. */}
-                    <div className="flex flex-col sm:flex-row sm:items-stretch">
-                      <div className={`flex items-center gap-3 px-4 py-3.5 sm:flex-1 ${won ? 'bg-purple-500/[0.07]' : ''}`}>
-                        {user?.photoURL ? (
-                          <img src={user.photoURL} referrerPolicy="no-referrer" className={`w-12 h-12 rounded-full object-cover shrink-0 ${
-                            won ? 'ring-2 ring-purple-400' : 'ring-1 ring-neutral-700'
-                          }`} />
-                        ) : (
-                          <div className={`w-12 h-12 rounded-full bg-neutral-800 flex items-center justify-center shrink-0 ${
-                            won ? 'ring-2 ring-purple-400' : 'ring-1 ring-neutral-700'
-                          }`}>
-                            <Swords className="w-5 h-5 text-purple-400" />
-                          </div>
-                        )}
-                        <div className="min-w-0 text-left">
-                          <div className="text-[13px] font-bold text-white truncate">{user?.displayName?.split(' ')[0] || 'You'}</div>
-                          <div className="mt-0.5 text-[10px] label-tiny text-neutral-500">You</div>
-                        </div>
-                        <div className={`ml-auto text-4xl font-display tabular-nums leading-none ${
-                          draw || won ? 'text-white' : 'text-neutral-600'
-                        }`}>{myScore}</div>
                       </div>
-
-                      {/* Divider carries the VS, so the two sides read as one
-                          match rather than two separate results. */}
-                      <div className="flex sm:flex-col items-center justify-center gap-2 px-3 sm:px-1">
-                        <div className="hidden sm:block w-px flex-1 bg-neutral-800" />
-                        <div className="sm:hidden h-px flex-1 bg-neutral-800" />
-                        <span className="text-[9px] label-tiny text-neutral-600">vs</span>
-                        <div className="hidden sm:block w-px flex-1 bg-neutral-800" />
-                        <div className="sm:hidden h-px flex-1 bg-neutral-800" />
-                      </div>
-
-                      <div className={`flex items-center gap-3 px-4 py-3.5 sm:flex-1 sm:flex-row-reverse ${!won && !draw ? 'bg-rose-500/[0.07]' : ''}`}>
-                        {opponentPhoto ? (
-                          <img src={opponentPhoto} referrerPolicy="no-referrer" className={`w-12 h-12 rounded-full object-cover shrink-0 ${
-                            !won && !draw ? 'ring-2 ring-rose-400' : 'ring-1 ring-neutral-700'
-                          }`} />
-                        ) : (
-                          <div className={`w-12 h-12 rounded-full bg-neutral-800 flex items-center justify-center shrink-0 ${
-                            !won && !draw ? 'ring-2 ring-rose-400' : 'ring-1 ring-neutral-700'
-                          }`}>
-                            <Swords className="w-5 h-5 text-neutral-400" />
-                          </div>
-                        )}
-                        <div className="min-w-0 text-left sm:text-right">
-                          <div className="text-[13px] font-bold text-white truncate">{opponentName?.split(' ')[0]}</div>
-                          <div className="mt-0.5 text-[10px] label-tiny text-neutral-500">Opponent</div>
-                        </div>
-                        <div className={`ml-auto sm:ml-0 sm:mr-auto text-4xl font-display tabular-nums leading-none ${
-                          draw || !won ? 'text-white' : 'text-neutral-600'
-                        }`}>{theirScore}</div>
-                      </div>
+                      <button
+                        onClick={shareDuelCard}
+                        aria-label="Share result"
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[11px] border border-[#232433] bg-[#1a1b26] text-neutral-400 transition active:scale-95"
+                      >
+                        <Share2 className="h-4 w-4" />
+                      </button>
                     </div>
 
-                    {/* Margin bar — the scoreline says WHO won, this says by how
-                        much. Same two-tone split the Arena duel-history rows
-                        already use, so a result reads identically in both
-                        places. 3px, so it costs no meaningful height in the
-                        423px landscape viewport these duels actually run in. */}
-                    {(myScore + theirScore) > 0 && (
-                      <div className="flex h-[3px] w-full overflow-hidden bg-neutral-800">
-                        <div
-                          className={won ? 'bg-purple-500' : 'bg-neutral-700'}
-                          style={{ width: `${(myScore / (myScore + theirScore)) * 100}%` }}
-                        />
-                        <div className={`flex-1 ${!won && !draw ? 'bg-rose-500' : 'bg-neutral-700'}`} />
-                      </div>
+                    <p className="mt-1 text-center text-[8.5px] font-bold uppercase tracking-[0.16em] text-neutral-500">
+                      {challengeData?.drillName} &middot; 45s duel
+                    </p>
+
+                    {/* Scoreline — winner bright, loser dimmed almost into the card */}
+                    <div className="mb-1 mt-3 flex items-center justify-center gap-4">
+                      <b className={`font-display text-[46px] leading-none tabular-nums ${won || draw ? 'text-white' : 'text-[#2b2b3d]'}`}>{myScore}</b>
+                      <span className="font-display text-[15px] text-neutral-600">&mdash;</span>
+                      <b className={`font-display text-[46px] leading-none tabular-nums ${!won || draw ? 'text-white' : 'text-[#2b2b3d]'}`}>{theirScore}</b>
+                    </div>
+
+                    {/* Names + EIQ deltas */}
+                    <div className="flex items-center justify-between gap-3 text-[9px] font-semibold text-neutral-400">
+                      <span className="flex min-w-0 items-center gap-1">
+                        <span className="truncate">{myFirst}</span>
+                        {typeof myEiqAfter === 'number' && <span className="text-neutral-600">({myEiqAfter})</span>}
+                        <EiqDelta v={myEiqGained} />
+                      </span>
+                      <span className="flex min-w-0 items-center justify-end gap-1">
+                        <span className="truncate">{oppFirst}</span>
+                        {typeof oppEiqAfter === 'number' && <span className="text-neutral-600">({oppEiqAfter})</span>}
+                        <EiqDelta v={oppEiqGained} />
+                      </span>
+                    </div>
+
+                    {iForfeited && (
+                      <p className="mt-3 text-center text-[10px] font-semibold leading-relaxed text-rose-400/90">
+                        You left the duel &mdash; leaving forfeits the match and its EIQ.
+                        {user?.forfeitStreak === FORFEIT_GRACE_COUNT && (
+                          <span className="mt-1 block text-amber-400/90">
+                            Leave one more in a row and the Arena locks for 30 minutes.
+                          </span>
+                        )}
+                      </p>
                     )}
 
-                  </div>
-                  )}
-
-                  {/* EIQ change — written by submitScore onto the challenge
-                      doc. Winner gains, loser loses (floored at 0), draw is 0.
-                      Sits OUTSIDE the scoreline branch on purpose: a forfeit
-                      that nobody finished still moves EIQ, so hiding this with
-                      the scoreboard would drop the one number that did change.
-                      Was two cryptic pills ("• 0 EIQ" next to "0 · BRONZE")
-                      that never said which was the change and which the
-                      total; now it is one labelled row. */}
-                  {typeof myEiqGained === 'number' && (
-                    <div className={`mt-2 flex items-center justify-between gap-3 rounded-2xl border px-4 py-2.5 ${
-                      myEiqGained > 0 ? 'border-emerald-500/25 bg-emerald-500/[0.07]'
-                        : myEiqGained < 0 ? 'border-rose-500/25 bg-rose-500/[0.07]'
-                        : 'border-neutral-800 bg-[#12131c]'
-                    }`}>
-                      <span className={`text-sm font-hud font-bold tabular-nums ${
-                        myEiqGained > 0 ? 'text-emerald-400' : myEiqGained < 0 ? 'text-rose-400' : 'text-neutral-400'
-                      }`}>
-                        {myEiqGained > 0 ? `+${myEiqGained}` : myEiqGained} EIQ
-                      </span>
-                      {typeof myEiqAfter === 'number' && (
-                        <span className="flex items-center gap-1.5 text-[11px] font-bold text-neutral-400">
-                          <Trophy className="w-3.5 h-3.5 text-yellow-400" />
-                          <span className="font-hud text-white">{myEiqAfter}</span> total
-                          {tier && <span className="text-[10px] label-tiny text-neutral-500">· {tier.name}</span>}
+                    {/* Two stat tiles */}
+                    <div className="mb-3 mt-3 grid grid-cols-2 gap-2">
+                      <div className="rounded-xl border border-[#232433] bg-[#1a1b26] px-2.5 py-2.5">
+                        <span className="block text-[7.5px] font-bold uppercase tracking-[0.15em] text-neutral-500">EIQ</span>
+                        <span className="mt-1.5 flex items-baseline gap-1.5">
+                          <b className="font-display text-[22px] leading-none tabular-nums text-white">
+                            {typeof myEiqAfter === 'number' ? myEiqAfter : '—'}
+                          </b>
+                          {typeof myEiqGained === 'number' && myEiqGained !== 0 && (
+                            <i className={`text-[10px] font-bold not-italic ${myEiqGained > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {myEiqGained > 0 ? `+${myEiqGained}` : myEiqGained}
+                            </i>
+                          )}
                         </span>
-                      )}
+                      </div>
+                      <div className="rounded-xl border border-[#232433] bg-[#1a1b26] px-2.5 py-2.5">
+                        <span className="block text-[7.5px] font-bold uppercase tracking-[0.15em] text-neutral-500">
+                          {arenaChallengeXp > 0 ? 'Arena XP' : 'Margin'}
+                        </span>
+                        <span className="mt-1.5 flex items-baseline gap-1.5">
+                          {arenaChallengeXp > 0 ? (
+                            <>
+                              <b className="font-display text-[22px] leading-none tabular-nums text-white">+{arenaChallengeXp}</b>
+                              <i className="text-[10px] font-bold not-italic text-violet-300">2&times;</i>
+                            </>
+                          ) : (
+                            <>
+                              <b className="font-display text-[22px] leading-none tabular-nums text-white">{margin}</b>
+                              {!draw && (
+                                <i className={`text-[10px] font-bold not-italic ${won ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                  {won ? 'lead' : 'behind'}
+                                </i>
+                              )}
+                            </>
+                          )}
+                        </span>
+                      </div>
                     </div>
-                  )}
 
-                  {/* Incoming rematch request — the global invite banner is
-                      unmounted on drill routes, so it must be shown here or
-                      the player never sees it until they exit. */}
-                  {rematchInvite && (
-                    <button
-                      onClick={() => acceptRematchInvite(rematchInvite)}
-                      /* Violet, not the emerald gradient it used to be — green
-                         is the app's "done/correct" colour everywhere else, and
-                         a full-width pulsing green slab read as a success
-                         banner rather than something to press. */
-                      className="mt-3 w-full py-2.5 bg-violet-600 hover:bg-violet-500 text-white font-bold rounded-2xl text-sm flex items-center justify-center gap-2 shadow-lg transition active:scale-[.98]"
-                    >
-                      <Swords className="w-4 h-4" />
-                      {opponentName?.split(' ')[0]} wants a rematch — Accept!
-                    </button>
-                  )}
+                    {tier && (
+                      <p className="mb-3 text-center text-[8.5px] font-bold uppercase tracking-[0.14em] text-neutral-500">
+                        {tier.name} tier
+                      </p>
+                    )}
 
-                  {/* An outstanding rematch offer — the answer shows up right
-                      here, so nobody is left guessing whether it was seen. */}
-                  {pendingRematch && (
-                    pendingRematch.declined ? (
-                      <div className="mt-4 rounded-2xl border border-red-500/30 bg-red-950/30 px-4 py-3.5">
-                        <p className="text-xs font-bold text-red-300">
-                          {pendingRematch.name} declined the rematch
-                        </p>
-                        <p className="text-[11px] text-neutral-400 mt-1">
-                          No EIQ was staked. Head back to the Arena to find another opponent.
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="mt-4 rounded-2xl border border-neutral-800 bg-neutral-900/60 px-4 py-3.5 flex items-center gap-3">
-                        <div className="w-5 h-5 rounded-full border-2 border-t-purple-500 border-r-transparent border-b-transparent border-l-transparent animate-spin shrink-0" />
-                        <p className="text-xs text-neutral-300 flex-1 text-left">
-                          Waiting for {pendingRematch.name} to accept the rematch...
-                        </p>
-                        <button
-                          onClick={cancelPendingRematch}
-                          className="text-[11px] font-bold text-neutral-500 hover:text-red-400 shrink-0"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    )
-                  )}
-
-                  {/* Actions — side-by-side in landscape/wide, stacked in portrait.
-                      Kept tight: the duel drills run landscape, where the whole
-                      result has 423 CSS px of height to live in. */}
-                  {/* Centred, fixed-width actions rather than two stretched
-                      flex-1 slabs. Across the full landscape width a
-                      full-bleed gradient button was the loudest thing on the
-                      screen — louder than the scoreline it sits under. Still
-                      full-width when stacked in portrait, where stretching is
-                      correct. */}
-                  <div className="mt-3 flex flex-col sm:flex-row sm:justify-center gap-2.5">
-                    <button
-                      onClick={() => router.push('/challenge')}
-                      className="sm:flex-none sm:min-w-[180px] px-6 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold rounded-2xl text-sm flex items-center justify-center gap-2 shadow-lg transition duration-200"
-                    >
-                      <Home className="w-4 h-4" />
-                      Back to Arena
-                    </button>
-                    {challengeData?.toUid !== 'global' && !pendingRematch && (
+                    {rematchInvite && (
                       <button
-                        onClick={handleChallengeAgain}
-                        className="sm:flex-none sm:min-w-[150px] px-6 py-2.5 bg-neutral-900 border border-neutral-800 hover:border-purple-500/40 text-white font-bold rounded-2xl text-sm flex items-center justify-center gap-2 transition duration-200"
+                        onClick={() => acceptRematchInvite(rematchInvite)}
+                        className="mb-2 flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 py-2.5 text-[11px] font-bold uppercase tracking-wider text-white transition active:scale-[.98]"
                       >
-                        <Repeat className="w-4 h-4" />
-                        Rematch
+                        <Swords className="h-3.5 w-3.5" />
+                        {oppFirst} wants a rematch &mdash; Accept
                       </button>
                     )}
-                  </div>
 
+                    {pendingRematch && (
+                      pendingRematch.declined ? (
+                        <div className="mb-2 rounded-xl border border-rose-500/30 bg-rose-950/30 px-3 py-2.5">
+                          <p className="text-[11px] font-bold text-rose-300">{pendingRematch.name} declined the rematch</p>
+                          <p className="mt-1 text-[10px] text-neutral-400">No EIQ was staked. Head back to the Arena for another opponent.</p>
+                        </div>
+                      ) : (
+                        <div className="mb-2 flex items-center gap-2.5 rounded-xl border border-[#232433] bg-[#1a1b26] px-3 py-2.5">
+                          <div className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-l-transparent border-b-transparent border-r-transparent border-t-violet-500" />
+                          <p className="flex-1 text-left text-[10px] text-neutral-300">Waiting for {pendingRematch.name} to accept&hellip;</p>
+                          <button onClick={cancelPendingRematch} className="shrink-0 text-[10px] font-bold text-neutral-500 transition active:text-rose-400">Cancel</button>
+                        </div>
+                      )
+                    )}
+
+                    {/* Actions — Arena (quiet) · Rematch/New duel (accent outline) */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => router.push('/challenge')}
+                        className="rounded-xl border border-[#232433] bg-[#1a1b26] py-2.5 text-[10px] font-bold uppercase tracking-[0.1em] text-white transition active:scale-[.98]"
+                      >
+                        Arena
+                      </button>
+                      {challengeData?.toUid !== 'global' && !pendingRematch && !rematchInvite ? (
+                        <button
+                          onClick={handleChallengeAgain}
+                          className="rounded-xl border border-violet-500 bg-transparent py-2.5 text-[10px] font-bold uppercase tracking-[0.1em] text-violet-300 transition active:scale-[.98]"
+                        >
+                          Rematch
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => router.push('/challenge')}
+                          className="rounded-xl border border-violet-500 bg-transparent py-2.5 text-[10px] font-bold uppercase tracking-[0.1em] text-violet-300 transition active:scale-[.98]"
+                        >
+                          New duel
+                        </button>
+                      )}
+                    </div>
+
+                  </div>
                 </div>
               </div>
             </div>
@@ -1494,7 +1478,7 @@ export default function DrillWrapper({
             style={{ touchAction: 'auto' }}
           >
             <div
-              className="w-full max-w-md bg-[#0a0a12] border border-neutral-800 rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl relative flex flex-col"
+              className="w-full max-w-md bg-[#0a0a12] border border-neutral-800 rounded-t-2xl sm:rounded-2xl p-6 shadow-2xl relative flex flex-col"
               style={{ maxHeight: 'min(80dvh, 560px)' }}
             >
               
@@ -1577,7 +1561,7 @@ export default function DrillWrapper({
                         
                         <button
                           onClick={() => handleInvitePlayer(player)}
-                          className="flex items-center gap-1 bg-purple-600 hover:bg-purple-500 text-white px-3 py-1.5 rounded-lg text-[10px] font-bold shadow-md"
+                          className="flex items-center gap-1 bg-purple-600 hover:bg-purple-500 text-white px-3 py-1.5 rounded-xl text-[10px] font-bold shadow-md"
                         >
                           <Zap className="w-3 h-3 fill-current" /> Duel
                         </button>

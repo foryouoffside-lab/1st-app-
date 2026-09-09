@@ -345,6 +345,45 @@ export function AuthProvider({ children }) {
     };
   }, [dbInstance, user?.uid]);
 
+  // 2c. Publish the player's XP level onto their public profile doc, so it
+  // shows as a rank badge on the Arena profile sheet / leaderboard for other
+  // players (see components/LevelBadge.js). XP itself stays on-device — only
+  // the derived level (floor(xp/1000)+1) is shared. One write, and only when
+  // the level has actually moved: once on app open if it drifted up since the
+  // last sync, and again in-session the moment a run levels the player up
+  // (the same 'sd:celebration' event the toast listens to). Never on every
+  // open — level changes at most about once a day for an active player.
+  useEffect(() => {
+    if (!dbInstance || !user?.uid) return;
+    const userRef = doc(dbInstance, 'users', user.uid);
+    let lastPushed = Number(user.level) || 0;
+
+    const push = async (level) => {
+      const lv = Math.floor(Number(level) || 0);
+      if (lv < 1 || lv === lastPushed) return;
+      lastPushed = lv;
+      try {
+        await updateDoc(userRef, { level: lv });
+      } catch (err) {
+        // Non-critical — the badge just stays a level behind until next open.
+      }
+    };
+
+    (async () => {
+      try {
+        const { getPlayerLevel } = await import('../lib/progressStore');
+        const { level } = await getPlayerLevel();
+        push(level);
+      } catch (err) { /* progress store unavailable */ }
+    })();
+
+    const onCelebration = (e) => {
+      if (e.detail && e.detail.leveledUp) push(e.detail.leveledUp);
+    };
+    window.addEventListener('sd:celebration', onCelebration);
+    return () => window.removeEventListener('sd:celebration', onCelebration);
+  }, [dbInstance, user?.uid]);
+
   // 3. Real Google sign-in. A browser popup doesn't work inside the app's
   //    embedded WebView on Android/iOS (Google blocks OAuth from WebViews
   //    outright) — native platforms go through the real native Google

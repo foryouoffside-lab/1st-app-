@@ -302,7 +302,7 @@ export default function ConcentrationGridClient() {
   const searchParams = useSearchParams();
   const challengeId = searchParams ? searchParams.get('challengeId') : null;
   const isChallenge = !!challengeId;
-  const totalTime = isChallenge ? 30 : TOTAL_TIME;
+  const totalTime = isChallenge ? 45 : TOTAL_TIME;
   const matchStartAt = useDuelMatchStart(challengeId);
   const duelAutoStartedRef = useRef(false);
   // The duel's shared start instant, on this device's clock. Held in a ref so
@@ -509,20 +509,29 @@ export default function ConcentrationGridClient() {
       bestCombo: Math.max(prev.bestCombo, maxStreakRef.current),
       totalSessions: prev.totalSessions + 1
     };
-    saveData(updated);
 
-    setBestScore(updated.bestScore);
-    setBestGrid(updated.bestGrid);
-    setBestCombo(updated.bestCombo);
+    // A duel is NOT a solo run — it's 30s, starts at level 3, has its own
+    // −5 penalties, and reports through the Arena's EIQ/win-loss system. It
+    // must never touch solo progression: no local best/history, and above all
+    // no saveLeaderboardEntrySync → saveDrillResult, which would bank solo XP,
+    // extend the daily streak, AND tick off a daily-challenge slot for a run
+    // the daily card never asked for.
+    if (!isChallenge) {
+      saveData(updated);
 
-    saveLeaderboardEntrySync({
-      drillId: 'concentration-grid',
-      drillName: 'Concentration Grid',
-      category: 'cognitive',
-      score: finalScore,
-      accuracy: accuracyVal,
-      bestCombo: maxStreakRef.current
-    });
+      setBestScore(updated.bestScore);
+      setBestGrid(updated.bestGrid);
+      setBestCombo(updated.bestCombo);
+
+      saveLeaderboardEntrySync({
+        drillId: 'concentration-grid',
+        drillName: 'Concentration Grid',
+        category: 'cognitive',
+        score: finalScore,
+        accuracy: accuracyVal,
+        bestCombo: maxStreakRef.current
+      });
+    }
 
     setEndSummary({
       progress,
@@ -955,9 +964,9 @@ export default function ConcentrationGridClient() {
         {phase === 'countdown' && !isChallenge && (
           <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/55">
             <span className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-400">Get Ready</span>
-            <div className="relative w-28 h-28 rounded-full border-[3px] border-cyan-500/20 flex items-center justify-center">
-              <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-cyan-400 border-r-cyan-400 animate-spin" style={{ animationDuration: '0.7s' }} />
-              <span key={countdownValue} className="fx-pop-in text-5xl font-display bg-gradient-to-b from-white to-cyan-300 bg-clip-text text-transparent">
+            <div className="relative w-28 h-28 rounded-full border-[3px] border-violet-500/20 flex items-center justify-center">
+              <div className="absolute -inset-[3px] rounded-full border-[3px] border-transparent border-t-violet-400 border-r-violet-400 animate-spin" style={{ animationDuration: '0.7s' }} />
+              <span key={countdownValue} className="fx-pop-in text-5xl font-display bg-gradient-to-b from-white to-violet-300 bg-clip-text text-transparent">
                 {countdownValue > 0 ? countdownValue : 'GO'}
               </span>
             </div>

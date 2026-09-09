@@ -24,14 +24,14 @@ export default function Error({ error, reset }) {
         <div className="flex gap-3 justify-center">
           <button
             onClick={reset}
-            className="px-6 py-2.5 bg-violet-600 text-white rounded-lg font-semibold hover:bg-violet-500 transition-colors focus:outline-none focus:ring-2 focus:ring-violet-400"
+            className="px-6 py-2.5 bg-violet-600 text-white rounded-xl font-semibold hover:bg-violet-500 transition-colors focus:outline-none focus:ring-2 focus:ring-violet-400"
             aria-label="Try loading the drill again"
           >
             Try Again
           </button>
           <Link
             href="/"
-            className="px-6 py-2.5 bg-white/10 text-white rounded-lg font-semibold hover:bg-white/15 transition-colors focus:outline-none focus:ring-2 focus:ring-white/30"
+            className="px-6 py-2.5 bg-white/10 text-white rounded-xl font-semibold hover:bg-white/15 transition-colors focus:outline-none focus:ring-2 focus:ring-white/30"
           >
             Go Home
           </Link>

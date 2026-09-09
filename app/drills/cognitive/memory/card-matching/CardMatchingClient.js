@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Volume2, VolumeX,
   Heart, Star, Circle, Square, Triangle,
-  Diamond, Target, Award, Hexagon, Grid, Activity, Clock
+  Diamond, Target, Award, Zap, Hexagon, Grid, Eye, Activity, Clock
 } from 'lucide-react';
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade } from '../../../../../lib/scoringEngine';
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
