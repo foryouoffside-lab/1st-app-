@@ -9,7 +9,7 @@ import Link from 'next/link';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '../contexts/AuthContext';
 import { useChallenge } from '../contexts/ChallengeContext';
-import { sendChallenge, sendGlobalChallenge, acceptChallenge, declineChallenge, withdrawChallenge, submitScore, resolveAbandonedMatch, forfeitMatch, getServerClockOffset, ensureMatchStart, markMatchPlaying, isInviteFresh, markInMatch, clearInMatch, BUSY_TTL_MS, DUEL_DRILLS, DUEL_DURATION_MS, tierForEiq, FORFEIT_GRACE_COUNT } from '../lib/challengeEngine';
+import { sendChallenge, sendGlobalChallenge, acceptChallenge, withdrawChallenge, submitScore, resolveAbandonedMatch, forfeitMatch, leaveBeforeStart, getServerClockOffset, ensureMatchStart, markMatchPlaying, isInviteFresh, markInMatch, clearInMatch, BUSY_TTL_MS, DUEL_DRILLS, DUEL_DURATION_MS, tierForEiq, FORFEIT_GRACE_COUNT } from '../lib/challengeEngine';
 import { ARENA_ENABLED } from '../lib/featureFlags';
 import { recordArenaMatch } from '../lib/arenaChallenge';
 import { useShareCard } from './ShareScoreCard';
@@ -87,6 +87,12 @@ const MATCH_COUNTDOWN_MS = 4000;
 const MATCH_START_FALLBACK_MS = 1500;
 const MATCH_PLAYING_FALLBACK_MS = 1500;
 
+// How often to re-attempt the shared start stamp while the countdown is up
+// and it still hasn't landed, and how long to keep trying before telling the
+// player the match isn't going to start. See effect 2c.
+const MATCH_START_RETRY_MS = 1200;
+const COUNTDOWN_STALL_MS = 12000;
+
 // How recent a player's presence heartbeat has to be for them to still count
 // as invitable in the duel drawer. Must match the Arena's own cutoff — see
 // PRESENCE_FRESH_MS in app/challenge/ChallengeArenaClient.js.
@@ -159,6 +165,9 @@ export default function DrillWrapper({
   // This device's clock offset from the server, used to read/write the shared
   // match start instant. 0 until measured, which is the pre-existing behaviour.
   const [clockOffset, setClockOffset] = useState(0);
+  // The shared start instant never arrived and we've stopped waiting for it —
+  // gives the frozen countdown a way out instead of a permanent "3". See 2c-ii.
+  const [countdownStalled, setCountdownStalled] = useState(false);
 
   // Invite Sender Drawer states (Solo Mode)
   const [showInviteDrawer, setShowInviteDrawer] = useState(false);
@@ -195,6 +204,7 @@ export default function DrillWrapper({
     setOpponentPhoto('');
     setChallengeStatus('lobby');
     setCountdownNum(3);
+    setCountdownStalled(false);
     setFinalScoreSubmitted(false);
     setSubmitFailed(false);
     setLobbySecondsLeft(LOBBY_WAIT_SECONDS);
@@ -441,11 +451,57 @@ export default function DrillWrapper({
     if (challengeData?.matchStartAt) return;
     if (!challengeId) return;
 
-    const t = setTimeout(() => {
+    // Retried on an interval, not attempted once.
+    //
+    // A single attempt per side was the last way a duel could hang outright
+    // with nothing on screen moving. ensureMatchStart is a transaction, and a
+    // transaction fails for ordinary, entirely recoverable reasons — the
+    // phone was between cells for a second, the app had just been foregrounded
+    // and the socket hadn't reconnected, two writers contended. When both
+    // sides' one attempt happened to fall in such a window, `matchStartAt` was
+    // never stamped, and every single thing downstream waits on that value:
+    // the visible 3-2-1 (which simply returns early without it) and the
+    // drill's own auto-start (useDuelMatchStart). The countdown overlay sat
+    // frozen on "3" with no timer bounding it and no way out but killing the
+    // app. That is the "timer gets stuck" report.
+    //
+    // Retrying costs nothing when it isn't needed: the transaction refuses to
+    // overwrite an existing matchStartAt, so every attempt after the first
+    // successful one is a read that changes nothing, and the interval is torn
+    // down the moment the value lands (it's in the dependency list).
+    let cancelled = false;
+    const attempt = () => {
+      if (cancelled) return;
       ensureMatchStart(challengeId, MATCH_COUNTDOWN_MS).catch(console.error);
-    }, isHost ? 0 : MATCH_START_FALLBACK_MS);
-    return () => clearTimeout(t);
+    };
+
+    // The host still goes first so the common path is one write, not two.
+    const first = setTimeout(attempt, isHost ? 0 : MATCH_START_FALLBACK_MS);
+    const retry = setInterval(attempt, MATCH_START_RETRY_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(first);
+      clearInterval(retry);
+    };
   }, [isChallengeMode, challengeStatus, challengeData?.matchStartAt, isHost, challengeId]);
+
+  // 2c-ii. Absolute bound on the countdown.
+  //
+  // The retry above fixes the recoverable cases. This covers the ones it
+  // cannot: the opponent's client is gone, the doc was deleted, rules
+  // rejected the write. Without a bound the player is simply stuck on a
+  // frozen "3" — a chrome-less screen with no back button (duels render no
+  // header on purpose), so the only exit is force-quitting the app.
+  //
+  // Generous on purpose: MATCH_COUNTDOWN_MS is 4s and the retries get several
+  // goes inside this window, so reaching it at all means the match genuinely
+  // is not going to start.
+  useEffect(() => {
+    if (!isChallengeMode || challengeStatus !== 'countdown') return;
+    if (challengeData?.matchStartAt) return;
+    const t = setTimeout(() => setCountdownStalled(true), COUNTDOWN_STALL_MS);
+    return () => clearTimeout(t);
+  }, [isChallengeMode, challengeStatus, challengeData?.matchStartAt]);
 
   // 2b. Bound the lobby wait. Counts down while we're sitting in the lobby and
   // stops at 0, which flips the lobby overlay to its "didn't join" state with a
@@ -475,8 +531,22 @@ export default function DrillWrapper({
   // who has already left, and cleanupStaleChallenges sweeps the doc shortly
   // after.
   const abandonLobby = async () => {
-    if (challengeId) {
-      try { await declineChallenge(challengeId); } catch (err) { console.error(err); }
+    if (challengeId && user?.uid) {
+      // leaveBeforeStart, not declineChallenge.
+      //
+      // declineChallenge writes status:'declined' UNCONDITIONALLY, and this
+      // button is reachable from two places that can both fire late: the
+      // 30-second lobby timeout, and the stalled-countdown escape. If the
+      // opponent's match-start write landed in that same moment, a blind
+      // decline would tear down a duel that had just gone live and was
+      // already being played. leaveBeforeStart is the same write behind a
+      // transaction that refuses to touch anything past 'accepted', so the
+      // worst case is a no-op instead of a cancelled live match.
+      //
+      // It also stamps `cancelledBy`, which is what lets the other player's
+      // screen say "left before the duel started" rather than the inaccurate
+      // "turned down this duel".
+      try { await leaveBeforeStart(challengeId, user.uid); } catch (err) { console.error(err); }
     }
     router.push('/challenge');
   };
@@ -728,6 +798,9 @@ export default function DrillWrapper({
     challengeId,
     uid: user?.uid,
     pendingRematchId: pendingRematch ? sentChallengeId : null,
+    // Which side of the start line this exit is on. 'lobby' and 'countdown'
+    // are both "agreed but not started" — see leaveBeforeStart.
+    challengeStatus,
   };
   useEffect(() => {
     return () => {
@@ -747,9 +820,22 @@ export default function DrillWrapper({
         withdrawChallenge(s.pendingRematchId).catch(console.error);
       }
 
-      if (!s.isChallengeMode || !s.duelUnderway) return;
+      if (!s.isChallengeMode || !s.challengeId || !s.uid) return;
+
+      // Leaving BEFORE the match starts (lobby or countdown) is not a
+      // forfeit — no EIQ is at stake yet — but it does have to be announced,
+      // or the opponent is left waiting on a timer for a duel that is already
+      // over. See leaveBeforeStart: this is what makes a cancellation reach
+      // the other player instantly instead of after 30s (lobby) or a full
+      // played-out 45s ghost match (countdown).
+      if (!s.duelUnderway) {
+        if (s.challengeStatus === 'lobby' || s.challengeStatus === 'countdown') {
+          leaveBeforeStart(s.challengeId, s.uid).catch(console.error);
+        }
+        return;
+      }
+
       if (s.finalScoreSubmitted) return;
-      if (!s.challengeId || !s.uid) return;
       forfeitMatch(s.challengeId, s.uid).catch(console.error);
     };
   }, []);
@@ -1028,6 +1114,15 @@ export default function DrillWrapper({
           {children}
         </DrillErrorBoundary>
 
+        {/* No per-drill mute button anymore — sound is controlled once, from
+            the "Sound Effects" toggle on the Progress page (updateSettings /
+            getSettings in lib/progressStore.js). Each drill now reads that
+            setting on launch instead of defaulting to on and offering its
+            own toggle, so this isn't a lost control, just a de-duplicated
+            one. `soundEnabled`/`onSoundToggle` stay as props: drills still
+            use `soundEnabled` locally to enable/mute their own audio
+            synthesizer. */}
+
         {/* ──────── MULTIPLAYER SCREEN OVERLAYS ──────── */}
         
         {/* LOBBY WAITING SCREEN */}
@@ -1143,14 +1238,33 @@ export default function DrillWrapper({
         {/* DECLINED SCREEN — the opponent turned this match down. Shown the
             instant the decline lands rather than making the player wait out the
             lobby timer and then be told the opponent "didn't join". */}
-        {isChallengeMode && challengeStatus === 'declined' && (
+        {isChallengeMode && challengeStatus === 'declined' && (() => {
+          // A decline and a walk-out before the start line both land as
+          // 'declined' (see leaveBeforeStart) but they are different events,
+          // and saying "turned down this duel" about someone who actually
+          // loaded in and then left is simply wrong. `cancelledBy` carries
+          // who it was, so the screen can name the real thing — and the
+          // player who did the leaving never gets a notice about their own
+          // exit.
+          const leftUid = challengeData?.cancelledBy;
+          const iLeft = leftUid && leftUid === user?.uid;
+          const oppFirst = opponentName?.split(' ')[0] || 'Your opponent';
+          return (
           <div className="absolute inset-0 bg-neutral-950/95 flex flex-col items-center justify-center p-6 z-40 text-center">
             <div className="w-16 h-16 bg-red-950/40 border border-red-500/25 rounded-2xl flex items-center justify-center mb-6">
               <X className="w-8 h-8 text-red-400" />
             </div>
-            <h2 className="font-display text-2xl text-white mb-2">Duel Declined</h2>
+            <h2 className="font-display text-2xl text-white mb-2">
+              {iLeft ? 'Duel Cancelled' : leftUid ? 'Opponent Left' : 'Duel Declined'}
+            </h2>
             <p className="text-xs text-neutral-400 max-w-xs leading-relaxed">
-              <span className="text-red-300 font-bold">{opponentName?.split(' ')[0] || 'Your opponent'}</span> turned down this duel. No EIQ was staked.
+              {iLeft ? (
+                <>You left before this duel started. No EIQ was staked.</>
+              ) : leftUid ? (
+                <><span className="text-red-300 font-bold">{oppFirst}</span> left before the duel started. No EIQ was staked.</>
+              ) : (
+                <><span className="text-red-300 font-bold">{oppFirst}</span> turned down this duel. No EIQ was staked.</>
+              )}
             </p>
             <button
               onClick={() => router.push('/challenge')}
@@ -1160,7 +1274,8 @@ export default function DrillWrapper({
               Back to Arena
             </button>
           </div>
-        )}
+          );
+        })()}
 
         {/* START COUNTDOWN SCREEN. Dismissed on `duelUnderway`, not on the
             'playing' status write: the drill under this overlay auto-starts
@@ -1187,7 +1302,27 @@ export default function DrillWrapper({
                 {countdownNum > 0 ? countdownNum : 'GO'}
               </span>
             </div>
-            <span className="text-[10px] text-neutral-500 font-bold uppercase tracking-wider">The duel is starting</span>
+            {countdownStalled ? (
+              <>
+                {/* The start instant never landed (see effect 2c-ii). A duel
+                    renders no header or back button, so without this the
+                    screen is a dead end and killing the app is the only way
+                    out. abandonLobby resolves the match for BOTH sides, so
+                    the opponent isn't left waiting either. */}
+                <p className="max-w-xs text-xs leading-relaxed text-neutral-400">
+                  This duel couldn&apos;t start — the connection didn&apos;t hold. No EIQ was staked.
+                </p>
+                <button
+                  onClick={abandonLobby}
+                  className="mt-1 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg transition duration-200 hover:from-purple-500 hover:to-indigo-500"
+                >
+                  <Home className="w-4 h-4" />
+                  Back to Arena
+                </button>
+              </>
+            ) : (
+              <span className="text-[10px] text-neutral-500 font-bold uppercase tracking-wider">The duel is starting</span>
+            )}
           </div>
         )}
 

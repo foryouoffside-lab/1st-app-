@@ -2,15 +2,12 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Volume2, VolumeX } from 'lucide-react';
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade, getComboMultiplier } from '../../../../../lib/scoringEngine';
-import {
-  rampToFloor, applyHit, applyMistake, scoringMaxLevel, scoringLives,
-} from '../../../../../lib/drillRules';
+import { scoringMaxLevel, scoringLives } from '../../../../../lib/drillRules';
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { lockPortrait, unlockOrientation } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
-import { getPlayerName, getPlayerLevel } from '../../../../../lib/progressStore';
+import { getPlayerName, getPlayerLevel, getSettings } from '../../../../../lib/progressStore';
 import { useShareCard } from '../../../../../components/ShareScoreCard';
 import DrillWrapper from '../../../../../components/DrillWrapper';
 import { useDuelMatchStart, duelSecondsRemaining } from '../../../../../lib/challengeEngine';
@@ -23,24 +20,25 @@ import DrillStartCard from '../../../../../components/drill/DrillStartCard';
 // ============================================================
 const TOTAL_TIME = 45.0;
 
-// How a solo run is won and lost — the clock as the only fail state, what a hit
-// earns, what a mistake costs — is defined once in lib/drillRules.js and shared
-// by every drill. Read that file for the model and the reasoning.
+// This drill opts OUT of lib/drillRules.js's shared earn-time economy — see the
+// note there on why that file is a global switchboard and single-drill
+// exceptions live locally instead (Shade Finder set the precedent).
 //
-// This drill is the one exception to "difficulty ramps forever". Its difficulty
-// IS the grid size, and grid size is capped by the PHONE SCREEN, not by taste —
-// an 11x11 grid of tappable numbers does not fit on a handset (see
+// Sustained visual search is what this drill measures, and an earn-time clock
+// quietly turns that into a speed test instead: a fast-but-sloppy player who
+// buys back time on every hit outscores a slow-but-accurate one, which is the
+// opposite of what "concentration" is supposed to reward. So the clock here is
+// a PLAIN fixed countdown — nothing refills it — and accuracy is gated instead
+// by a miss limit, same shape as Shade Finder's lives. Two ways to end a run:
+// the clock runs out, or MISS_LIMIT wrong taps land.
+//
+// This drill is also the one exception to "difficulty ramps forever". Its
+// difficulty IS the grid size, and grid size is capped by the PHONE SCREEN, not
+// by taste — an 11x11 grid of tappable numbers does not fit on a handset (see
 // getMaxGridCeiling: 7 on narrow devices, 8 otherwise). So the board stops
-// growing at level 5-6 and cannot be pushed further.
-//
-// The ramp therefore moves to the clock instead. Level counts BOARDS CLEARED,
-// not grid size, so it keeps climbing after the grid caps out; clearing a board
-// used to hand back a flat full 45s, which meant a player who could clear the
-// biggest grid refilled faster than the clock drained and would never finish.
-// Now the refill decays toward a floor, forever. The board stays humane, the
-// clock gets meaner, and the run always ends.
-const BOARD_REFILL_START = 45.0;
-const BOARD_REFILL_FLOOR = 6.0;
+// growing at level 5-6; clearing a board still levels you up (for scoring) even
+// after the grid itself stops changing.
+const MISS_LIMIT = 3;
 const STORAGE_KEY = 'skilldrills_concentration_grid_v1';
 
 // ============================================================
@@ -269,7 +267,10 @@ const audioSynth = typeof window !== 'undefined' ? new AudioSynthesizer() : null
 const getSavedData = () => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    // Merge over defaults — a bestScoreSync-rebuilt record after a reinstall can
+    // carry bestScore alone, and reading `.bestCombo`/`.bestGrid` off that
+    // rendered "undefined" on the start card.
+    if (raw) return { bestScore: 0, bestGrid: 3, bestCombo: 0, totalSessions: 0, ...JSON.parse(raw) };
 
     const legacyBest = localStorage.getItem('skilldrills_concentration_bestScore_v3');
     const bestScore = legacyBest ? parseInt(legacyBest, 10) : 0;
@@ -335,6 +336,7 @@ export default function ConcentrationGridClient() {
   // re-render of the whole drill on every level-up, mid-play, for nothing.
   const [timeRemaining, setTimeRemaining] = useState(totalTime);
   const [dangerLevel, setDangerLevel] = useState(0);
+  const [missCount, setMissCount] = useState(0);
 
   // === Best stats ===
   const [bestScore, setBestScore] = useState(0);
@@ -361,6 +363,7 @@ export default function ConcentrationGridClient() {
   const comboRef = useRef(0);
   const maxStreakRef = useRef(0);
   const gridSizeRef = useRef(3);
+  const missCountRef = useRef(0);
   // Boards cleared + 1. This is the real level — it keeps rising after the grid
   // stops growing, which is what lets the clock keep tightening.
   const levelRef = useRef(1);
@@ -380,6 +383,10 @@ export default function ConcentrationGridClient() {
   useEffect(() => {
     setIsClient(true);
     mountedRef.current = true;
+    // Sound is a single app-wide setting now (Progress page), not a
+    // per-drill toggle — read it once on launch instead of always
+    // defaulting to on.
+    getSettings().then((s) => { if (mountedRef.current) setSoundEnabled(s.soundEnabled !== false); });
     const data = getSavedData();
     setBestScore(data.bestScore);
     setBestGrid(data.bestGrid);
@@ -588,25 +595,12 @@ export default function ConcentrationGridClient() {
 
       let pointsToAdd = pointsObj.total;
       scoreRef.current += pointsToAdd;
-      // Buy back a slice of the clock. Solo only - in a duel the clock comes from
-      // duelDeadlineRef (the match's shared absolute end instant), which nothing
-      // local may move. No state is set here; the existing tick redraws the
-      // seconds when the displayed number changes, so this costs nothing per hit.
-      // Clamped to this drill's own 45s, not the shared SOLO_RULES.TIME_CAP of
-      // 60 that applyHit() enforces. The endurance economy is unchanged — hits
-      // and board clears still buy the clock back — but the bar a player is
-      // playing against is the one the start card promises ("45s per board"),
-      // instead of quietly banking up to a further 15 seconds on a strong run.
-      if (!isChallenge) {
-        timeLeftRef.current = Math.min(
-          totalTime,
-          applyHit({ timeRemaining: timeLeftRef.current, level: levelRef.current })
-        );
-      }
+      // No clock buy-back on a hit — see the file-top note. The clock here is a
+      // plain fixed countdown; a correct tap earns points, not seconds.
 
       const totalCells = gridSizeRef.current * gridSizeRef.current;
 
-      // GRID CLEAR COMPLETION -> RESET TIMER TO 45s
+      // GRID CLEAR COMPLETION
       if (foundNumbersSetRef.current.size === totalCells) {
         triggerFlash('cyan');
 
@@ -614,21 +608,9 @@ export default function ConcentrationGridClient() {
         const clearBonus = Math.round(20 * scaleFactor);
         scoreRef.current += clearBonus;
 
-        // Solo only: clearing a board refills the clock, so a good run keeps
-        // going. A duel must NOT do this — both duelists share one fixed 30s
-        // (ARENA_INTEGRATION.md rule 1), and refilling desynced the two
-        // clocks completely: whoever cleared boards kept extending their own
-        // match while the opponent's 30s expired and left them stuck on
-        // "Waiting for opponent to finish..." for the rest of it.
-        if (!isChallenge) {
-          const refill = rampToFloor(levelRef.current, BOARD_REFILL_START, BOARD_REFILL_FLOOR);
-          // Same 45s ceiling as the per-hit reward above.
-          timeLeftRef.current = Math.min(totalTime, timeLeftRef.current + refill);
-          runOverRef.current = false;
-          setTimeRemaining(Math.ceil(timeLeftRef.current));
-        }
-
         // Clearing a board is a level, whether or not the grid can still grow.
+        // No time refill here (solo or duel) — the fixed clock keeps counting
+        // down regardless of how many boards get cleared.
         levelRef.current += 1;
 
         const maxCeiling = getMaxGridCeiling();
@@ -659,12 +641,13 @@ export default function ConcentrationGridClient() {
         return;
       }
 
-      const after = applyMistake({ timeRemaining: timeLeftRef.current });
-      timeLeftRef.current = after.timeRemaining;
-      runOverRef.current = after.runOver;
-      setTimeRemaining(Math.ceil(timeLeftRef.current));
+      // Accuracy gate, not a time tax: a mistake here costs a miss, not a
+      // second off the clock — the clock is fixed and unaffected either way.
+      missCountRef.current += 1;
+      setMissCount(missCountRef.current);
 
-      if (runOverRef.current) {
+      if (missCountRef.current >= MISS_LIMIT) {
+        runOverRef.current = true;
         endGame();
       } else {
         syncGridDataToState();
@@ -759,6 +742,7 @@ export default function ConcentrationGridClient() {
       maxStreakRef.current = 0;
       gridSizeRef.current = startGridRef.current;
       levelRef.current = 1;
+      missCountRef.current = 0;
 
       currentNumberRef.current = 1;
       foundNumbersSetRef.current.clear();
@@ -769,6 +753,7 @@ export default function ConcentrationGridClient() {
       setScore(0);
       setTimeRemaining(totalTime);
       setDangerLevel(0);
+      setMissCount(0);
       setFlashes([]);
 
       generateNewGrid(startGridRef.current);
@@ -803,6 +788,7 @@ export default function ConcentrationGridClient() {
     setScore(0);
     setTimeRemaining(totalTime);
     setDangerLevel(0);
+    setMissCount(0);
     setFlashes([]);
     setEndSummary(null);
 
@@ -891,15 +877,8 @@ export default function ConcentrationGridClient() {
           <div key={f.id} className={`fx-flash ${f.variant === 'gold' ? 'fx-flash-gold' : f.variant === 'cyan' ? 'fx-flash-cyan' : 'fx-flash-red'}`} />
         ))}
 
-        {(phase === 'countdown' || phase === 'playing') && (
-          <button
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-            className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
-          >
-            {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
-          </button>
-        )}
+        {/* Mute toggle is rendered once by DrillWrapper (top-centre), no
+            longer per-drill at bottom-right over the grid. */}
 
         {/* ── START SCREEN ── */}
         {phase === 'start' && !isChallenge && (
@@ -909,7 +888,7 @@ export default function ConcentrationGridClient() {
             rules={[
               'Tap the numbers in order from 1',
               'The grid grows with each board',
-              'Hits add time on the clock, misses cost it',
+              '45s on the clock · 3 misses ends it',
             ]}
             bestStrip={bestScore > 0 ? [
               { value: bestScore.toLocaleString(), label: 'Best · PTS' },
@@ -924,8 +903,18 @@ export default function ConcentrationGridClient() {
         {/* ── PLAYING ── */}
         {(phase === 'playing' || phase === 'countdown') && (
           <>
-            <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
+            <div className="absolute top-5 left-5 z-40 flex flex-col gap-2 pointer-events-none select-none">
               <span className="text-2xl font-hud font-bold text-white leading-none tabular-nums">{score}</span>
+              {/* Miss pips — same brand-violet pattern as Shade Finder's life
+                  pips, just counting remaining misses instead of lives. */}
+              <div className="flex gap-1">
+                {Array.from({ length: MISS_LIMIT }).map((_, i) => (
+                  <span
+                    key={i}
+                    className={`h-1.5 w-3.5 rounded-full transition-colors ${i < (MISS_LIMIT - missCount) ? 'bg-violet-400' : 'bg-white/12'}`}
+                  />
+                ))}
+              </div>
             </div>
 
             {/* Timer overlay top-right */}

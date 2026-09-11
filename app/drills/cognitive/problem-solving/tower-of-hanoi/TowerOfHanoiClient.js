@@ -3,14 +3,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
-  Volume2, VolumeX, Move,
+  Move,
   RotateCcw
 } from 'lucide-react';
 import { calcEndBonuses, calcSessionXP, getGrade, getComboMultiplier } from '../../../../../lib/scoringEngine';
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { afterViewportSettled, lockLandscape, unlockOrientation, onOrientationSettled } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
-import { getPlayerName, getPlayerLevel } from '../../../../../lib/progressStore';
+import { getPlayerName, getPlayerLevel, getSettings } from '../../../../../lib/progressStore';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
 import { useShareCard } from '../../../../../components/ShareScoreCard';
@@ -23,11 +23,35 @@ import DrillStartCard from '../../../../../components/drill/DrillStartCard';
 // ============================================================
 // TUNING
 // ============================================================
-const TOTAL_TIME = 45;
+const TOTAL_TIME = 120;
 const OVERDRIVE_MS = 8000;
 const MAX_LEVEL = 6;
 const MIN_LEVEL = 1;
 const COUNTDOWN_TICK_MS = 700;
+
+// Solo gets a fixed 120s clock — longer than every other drill's 45-60s,
+// because Hanoi's pace is much slower than a tap or a flip. Par moves double
+// roughly every level (7, 15, 31, 63, 127, 255 for 3-8 disks), so 120s gives
+// real room to clear a couple of towers without being anywhere near enough to
+// grind the whole staircase — the same "achievable but not trivial" shape as
+// every other drill's clock, just tuned to this drill's cadence.
+//
+// Two things carry over from the no-clock version this replaced: an invalid
+// move costs ONLY the combo, never a second off the clock (planning "errors"
+// are corrections, not the same kind of mistake a reaction drill punishes),
+// and there's no time-bonus for solo runs (see resolveLevelComplete) — that
+// would reward raw speed, which cuts against the move-EFFICIENCY scoring
+// (par vs actual) this drill is actually built on. The clock bounds the
+// session; it doesn't grade it.
+//
+// No finish line at MAX_LEVEL either: once the staircase caps out, solving a
+// tower just deals a fresh one at the same size and keeps going, same as
+// every other endurance-style drill in the catalog — a puzzle that ends only
+// once solved gives a player no reason to ever replay it.
+//
+// Duel is UNCHANGED throughout: same fixed 45s shared window (`isChallenge`
+// reads its own 45 below, not TOTAL_TIME), same -5 mistake penalty, same
+// match-deadline logic.
 
 // Disk skins, ordered so a full stack reads as one continuous spectrum from the
 // smallest disk upward instead of an arbitrary rainbow.
@@ -355,6 +379,10 @@ export default function TowerOfHanoiClient() {
   useEffect(() => {
     setIsClient(true);
     mountedRef.current = true;
+    // Sound is a single app-wide setting now (Progress page), not a
+    // per-drill toggle — read it once on launch instead of always
+    // defaulting to on.
+    getSettings().then((s) => { if (mountedRef.current) setSoundEnabled(s.soundEnabled !== false); });
     try {
       const saved = getSavedData();
       setBestScore(saved.bestScore);
@@ -524,8 +552,11 @@ export default function TowerOfHanoiClient() {
 
     // Perfect solve bonus
     const perfectBonus = perfect ? 150 : 0;
-    // Time remaining bonus
-    const timeBonus = Math.round(timeRemainingRef.current * 4);
+    // No solo time-bonus even though solo now has a real clock again: paying
+    // out for banked seconds would reward raw speed, which cuts against the
+    // move-EFFICIENCY scoring (par vs actual) this drill is built on. Kept
+    // for duel, where it's an established, unrelated mechanic.
+    const timeBonus = isChallenge ? Math.round(timeRemainingRef.current * 4) : 0;
 
     // Combo (consecutive clears with no invalid move in between) was being
     // tracked and displayed but never actually paid out — wire it into the
@@ -550,16 +581,9 @@ export default function TowerOfHanoiClient() {
     audioSynth?.playHit();
     triggerFlash(perfect ? 'gold' : 'cyan');
 
-    // Solo only: solving a tower refills the clock, so a good run keeps
-    // going. A duel must NOT do this — both duelists share one fixed 30s
-    // (ARENA_INTEGRATION.md rule 1), and refilling desynced the two clocks
-    // completely: whoever kept solving extended their own match indefinitely
-    // while the opponent's 30s expired and left them stuck on "Waiting for
-    // opponent to finish..." for the rest of it.
-    if (!isChallenge) {
-      timeRemainingRef.current = totalTime;
-      setTimeRemaining(totalTime);
-    }
+    // No finish line at MAX_LEVEL — solving the biggest tower just deals a
+    // fresh one at the same size and the run keeps going until the clock
+    // ends it. See the file-top note.
 
     // Was 1100ms — a leftover from when this pause existed to let a gold/cyan
     // "level clear" flash play before the board reset. That flash was later
@@ -570,7 +594,7 @@ export default function TowerOfHanoiClient() {
     // hit sound/score-tick register without feeling delayed.
     if (advanceTimerRef.current) clearTimeout(advanceTimerRef.current);
     advanceTimerRef.current = setTimeout(() => { if (gameActiveRef.current) advanceLevel(); }, 350);
-  }, [advanceLevel, triggerFlash, totalTime, isChallenge]);
+  }, [advanceLevel, triggerFlash, isChallenge]);
 
   // Valid move: NO score awarded for individual moves to prevent back-and-forth farming
   const resolveValidMove = useCallback((clearedTowers) => {
@@ -672,26 +696,38 @@ export default function TowerOfHanoiClient() {
 
     gameTimerRef.current = setInterval(() => {
       if (!gameActiveRef.current) { clearInterval(gameTimerRef.current); return; }
-      // Duel: read the clock from the match's shared absolute end instant
-      // rather than accumulating it locally — see duelSecondsRemaining. A
-      // tick that lands late (busy frame, GC pause, the OS throttling a
-      // backgrounded webview) has to cost this player frames, not extra
-      // seconds of play their opponent never got.
-      timeRemainingRef.current = duelDeadlineRef.current
-        ? duelSecondsRemaining(duelDeadlineRef.current)
-        : timeRemainingRef.current - 0.2;
-      if (timeRemainingRef.current <= 0) {
-        timeRemainingRef.current = 0;
+      if (duelDeadlineRef.current) {
+        // Duel: unchanged — read the clock from the match's shared absolute
+        // end instant rather than accumulating it locally — see
+        // duelSecondsRemaining. A tick that lands late (busy frame, GC pause,
+        // the OS throttling a backgrounded webview) has to cost this player
+        // frames, not extra seconds of play their opponent never got.
+        timeRemainingRef.current = duelSecondsRemaining(duelDeadlineRef.current);
+        if (timeRemainingRef.current <= 0) {
+          timeRemainingRef.current = 0;
+          setTimeRemaining(0);
+          endGameRef.current?.('time');
+        } else {
+          // Only when the DISPLAYED whole second changes — same fix as
+          // DualTargetFlowClient/FingerSequencingClient/GridMemorizationClient.
+          // This re-rendered the whole towers/disks tree 5x/sec unconditionally.
+          setTimeRemaining((prev) => (
+            Math.ceil(prev) === Math.ceil(timeRemainingRef.current) ? prev : timeRemainingRef.current
+          ));
+        }
+        return;
+      }
+      // Solo: a plain fixed countdown — see the file-top note.
+      const nextTime = Math.max(0, timeRemainingRef.current - 0.2);
+      timeRemainingRef.current = nextTime;
+      if (nextTime <= 0) {
         setTimeRemaining(0);
         endGameRef.current?.('time');
-      } else {
-        // Only when the DISPLAYED whole second changes — same fix as
-        // DualTargetFlowClient/FingerSequencingClient/GridMemorizationClient.
-        // This re-rendered the whole towers/disks tree 5x/sec unconditionally.
-        setTimeRemaining((prev) => (
-          Math.ceil(prev) === Math.ceil(timeRemainingRef.current) ? prev : timeRemainingRef.current
-        ));
+        return;
       }
+      setTimeRemaining((prev) => (
+        Math.ceil(prev) === Math.ceil(nextTime) ? prev : nextTime
+      ));
     }, 200);
     scheduleHeartbeat();
   }, [scheduleHeartbeat]);
@@ -730,6 +766,7 @@ export default function TowerOfHanoiClient() {
     scoreRef.current = 0; comboRef.current = 0; bestComboRef.current = 0;
     levelRef.current = startLevel; bestLevelRunRef.current = startLevel; mistakesRef.current = 0; correctActionsRef.current = 0; totalActionsRef.current = 0;
     overdriveMeterRef.current = 0; overdriveActiveRef.current = false; overdriveCountRef.current = 0;
+    // Duel gets its 45s; solo gets the 120s from TOTAL_TIME (see totalTime above).
     timeRemainingRef.current = totalTime;
     sessionMovesRef.current = 0; parMovesSumRef.current = 0; movesSumRef.current = 0; perfectSolvesRef.current = 0;
 
@@ -908,15 +945,7 @@ export default function TowerOfHanoiClient() {
           <div key={f.id} className={`fx-flash ${f.variant === 'gold' ? 'fx-flash-gold' : f.variant === 'cyan' ? 'fx-flash-cyan' : 'fx-flash-red'}`} />
         ))}
 
-        {(phase === 'start' || phase === 'countdown' || phase === 'playing') && (
-          <button
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-            className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
-          >
-            {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
-          </button>
-        )}
+        {/* Mute toggle is rendered once by DrillWrapper (top-centre). */}
 
         {/* ── START SCREEN ── */}
         {phase === 'start' && !launching && !isChallenge && (
@@ -925,7 +954,7 @@ export default function TowerOfHanoiClient() {
             tagline="Move the stack · one disk at a time"
             rules={[
               'Tap a peg to lift, tap to place',
-              'One more disk every level',
+              '2 min · wrong moves cost combo only',
               'Never stack big on small',
             ]}
             bestStrip={bestScore > 0 ? [

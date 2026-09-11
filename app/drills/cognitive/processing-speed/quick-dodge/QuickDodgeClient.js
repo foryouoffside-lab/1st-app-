@@ -2,10 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
-import {
-  Volume2, VolumeX,
-  RotateCcw, ArrowLeft
-} from 'lucide-react';
+import { RotateCcw } from 'lucide-react';
 import { calcEndBonuses, calcSessionXP, getGrade, getComboMultiplier } from '../../../../../lib/scoringEngine';
 import {
   applyHit, applyMistake, scoringLives,
@@ -13,7 +10,7 @@ import {
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { afterViewportSettled, lockLandscape, unlockOrientation, onOrientationSettled } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
-import { getPlayerName, getPlayerLevel } from '../../../../../lib/progressStore';
+import { getPlayerName, getPlayerLevel, getSettings } from '../../../../../lib/progressStore';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
 import { useShareCard } from '../../../../../components/ShareScoreCard';
@@ -403,7 +400,8 @@ const STORAGE_KEY = 'skilldrills_quick_dodge_v3';
 const getSavedData = () => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    // Merge over defaults — a bestScoreSync-rebuilt record can be bestScore-only.
+    if (raw) return { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0, ...JSON.parse(raw) };
     const v2 = localStorage.getItem('skilldrills_quick_dodge_v2');
     if (v2) {
       const old = JSON.parse(v2);
@@ -564,6 +562,10 @@ export default function QuickDodgeClient() {
   useEffect(() => {
     setIsClient(true);
     mountedRef.current = true;
+    // Sound is a single app-wide setting now (Progress page), not a
+    // per-drill toggle — read it once on launch instead of always
+    // defaulting to on.
+    getSettings().then((s) => { if (mountedRef.current) setSoundEnabled(s.soundEnabled !== false); });
     const data = getSavedData();
     setBestScore(data.bestScore);
     setBestCombo(data.bestCombo);
@@ -2301,15 +2303,7 @@ setDangerLevel(0); setEndSummary(null);
           <div key={f.id} className={`fx-flash ${f.variant === 'gold' ? 'fx-flash-gold' : f.variant === 'cyan' ? 'fx-flash-cyan' : 'fx-flash-red'}`} />
         ))}
 
-        {(phase === 'countdown' || phase === 'playing') && (
-          <button
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-            className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
-          >
-            {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
-          </button>
-        )}
+        {/* Mute toggle is rendered once by DrillWrapper (top-centre). */}
 
         {phase === 'rotate-hint' && !isChallenge && (
           <div className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-black/95 text-center p-6">

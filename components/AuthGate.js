@@ -4,16 +4,24 @@
 // SkillDrills Pro — Real Google Sign-In Gate
 
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '../contexts/AuthContext';
 import { ShieldCheck, Loader2, User, Trophy, CalendarDays, TrendingUp } from 'lucide-react';
 import { DRILL_INDEX } from '../lib/drillIndex';
 import { DRILL_GROUPS } from '../lib/drillGroups';
+import { sanitizeUsername, validateUsername, USERNAME_MIN, USERNAME_MAX } from '../lib/playerIdentity';
 
 // Legal pages must stay readable without signing in — app store reviewers
 // and prospective users who haven't created an account yet both need to
 // reach these before the sign-in wall, not after it.
 const PUBLIC_PATHS = ['/privacy', '/terms', '/delete-account'];
+
+// See the splash notes in AuthGate below. Under the first, the loading screen
+// is never rendered at all; past the second, it is held steady rather than
+// blinking out.
+const SPLASH_DELAY_MS = 160;
+const SPLASH_MIN_MS = 450;
 
 // next.config.js sets trailingSlash: true, so these routes are exported as
 // /privacy/index.html and the WebView loads them at "/privacy/". Comparing
@@ -100,12 +108,14 @@ function Brand() {
 }
 
 function UsernameStep({ pendingSignup, completeSignup }) {
-  const [name, setName] = useState(pendingSignup.suggested || '');
+  const [name, setName] = useState(() => sanitizeUsername(pendingSignup.suggested || ''));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    const problem = validateUsername(name);
+    if (problem) { setError(problem); return; }
     setSubmitting(true);
     setError('');
     const result = await completeSignup(name);
@@ -140,14 +150,28 @@ function UsernameStep({ pendingSignup, completeSignup }) {
             <input
               type="text"
               required
-              minLength={3}
-              maxLength={20}
+              minLength={USERNAME_MIN}
+              maxLength={USERNAME_MAX}
               autoFocus
+              autoComplete="off"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              inputMode="text"
               value={name}
-              onChange={(e) => { setName(e.target.value); setError(''); }}
-              placeholder="Enter a unique name"
+              // Filtered on the way IN, not judged on the way out: a space or
+              // symbol simply never appears in the field, so there is no
+              // "that's invalid" moment to recover from. Paste goes through
+              // the same filter.
+              onChange={(e) => { setName(sanitizeUsername(e.target.value)); setError(''); }}
+              placeholder="3-10 letters or numbers"
               className="w-full bg-black/40 border border-white/10 rounded-xl py-3.5 pl-11 pr-4 text-[13px] text-white placeholder-slate-600 focus:outline-none focus:border-violet-500/50 transition-colors"
             />
+          </div>
+
+          <div className="flex items-center justify-between gap-2 px-1">
+            <p className="text-[10.5px] text-slate-500">Letters and numbers only, no spaces.</p>
+            <p className="text-[10.5px] tabular-nums text-slate-500">{name.length}/{USERNAME_MAX}</p>
           </div>
 
           {error && (
@@ -156,7 +180,7 @@ function UsernameStep({ pendingSignup, completeSignup }) {
 
           <button
             type="submit"
-            disabled={submitting || name.trim().length < 3}
+            disabled={submitting || validateUsername(name) !== null}
             className="w-full flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-500 text-white font-bold py-[13px] rounded-xl transition-colors duration-200 active:scale-[0.98] disabled:opacity-40 disabled:active:scale-100 text-[13px] tracking-wide"
           >
             {submitting ? (
@@ -187,18 +211,40 @@ export default function AuthGate({ children }) {
   const { user, loading, pendingSignup, completeSignup, signInWithGoogle } = useAuth();
   const [signingIn, setSigningIn] = useState(false);
 
-  // A returning session now resolves from cache almost instantly (see
-  // AuthContext), which was the right fix for the old multi-second wait —
-  // but it also meant this branded loading moment barely appeared at all.
-  // Hold it visible for a short, fixed minimum so it still reads as a
-  // deliberate loading screen rather than a flash, without reintroducing
-  // any real wait: this is presentation-only and never delays anything
-  // network-bound, which already takes longer than this on its own.
-  const [minHoldDone, setMinHoldDone] = useState(false);
+  // Anti-flicker for the branded loading screen, done the way that costs the
+  // fast path NOTHING.
+  //
+  // This used to be a flat 900ms minimum hold, added so the loading moment
+  // would still be seen now that a returning session resolves from cache
+  // almost instantly. The reasoning was sound but the trade was backwards: it
+  // bought a branded beat by making EVERY app open — including the common
+  // one, where auth is already cached and there is no wait at all — sit on a
+  // spinner for nine tenths of a second doing nothing. That is the single
+  // largest avoidable delay between tapping the icon and being able to play,
+  // and it is paid every single time.
+  //
+  // The standard two-threshold pattern gets the same result without the cost:
+  //
+  //   1. DON'T SHOW the loader for the first SPLASH_DELAY_MS. If auth
+  //      resolves inside that window — the cached case — the screen never
+  //      appears, so there is no flash to prevent and the app is simply
+  //      there.
+  //   2. ONCE SHOWN, keep it up for at least SPLASH_MIN_MS, so a resolve that
+  //      lands just after the threshold can't strobe it on and off.
+  //
+  // Fast path: 0ms added. Slow path: a steady, deliberate screen, same as
+  // before. Neither path ever waits on a timer that isn't doing real work.
+  const [splashVisible, setSplashVisible] = useState(false);
+  const [splashHeld, setSplashHeld] = useState(false);
   useEffect(() => {
-    const t = setTimeout(() => setMinHoldDone(true), 900);
-    return () => clearTimeout(t);
-  }, []);
+    if (!loading) return undefined;
+    const show = setTimeout(() => {
+      setSplashVisible(true);
+      setSplashHeld(true);
+      setTimeout(() => setSplashHeld(false), SPLASH_MIN_MS);
+    }, SPLASH_DELAY_MS);
+    return () => clearTimeout(show);
+  }, [loading]);
 
   if (isPublicPath(pathname)) {
     return children;
@@ -227,17 +273,28 @@ export default function AuthGate({ children }) {
     }
   };
 
-  if (loading || !minHoldDone) {
+  // While auth is still resolving, this gate must NEVER fall through — below
+  // it sits the signed-out front door, and showing that for a few frames to
+  // somebody who is in fact signed in is worse than any spinner. So the two
+  // in-progress cases both return here:
+  //   loading + past the delay  -> the branded screen
+  //   loading + inside it       -> the same empty ground, no spinner, so a
+  //                                cached resolve paints the app directly
+  //                                with nothing flashing in between.
+  if (loading || splashHeld) {
+    const showSpinner = splashVisible || splashHeld;
     return (
       <Frame>
-        <div className="flex flex-col items-center text-center">
-          <div className="relative flex items-center justify-center mb-6">
-            <div className="absolute w-16 h-16 rounded-full border-[3px] border-t-violet-500 border-r-transparent border-b-transparent border-l-transparent animate-spin" />
-            <LogoMark className="w-11 h-11 drop-shadow-[0_0_20px_rgba(139,92,246,.5)]" />
+        {showSpinner ? (
+          <div className="flex flex-col items-center text-center">
+            <div className="relative flex items-center justify-center mb-6">
+              <div className="absolute w-16 h-16 rounded-full border-[3px] border-t-violet-500 border-r-transparent border-b-transparent border-l-transparent animate-spin" />
+              <LogoMark className="w-11 h-11 drop-shadow-[0_0_20px_rgba(139,92,246,.5)]" />
+            </div>
+            <h2 className="text-[15px] font-bold tracking-[-0.01em] text-white">Loading SkillDrills</h2>
+            <p className="text-slate-500 text-[11px] mt-1.5">Connecting to secure servers...</p>
           </div>
-          <h2 className="text-[15px] font-bold tracking-[-0.01em] text-white">Loading SkillDrills</h2>
-          <p className="text-slate-500 text-[11px] mt-1.5">Connecting to secure servers...</p>
-        </div>
+        ) : null}
       </Frame>
     );
   }
@@ -336,7 +393,26 @@ export default function AuthGate({ children }) {
               )}
             </button>
 
-            <div className="flex items-start justify-center gap-2 text-[10px] text-slate-500 leading-normal mt-4">
+            {/* The consent line.
+                Google shows its OWN account picker and, the first time, its
+                own scope-consent screen when this button is pressed — that
+                part is Google's and the app neither draws nor controls it. A
+                second in-app "agree / disagree" dialog would be a duplicate
+                of it and just an extra tap.
+                What that does NOT cover, and what has to live here, is the
+                app's own terms: Play requires an app that collects personal
+                data to surface its privacy policy inside the app, and the
+                sign-in screen is the moment it is actually relevant. Both
+                routes are already in PUBLIC_PATHS, so they open without
+                signing in — which is also how a Play reviewer reaches them. */}
+            <p className="mt-4 text-center text-[10px] leading-relaxed text-slate-500">
+              By continuing you agree to our{' '}
+              <Link href="/terms" className="font-semibold text-slate-300 underline underline-offset-2 hover:text-white">Terms</Link>
+              {' '}and{' '}
+              <Link href="/privacy" className="font-semibold text-slate-300 underline underline-offset-2 hover:text-white">Privacy Policy</Link>.
+            </p>
+
+            <div className="flex items-start justify-center gap-2 text-[10px] text-slate-500 leading-normal mt-3">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-px" />
               <span>Real Google sign-in — we never see or store your password.</span>
             </div>

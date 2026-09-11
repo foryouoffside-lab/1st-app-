@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Volume2, VolumeX } from 'lucide-react';
 
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade } from '../../../../../lib/scoringEngine';
 import {
@@ -12,7 +11,7 @@ import {
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { lockPortrait, unlockOrientation } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
-import { getPlayerName, getPlayerLevel } from '../../../../../lib/progressStore';
+import { getPlayerName, getPlayerLevel, getSettings } from '../../../../../lib/progressStore';
 import { useShareCard } from '../../../../../components/ShareScoreCard';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
@@ -304,8 +303,10 @@ const audioSynth = typeof window !== 'undefined' ? new AudioSynthesizer() : null
 const getSavedData = () => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-    return { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0 };
+    const base = { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0 };
+    // Merge over defaults — a bestScoreSync-rebuilt record can be bestScore-only.
+    if (raw) return { ...base, ...JSON.parse(raw) };
+    return base;
   } catch {
     return { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0 };
   }
@@ -391,6 +392,10 @@ export default function ShadeFinderClient() {
     if (Capacitor.isNativePlatform()) StatusBar.setOverlaysWebView({ overlay: true }).catch(() => {});
     mountedRef.current = true;
     lockPortrait();
+    // Sound is a single app-wide setting now (Progress page), not a
+    // per-drill toggle — read it once on launch instead of always
+    // defaulting to on.
+    getSettings().then((s) => { if (mountedRef.current) setSoundEnabled(s.soundEnabled !== false); });
     try {
       const saved = getSavedData();
       setBestScore(saved.bestScore);
@@ -802,15 +807,7 @@ export default function ShadeFinderClient() {
           <div key={f.id} className={`fx-flash ${f.variant === 'cyan' ? 'fx-flash-cyan' : 'fx-flash-red'}`} />
         ))}
 
-        {(phase === 'countdown' || phase === 'playing') && (
-          <button
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-            className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
-          >
-            {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
-          </button>
-        )}
+        {/* Mute toggle is rendered once by DrillWrapper (top-centre). */}
 
         {/* ── START SCREEN ── */}
         {phase === 'start' && !isChallenge && (

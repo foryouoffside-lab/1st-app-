@@ -2,16 +2,13 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Volume2, VolumeX } from 'lucide-react';
 
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade, getComboMultiplier } from '../../../../../lib/scoringEngine';
-import {
-  applyHit, applyMistake, scoringMaxLevel, scoringLives,
-} from '../../../../../lib/drillRules';
+import { scoringMaxLevel, scoringLives } from '../../../../../lib/drillRules';
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { lockPortrait, unlockOrientation } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
-import { getPlayerName, getPlayerLevel } from '../../../../../lib/progressStore';
+import { getPlayerName, getPlayerLevel, getSettings } from '../../../../../lib/progressStore';
 import { useShareCard } from '../../../../../components/ShareScoreCard';
 import DrillWrapper from '../../../../../components/DrillWrapper';
 import { APP_SHARE_URL } from '../../../../../lib/shareLinks';
@@ -23,31 +20,24 @@ import DrillStartCard from '../../../../../components/drill/DrillStartCard';
 // ============================================================
 const TOTAL_TIME = 45.0;
 
-// Seconds a correct action buys, overriding the shared TIME_PER_HIT.
+// This drill opts OUT of lib/drillRules.js's shared earn-time economy — see
+// the note there on why that file is a global switchboard and single-drill
+// exceptions live locally instead (Shade Finder set the precedent).
 //
-// The shared 1.0s is calibrated for a STREAM drill — several targets alive at
-// once, two to three actions a second. This drill is one action per round:
-// one Stroop answer per round (~0.75s).
-// Against a clock that drains 1s per second that cadence could not refill at
-// any accuracy, so the run was a flat TOTAL_TIME every time and skill could
-// not extend it — the endurance model silently doing nothing.
-// 1.2 makes 80% accuracy the break-even bar. See rewardForActionRate() in
-// lib/drillRules.js, and recompute this if the round window is retuned.
-const TIME_PER_HIT = 1.2;
-
-
-// How a solo run is won and lost — the clock as the only fail state, what a hit
-// earns, what a mistake costs — is defined once in lib/drillRules.js and shared
-// by every drill. Read that file for the model and the reasoning.
+// Sustained inhibition under distraction is what this drill measures, and an
+// earn-time clock quietly turns that into a speed test instead: buy back
+// enough seconds per correct answer and a fast-but-careless player can
+// outlast a careful one. So the clock is a PLAIN fixed countdown, and
+// accuracy is gated by a miss limit instead — a wrong tap OR a timeout both
+// count against it, same as a life.
 //
 // This drill needs no level ramp of its own: its difficulty is an ADAPTIVE
 // STAIRCASE (updateStaircase) that tightens the response deadline when you get
 // answers right and loosens it when you don't, already floored at
 // DEADLINE_FLOOR_MS. That converges on each player's real limit, which is what
-// the shared ramp is trying to do anyway — so it stays as it is. What a
-// staircase can't do is END a run: by design it settles at a deadline you CAN
-// sustain. The decaying time-per-hit payout in drillRules does that instead,
-// keyed off the staircase's own speed level.
+// a difficulty ramp is trying to do anyway — so it stays as it is. The miss
+// limit is what ends a run now; the staircase never has to.
+const MISS_LIMIT = 3;
 const STROOP_COLORS = [
   { name: 'Red', hex: '#ef4444' },
   { name: 'Blue', hex: '#3b82f6' },
@@ -324,8 +314,12 @@ const STORAGE_KEY = 'skilldrills_distraction_fighter_v8';
 const getSavedData = () => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-    return { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0 };
+    const base = { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0 };
+    // Merge over the defaults, not `return JSON.parse(raw)` raw: a record
+    // rebuilt by lib/bestScoreSync.js after a reinstall can carry bestScore
+    // alone, and reading `.bestCombo` off that rendered "undefined×".
+    if (raw) return { ...base, ...JSON.parse(raw) };
+    return base;
   } catch {
     return { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0 };
   }
@@ -366,6 +360,7 @@ export default function DistractionFighterClient() {
   const [score, setScore] = useState(0);
   const [timeRemaining, setTimeRemaining] = useState(totalTime);
   const [dangerLevel, setDangerLevel] = useState(0);
+  const [missCount, setMissCount] = useState(0);
 
   // === Best stats ===
   const [bestScore, setBestScore] = useState(0);
@@ -393,6 +388,7 @@ export default function DistractionFighterClient() {
   const comboRef = useRef(0);
   const maxStreakRef = useRef(0);
   const totalFramesRef = useRef(0);
+  const missCountRef = useRef(0);
 
   const deadlineRef = useRef(1500);
   const startDeadlineRef = useRef(1500);
@@ -414,6 +410,10 @@ export default function DistractionFighterClient() {
     setIsClient(true);
     mountedRef.current = true;
     lockPortrait();
+    // Sound is a single app-wide setting now (Progress page), not a
+    // per-drill toggle — read it once on launch instead of always
+    // defaulting to on.
+    getSettings().then((s) => { if (mountedRef.current) setSoundEnabled(s.soundEnabled !== false); });
     const data = getSavedData();
     setBestScore(data.bestScore);
     setBestCombo(data.bestCombo);
@@ -611,13 +611,8 @@ export default function DistractionFighterClient() {
     }
 
     scoreRef.current += pointsObj.total;
-    // Buy back a slice of the clock. Solo only - in a duel the clock comes from
-    // duelDeadlineRef (the match's shared absolute end instant), which nothing
-    // local may move. No state is set here; the existing tick redraws the
-    // seconds when the displayed number changes, so this costs nothing per hit.
-    if (!isChallenge) {
-      timeLeftRef.current = applyHit({ timeRemaining: timeLeftRef.current, level: speedLevelRef.current, reward: TIME_PER_HIT });
-    }
+    // No clock buy-back on a hit — see the file-top note. The clock is a plain
+    // fixed countdown; a correct answer earns points, not seconds.
     setScore(scoreRef.current);
 
     updateStaircase(true);
@@ -630,11 +625,14 @@ export default function DistractionFighterClient() {
   const resolveWrong = useCallback((kind) => {
     audioSynth?.playPenalty();
     comboRef.current = 0;
-    
-    const after = applyMistake({ timeRemaining: timeLeftRef.current });
-    timeLeftRef.current = after.timeRemaining;
-    runOverRef.current = after.runOver;
-    setTimeRemaining(Math.ceil(timeLeftRef.current));
+
+    // Accuracy gate, not a time tax: a wrong tap OR a timeout costs a miss,
+    // not a second off the clock — the clock is fixed and unaffected either
+    // way. Both kinds count the same; distraction that beats the deadline is
+    // still a lapse of inhibition.
+    missCountRef.current += 1;
+    setMissCount(missCountRef.current);
+    runOverRef.current = missCountRef.current >= MISS_LIMIT;
 
     if (kind === 'timeout') {
       timeoutCountRef.current += 1;
@@ -645,7 +643,7 @@ export default function DistractionFighterClient() {
     updateStaircase(false);
     triggerFlash('red');
 
-    if (runOverRef.current || timeLeftRef.current <= 0) {
+    if (runOverRef.current) {
       endGame();
     } else {
       setTimeout(() => {
@@ -770,6 +768,8 @@ export default function DistractionFighterClient() {
       comboRef.current = 0;
       maxStreakRef.current = 0;
       totalFramesRef.current = 0;
+      missCountRef.current = 0;
+      runOverRef.current = false;
       hudTimeRef.current = -1;
       hudScoreRef.current = -1;
       deadlineRef.current = startDeadlineRef.current;
@@ -783,6 +783,7 @@ export default function DistractionFighterClient() {
       setTimeRemaining(totalTime);
 
       setDangerLevel(0);
+      setMissCount(0);
       setFlashes([]);
 
       spawnTrial();
@@ -813,6 +814,7 @@ export default function DistractionFighterClient() {
     setScore(0);
     setTimeRemaining(totalTime);
     setDangerLevel(0);
+    setMissCount(0);
     setFlashes([]);
     setEndSummary(null);
 
@@ -876,15 +878,9 @@ export default function DistractionFighterClient() {
           <div key={f.id} className={`fx-flash ${f.variant === 'gold' ? 'fx-flash-gold' : f.variant === 'cyan' ? 'fx-flash-cyan' : 'fx-flash-red'}`} />
         ))}
 
-        {(phase === 'countdown' || phase === 'playing') && (
-          <button
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-            className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
-          >
-            {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
-          </button>
-        )}
+        {/* Mute toggle is rendered once by DrillWrapper (top-centre) — it used
+            to sit here at bottom-right, directly over the fourth colour
+            button. */}
 
         {/* ── START SCREEN ── */}
         {phase === 'start' && !isChallenge && (
@@ -894,7 +890,7 @@ export default function DistractionFighterClient() {
             rules={[
               'Tap the INK colour, not the word',
               'Same rule every run · no flips',
-              'Hits add time, misses cost it',
+              '45s on the clock · 3 misses ends it',
             ]}
             bestStrip={bestScore > 0 ? [
               { value: bestScore.toLocaleString(), label: 'Best · PTS' },
@@ -909,8 +905,18 @@ export default function DistractionFighterClient() {
         {/* ── PLAYING ── */}
         {(phase === 'playing' || phase === 'countdown') && (
           <>
-            <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
+            <div className="absolute top-5 left-5 z-40 flex flex-col gap-2 pointer-events-none select-none">
               <span className="text-2xl font-hud font-bold text-white leading-none tabular-nums">{score}</span>
+              {/* Miss pips — same brand-violet pattern as Shade Finder's life
+                  pips, just counting remaining misses instead of lives. */}
+              <div className="flex gap-1">
+                {Array.from({ length: MISS_LIMIT }).map((_, i) => (
+                  <span
+                    key={i}
+                    className={`h-1.5 w-3.5 rounded-full transition-colors ${i < (MISS_LIMIT - missCount) ? 'bg-violet-400' : 'bg-white/12'}`}
+                  />
+                ))}
+              </div>
             </div>
 
             {/* Timer overlay at top-right */}

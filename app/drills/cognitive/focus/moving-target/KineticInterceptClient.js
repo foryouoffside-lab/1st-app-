@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
-  Volume2, VolumeX, RotateCcw
+  RotateCcw
 } from 'lucide-react';
 
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade } from '../../../../../lib/scoringEngine';
@@ -14,7 +14,7 @@ import {
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { afterViewportSettled, lockLandscape, unlockOrientation, onOrientationSettled } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
-import { getPlayerName, getPlayerLevel } from '../../../../../lib/progressStore';
+import { getPlayerName, getPlayerLevel, getSettings } from '../../../../../lib/progressStore';
 import { useShareCard } from '../../../../../components/ShareScoreCard';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
@@ -280,8 +280,10 @@ const audioSynth = typeof window !== 'undefined' ? new AudioSynthesizer() : null
 const getSavedData = () => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-    return { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0 };
+    const base = { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0 };
+    // Merge over defaults — a bestScoreSync-rebuilt record can be bestScore-only.
+    if (raw) return { ...base, ...JSON.parse(raw) };
+    return base;
   } catch {
     return { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0 };
   }
@@ -335,6 +337,15 @@ export default function KineticInterceptClient() {
   // === Feedback & Summary ===
   const [endSummary, setEndSummary] = useState(null);
   const [flashes, setFlashes] = useState([]);
+  // "Atom" hit effect (ring + sparks) at the target's center on a correct
+  // tap — the same look Quick Dodge gets from spawnShockwave + spawnBurst on
+  // its canvas (see QuickDodgeClient.js), reproduced with .fx-hit-ring /
+  // .fx-hit-spark instead of a canvas draw. Quick Dodge can afford a canvas
+  // for this because it already runs a per-frame loop for its moving hazards;
+  // this drill deliberately runs none (see "why there is no render loop"
+  // below) as a real heat/stutter fix, so the effect has to be pure
+  // compositor animation instead. See spawnBurst().
+  const [bursts, setBursts] = useState([]);
 
   // === Engine Refs ===
   const containerRef = useRef(null);
@@ -376,11 +387,16 @@ export default function KineticInterceptClient() {
   const canvasSizeRef = useRef({ width: 0, height: 0 });
   const lastTapTimeRef = useRef(0);
   const flashIdRef = useRef(0);
+  const burstIdRef = useRef(0);
   const phaseRef = useRef('start');
 
   useEffect(() => {
     setIsClient(true);
     mountedRef.current = true;
+    // Sound is a single app-wide setting now (Progress page), not a
+    // per-drill toggle — read it once on launch instead of always
+    // defaulting to on.
+    getSettings().then((s) => { if (mountedRef.current) setSoundEnabled(s.soundEnabled !== false); });
     const saved = getSavedData();
     setBestScore(saved.bestScore);
     setBestCombo(saved.bestCombo);
@@ -409,6 +425,31 @@ export default function KineticInterceptClient() {
     const id = `${Date.now()}-${flashIdRef.current}`;
     setFlashes((f) => [...f, { id, variant }]);
     setTimeout(() => { if (mountedRef.current) setFlashes((f) => f.filter((x) => x.id !== id)); }, 150);
+  }, []);
+
+  // Fired once per correct hit, at the target's own last on-screen position.
+  // Ring diameter and spark travel distance are both derived from the
+  // target's own radius (24-46px, see spawnTarget) rather than a fixed size,
+  // so the effect reads the same relative to the target across the whole
+  // difficulty range instead of looking oversized on a small late-game target
+  // or undersized on a big early one.
+  //
+  // Each spark's landing offset (dx, dy) is rolled ONCE here, not per frame —
+  // it is handed to the div as a --tx/--ty custom property and the CSS
+  // animation (.fx-hit-spark) interpolates translate(0,0) -> translate(--tx,
+  // --ty) on its own. That is what keeps a 10-spark burst at zero JS cost
+  // after this line runs, matching Quick Dodge's spawnBurst in spirit
+  // (random angle + distance per particle) without its per-frame canvas loop.
+  const spawnBurst = useCallback((x, y, r) => {
+    burstIdRef.current += 1;
+    const id = burstIdRef.current;
+    const sparks = Array.from({ length: 10 }, () => {
+      const angle = Math.random() * Math.PI * 2;
+      const dist = r * (1.1 + Math.random() * 1.3);
+      return { dx: Math.cos(angle) * dist, dy: Math.sin(angle) * dist };
+    });
+    setBursts((b) => [...b, { id, x, y, r, sparks }]);
+    setTimeout(() => { if (mountedRef.current) setBursts((b) => b.filter((p) => p.id !== id)); }, 480);
   }, []);
 
   // Difficulty is continuous, not stepped. It used to be floor(score/50)+1, so
@@ -597,7 +638,7 @@ export default function KineticInterceptClient() {
     }
   }, [triggerFlash, isChallenge, spawnTarget, clearTarget]);
 
-  const resolveCorrect = useCallback(() => {
+  const resolveCorrect = useCallback((x, y, r) => {
     if (!gameActiveRef.current) return;
 
     audioSynth?.playHit();
@@ -632,11 +673,12 @@ export default function KineticInterceptClient() {
     }
 
     triggerFlash('cyan');
+    spawnBurst(x, y, r);
     updateDifficulty();
 
     clearTarget();
     setTimeout(() => { if (gameActiveRef.current) spawnTarget(); }, 150);
-  }, [triggerFlash, updateDifficulty, spawnTarget, totalTime, clearTarget, isChallenge]);
+  }, [triggerFlash, spawnBurst, updateDifficulty, spawnTarget, totalTime, clearTarget, isChallenge]);
 
   const endGame = useCallback(async (reason) => {
     if (!gameActiveRef.current) return;
@@ -749,7 +791,7 @@ export default function KineticInterceptClient() {
       const ty = tr.y0 + tr.sy * elapsed;
       const dist = Math.hypot(x - tx, y - ty);
       if (dist <= tr.r + 20) {
-        resolveCorrect();
+        resolveCorrect(tx, ty, tr.r);
         return;
       }
     }
@@ -883,7 +925,7 @@ export default function KineticInterceptClient() {
 
     setScore(0); setTimeRemaining(totalTime);
     setDangerLevel(0);
-    setEndSummary(null); setFlashes([]);
+    setEndSummary(null); setFlashes([]); setBursts([]);
     setCountdownValue(3);
 
     if (!isChallenge && !document.fullscreenElement && containerRef.current) {
@@ -1018,6 +1060,50 @@ export default function KineticInterceptClient() {
           <div key={f.id} className={`fx-flash ${f.variant === 'cyan' ? 'fx-flash-cyan' : 'fx-flash-red'}`} />
         ))}
 
+        {/* Atom hit effect — red ring + sparks, matching the target's own
+            #ef4444. Quick Dodge's version of this (spawnShockwave + spawnBurst
+            in QuickDodgeClient.js) draws it fresh on canvas every frame; see
+            spawnBurst above for why this one is two CSS animations instead. */}
+        {bursts.map((b) => {
+          const ringSize = b.r * 4.2;
+          return (
+            <React.Fragment key={b.id}>
+              <div
+                className="fx-hit-ring"
+                style={{
+                  left: b.x,
+                  top: b.y,
+                  width: ringSize,
+                  height: ringSize,
+                  marginLeft: -ringSize / 2,
+                  marginTop: -ringSize / 2,
+                  borderWidth: Math.max(2, b.r * 0.1),
+                  borderColor: '#ef4444',
+                  zIndex: 30,
+                }}
+              />
+              {b.sparks.map((s, i) => (
+                <div
+                  key={i}
+                  className="fx-hit-spark"
+                  style={{
+                    left: b.x,
+                    top: b.y,
+                    width: 6,
+                    height: 6,
+                    marginLeft: -3,
+                    marginTop: -3,
+                    background: '#ef4444',
+                    '--tx': `${s.dx}px`,
+                    '--ty': `${s.dy}px`,
+                    zIndex: 30,
+                  }}
+                />
+              ))}
+            </React.Fragment>
+          );
+        })}
+
         {phase === 'rotate-hint' && !isChallenge && (
           <div className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-black/95 text-center p-6">
             <div className="animate-bounce mb-5 text-red-500"><RotateCcw className="w-12 h-12 mx-auto" /></div>
@@ -1026,15 +1112,7 @@ export default function KineticInterceptClient() {
           </div>
         )}
 
-        {(phase === 'countdown' || phase === 'playing') && (
-          <button
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-            className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
-          >
-            {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
-          </button>
-        )}
+        {/* Mute toggle is rendered once by DrillWrapper (top-centre). */}
 
         {/* ── START SCREEN ── */}
         {phase === 'start' && !launching && !isChallenge && (

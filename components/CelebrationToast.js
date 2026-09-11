@@ -15,7 +15,7 @@
 // same reward system rather than a new one-off style.
 
 import { useEffect, useState } from 'react';
-import { Crown, Zap, Sparkles, Flame, Swords } from 'lucide-react';
+import { Crown, Zap, Sparkles, Flame, Swords, Award } from 'lucide-react';
 
 const AUTO_DISMISS_MS = 4500;
 
@@ -36,6 +36,15 @@ function buildLines(detail) {
     lines.push({ icon: Swords, color: 'text-violet-300', text: "Today's Arena Challenges done!" });
   } else if (detail.arenaChallengeCompleted) {
     lines.push({ icon: Swords, color: 'text-violet-300', text: 'Arena Challenge complete!' });
+  }
+  if (detail.weeklyGoalCompleted) {
+    lines.push({
+      icon: Award,
+      color: 'text-amber-400',
+      text: detail.weeklyBadgeName
+        ? `Weekly goal done — “${detail.weeklyBadgeName}” unlocked!`
+        : 'Weekly goal complete — 5 sessions!',
+    });
   }
   return lines;
 }

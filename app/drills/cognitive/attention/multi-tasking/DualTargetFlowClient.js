@@ -2,10 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
-import {
-  Volume2, VolumeX,
-  RotateCcw, Target, Timer
-} from 'lucide-react';
+import { RotateCcw } from 'lucide-react';
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade } from '../../../../../lib/scoringEngine';
 import {
   levelForHits, rampMs, rampUp, applyHit, applyMistake, startLevel,
@@ -14,7 +11,7 @@ import {
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { afterViewportSettled, lockLandscape, unlockOrientation, onOrientationSettled } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
-import { getPlayerName, getPlayerLevel } from '../../../../../lib/progressStore';
+import { getPlayerName, getPlayerLevel, getSettings } from '../../../../../lib/progressStore';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
 import { useShareCard } from '../../../../../components/ShareScoreCard';
@@ -47,18 +44,23 @@ const SPAWN_FLOOR_MS = 330;
 const COUNTDOWN_TICK_MS = 700;
 // The one thing in this drill that cannot arrive by halves: the right lane's
 // glyph becoming a DIFFERENT glyph from the left. You either hold one shape in
-// mind or you hold two — there is no 1.5. It used to flip on at level 3 with
-// every other dial continuing to climb underneath it, which is the "it suddenly
-// got much harder" moment players hit at ~80 points.
+// mind or you hold two — there is no 1.5. And holding two IS this drill — a run
+// where both lanes stay the same glyph is a reaction test, not a multi-tasking
+// one, so this has to actually happen inside a normal run.
 //
-// It still fires at level 3 (predictable, and early enough to be the drill's
-// actual skill), but the moment it does, speed and spawn rate hand back
-// DIVERGE_RELIEF_LEVELS rungs and climb back over the next few levels — the new
-// rule arrives while the board is briefly calmer. See stepRelief in drillRules.
-// 10, not 3. This is the drill's one discrete rule and its real skill, so it
-// wants to land where the player is settled but the run is still young — not in
-// the opening seconds, which is where level 3 falls on a 40-level runway.
-const DIVERGE_LEVEL = 10;
+// History: it flipped on at level 3 with every other dial still climbing
+// underneath it — a real "it suddenly got much harder" spike. The fix for that
+// was DIVERGE_RELIEF_LEVELS (speed + spawn rate hand back a few rungs at the
+// diverge moment and climb back over the next few levels, so the new rule
+// lands while the board is briefly calmer — see stepRelief in drillRules).
+//
+// But then it was pushed to level 10 to be safe, and level 10 is 54 correct
+// hits — past where most 45-second runs ever get. So the split almost never
+// fired and the drill quietly stopped being itself. Back to level 3 (12 hits,
+// ~15s in): late enough that the player has the single-glyph rhythm, early
+// enough that the rest of the run is the actual skill, and the relief above
+// cushions the step.
+const DIVERGE_LEVEL = 3;
 const DIVERGE_RELIEF_LEVELS = 2.5;
 const SHAPES = ['▲', '●', '■', '★', '◆', '⬣', '❖', '⏣'];
 
@@ -335,6 +337,11 @@ export default function MultiTaskingClient() {
   const [rightTarget, setRightTarget] = useState('▲');
 
   const [flashes, setFlashes] = useState([]);
+  // Correct hits ('cyan') get the "atom" ring+spark treatment below (see
+  // spawnBurst) — the same look Quick Dodge gets from its own canvas-drawn
+  // spawnShockwave + spawnBurst. Wrong hits ('red') keep the plain .fx-pop
+  // they already had: a mistake already gets triggerFlash('red') full-screen,
+  // so it doesn't need a second, louder effect layered under it.
   const [bursts, setBursts] = useState([]);
   const [endSummary, setEndSummary] = useState(null);
 
@@ -404,6 +411,10 @@ export default function MultiTaskingClient() {
   useEffect(() => {
     setIsClient(true);
     mountedRef.current = true;
+    // Sound is a single app-wide setting now (Progress page), not a
+    // per-drill toggle — read it once on launch instead of always
+    // defaulting to on.
+    getSettings().then((s) => { if (mountedRef.current) setSoundEnabled(s.soundEnabled !== false); });
     try {
       const saved = getSavedData();
       setBestScore(saved.bestScore);
@@ -450,7 +461,21 @@ export default function MultiTaskingClient() {
 
   const spawnBurst = useCallback((x, y, color) => {
     const id = Date.now() + Math.random();
-    setBursts((b) => [...b, { id, x, y, color }]);
+    // Sparks are only rolled for a correct ('cyan') hit — see the render
+    // below. Each spark's landing offset is resolved ONCE here, not per
+    // frame: it rides on the div as a --tx/--ty custom property and the
+    // .fx-hit-spark keyframe animates translate(0,0) -> translate(--tx,
+    // --ty) on the compositor. This drill runs no render loop of its own
+    // (see the note on shapesRef above), so that is what keeps a 10-spark
+    // burst at zero JS cost after this line runs.
+    const sparks = color === 'cyan'
+      ? Array.from({ length: 10 }, () => {
+          const angle = Math.random() * Math.PI * 2;
+          const dist = 22 + Math.random() * 26;
+          return { dx: Math.cos(angle) * dist, dy: Math.sin(angle) * dist };
+        })
+      : null;
+    setBursts((b) => [...b, { id, x, y, color, sparks }]);
     setTimeout(() => { if (mountedRef.current) setBursts((b) => b.filter((p) => p.id !== id)); }, 520);
   }, []);
 
@@ -1280,7 +1305,7 @@ export default function MultiTaskingClient() {
             tagline="Two sides, two rules, one clock"
             rules={[
               'Tap shapes matching your side',
-              'Targets scramble every 25s',
+              'Sides match at first, then split',
               'Hits add time, misses cost it',
             ]}
             bestStrip={bestScore > 0 ? [
@@ -1352,19 +1377,32 @@ export default function MultiTaskingClient() {
             >
               <div className="absolute top-0 left-1/2 w-px h-full bg-gradient-to-b from-transparent via-violet-500/30 to-transparent z-20 pointer-events-none" />
 
-              {/* sound toggle */}
-              <button
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-                className="absolute bottom-4 right-4 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
-              >
-                {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
-              </button>
+              {/* Mute toggle is rendered once by DrillWrapper (top-centre). */}
 
-              {/* particles bursts */}
-              {bursts.map((b) => (
-                <div key={b.id} className="fx-pop" style={{ left: `${b.x}%`, top: `${b.y}%`, width: 40, height: 40, marginLeft: -20, marginTop: -20, background: b.color === 'red' ? 'rgba(239,68,68,.5)' : 'rgba(34,211,238,.5)', zIndex: 30 }} />
-              ))}
+              {/* particle bursts — plain red pop for a mistake, atom ring+sparks
+                  for a correct hit (see spawnBurst) */}
+              {bursts.flatMap((b) => {
+                if (!b.sparks) {
+                  return [
+                    <div key={b.id} className="fx-pop" style={{ left: `${b.x}%`, top: `${b.y}%`, width: 40, height: 40, marginLeft: -20, marginTop: -20, background: 'rgba(239,68,68,.5)', zIndex: 30 }} />
+                  ];
+                }
+                const ringSize = 56;
+                return [
+                  <div
+                    key={`${b.id}-ring`}
+                    className="fx-hit-ring"
+                    style={{ left: `${b.x}%`, top: `${b.y}%`, width: ringSize, height: ringSize, marginLeft: -ringSize / 2, marginTop: -ringSize / 2, borderWidth: 3, borderColor: '#22d3ee', zIndex: 30 }}
+                  />,
+                  ...b.sparks.map((s, i) => (
+                    <div
+                      key={`${b.id}-spark-${i}`}
+                      className="fx-hit-spark"
+                      style={{ left: `${b.x}%`, top: `${b.y}%`, width: 6, height: 6, marginLeft: -3, marginTop: -3, background: '#22d3ee', '--tx': `${s.dx}px`, '--ty': `${s.dy}px`, zIndex: 30 }}
+                    />
+                  )),
+                ];
+              })}
             </div>
           </>
         )}

@@ -2,13 +2,12 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Volume2, VolumeX } from 'lucide-react';
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade } from '../../../../../lib/scoringEngine';
-import { applyHit, applyMistake, scoringLives } from '../../../../../lib/drillRules';
+import { scoringLives } from '../../../../../lib/drillRules';
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { lockPortrait, unlockOrientation } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
-import { getPlayerName, getPlayerLevel } from '../../../../../lib/progressStore';
+import { getPlayerName, getPlayerLevel, getSettings } from '../../../../../lib/progressStore';
 import { useShareCard } from '../../../../../components/ShareScoreCard';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
@@ -23,9 +22,18 @@ import DrillStartCard from '../../../../../components/drill/DrillStartCard';
 // ============================================================
 const TOTAL_TIME = 45.0;
 
-// How a solo run is won and lost — the clock as the only fail state, what a hit
-// earns, what a mistake costs — is defined once in lib/drillRules.js and shared
-// by every drill. Read that file for the model and the reasoning.
+// Solo opts OUT of lib/drillRules.js's shared earn-time economy — see the note
+// there on why that file is a global switchboard and single-drill exceptions
+// live locally instead (Shade Finder set the precedent). Duel is UNCHANGED: it
+// still runs the shared fixed 45s window (TOTAL_TIME below is what `isChallenge`
+// reads for that), its own −5 mistake penalty, and the match's shared deadline.
+//
+// Recall speed varies hugely by person and has nothing to do with memory
+// capacity itself, so a countdown clock in solo mostly punishes players who
+// think carefully before tapping. `timeRef`/`localTimeRemaining` become a
+// STOPWATCH in solo (counts up, for a pace stat only) instead of a countdown;
+// MISS_LIMIT wrong taps ends a run instead of the clock reaching zero.
+const MISS_LIMIT = 3;
 
 const BASE_GRID_SIZE = 5;
 const GRID_STEP_UP_THRESHOLD = 12;
@@ -272,7 +280,8 @@ const audioSynth = typeof window !== 'undefined' ? new AudioSynthesizer() : null
 const getSavedData = () => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    // Merge over defaults — a bestScoreSync-rebuilt record can be bestScore-only.
+    if (raw) return { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0, ...JSON.parse(raw) };
     const sScore = localStorage.getItem('skilldrills_grid_best_score_v2');
     const sStreak = localStorage.getItem('skilldrills_grid_best_streak_v2');
     return {
@@ -319,6 +328,7 @@ export default function GridMemorizationClient() {
   const [localTimeRemaining, setLocalTimeRemaining] = useState(totalTime);
   const [countdownVal, setCountdownVal] = useState(null);
   const [dangerLevel, setDangerLevel] = useState(0);
+  const [missCount, setMissCount] = useState(0);
   const [wrongCellIndex, setWrongCellIndex] = useState(null);
 
   // === Grid State ===
@@ -343,6 +353,7 @@ export default function GridMemorizationClient() {
   const bestStreakRef = useRef(0);
   const roundsRef = useRef(1);
   const runOverRef = useRef(false);
+  const missCountRef = useRef(0);
   const levelRef = useRef(1);
   const bestLevelRunRef = useRef(1);
 
@@ -557,10 +568,11 @@ export default function GridMemorizationClient() {
         scoreRef.current = Math.max(0, scoreRef.current - 5);
         setScore(scoreRef.current);
       } else {
-        const after = applyMistake({ timeRemaining: timeRef.current });
-        timeRef.current = after.timeRemaining;
-        runOverRef.current = after.runOver;
-        setLocalTimeRemaining(timeRef.current);
+        // Accuracy gate, not a time tax — see the file-top note. A wrong tap
+        // costs a miss; the solo stopwatch is unaffected either way.
+        missCountRef.current += 1;
+        setMissCount(missCountRef.current);
+        runOverRef.current = missCountRef.current >= MISS_LIMIT;
       }
 
       totalAttemptsRef.current += 1;
@@ -572,7 +584,10 @@ export default function GridMemorizationClient() {
       setPhase("result");
       phaseRef.current = "result";
 
-      if ((!isChallenge && runOverRef.current) || timeRef.current <= 0) {
+      // Solo ends on the miss limit; duel still ends on its own shared clock
+      // reaching zero (checked here too, in case that lands mid-mistake).
+      const shouldEnd = isChallenge ? timeRef.current <= 0 : runOverRef.current;
+      if (shouldEnd) {
         endGame();
       } else {
         setTimeout(() => {
@@ -600,11 +615,13 @@ export default function GridMemorizationClient() {
 
     const reactionMs = Date.now() - lastTapTimeRef.current;
     lastTapTimeRef.current = Date.now();
+    // Late-game-rush bonus only makes sense against a real countdown, so it's
+    // only wired up for duel — solo is untimed and has no "late game".
     const scoreResult = scoreAction({
       category: 'cognitive',
       combo: streakRef.current,
       reactionMs,
-      timeRemaining: timeRef.current,
+      timeRemaining: isChallenge ? timeRef.current : null,
       totalGameTime: totalTime,
       livesRemaining: scoringLives(0),
       level: litCellsRef.current,
@@ -614,12 +631,8 @@ export default function GridMemorizationClient() {
     let pointsEarned = scoreResult.total;
 
     scoreRef.current += pointsEarned;
-    // Buy back a slice of the clock. Solo only - a duel's clock is the match's
-    // shared window and nothing local may move it. No state is set here; the
-    // existing tick redraws the seconds when the displayed number changes.
-    if (!isChallenge) {
-      timeRef.current = applyHit({ timeRemaining: timeRef.current, level: roundsRef.current });
-    }
+    // No clock buy-back on a hit — solo has no clock to buy back into. Duel's
+    // clock is the match's shared window and was never moved from here.
     setScore(scoreRef.current);
 
     totalCorrectClicksRef.current += 1;
@@ -654,9 +667,8 @@ export default function GridMemorizationClient() {
   const scheduleHeartbeat = useCallback(() => {
     if (isChallenge) return;
     if (!gameActiveRef.current) return;
-    const dangerFromLives = 0;   // lives are gone; time is the only danger now
-    const dangerFromTime = timeRef.current <= 10 ? (10 - timeRef.current) / 10 : 0;
-    const danger = Math.max(dangerFromLives * 0.7, dangerFromTime);
+    // Danger is the miss count now — solo has no clock to be running out of.
+    const danger = missCountRef.current > 0 ? missCountRef.current / MISS_LIMIT : 0;
     // Clamped: an unclamped tempo goes NEGATIVE once danger exceeds ~1.69 (which
     // negative lives can produce), and a setTimeout with a negative delay fires
     // immediately — turning this self-rescheduling callback into a tight loop
@@ -706,12 +718,15 @@ export default function GridMemorizationClient() {
 
     scoreRef.current = 0;
     setScore(0);
-    timeRef.current = totalTime;
-    setLocalTimeRemaining(totalTime);
+    // Duel keeps its real 45s countdown; solo starts its stopwatch at 0.
+    timeRef.current = isChallenge ? totalTime : 0;
+    setLocalTimeRemaining(isChallenge ? totalTime : 0);
     streakRef.current = 0;
     bestStreakRef.current = 0;
     roundsRef.current = 1;
     runOverRef.current = false;
+    missCountRef.current = 0;
+    setMissCount(0);
     levelRef.current = runStartLevel;
 
     bestLevelRunRef.current = runStartLevel;
@@ -755,29 +770,22 @@ export default function GridMemorizationClient() {
         const deltaMs = now - lastTick;
         lastTick = now;
 
-        // The clock FREEZES while the pattern is being shown. During
-        // "memorize" the player is watching and physically cannot act, so
-        // draining then charges them for the drill's own animation. Survivable
-        // when lives were the main fail state; now that time is the ONLY
-        // resource it would decide runs. `lastTick` still advances above, so
-        // unfreezing doesn't dump the paused seconds in at once. Duels return
-        // earlier from their own branch and are unaffected — both players share
-        // one absolute deadline that nothing local may pause.
+        // Solo: timeRef/localTimeRemaining is a STOPWATCH (counts up), paused
+        // during "memorize" the same way the old countdown froze there — the
+        // player is only watching then, so it shouldn't cost them either way.
+        // No expiry check: untimed, only the miss limit (see toggleCell) ends
+        // a run. Duels return earlier from their own branch above and are
+        // unaffected — both players still share one absolute deadline.
         if (phaseRef.current === 'memorize') return;
 
-        const nextTime = Math.max(0, timeRef.current - (deltaMs / 1000));
-        timeRef.current = nextTime;
+        const nextElapsed = timeRef.current + deltaMs / 1000;
+        timeRef.current = nextElapsed;
         // Only when the DISPLAYED whole second changes — same fix as
         // DualTargetFlowClient/FingerSequencingClient. This ran 5x/sec
         // unconditionally, re-rendering the whole component (including the
         // up-to-36-cell grid, with no memo boundary) to paint an identical
-        // picture 4 times out of 5. The ref above still has full precision
-        // for the 0-check and scoring.
-        setLocalTimeRemaining((prev) => (Math.ceil(prev) === Math.ceil(nextTime) ? prev : nextTime));
-
-        if (nextTime <= 0) {
-          endGame();
-        }
+        // picture 4 times out of 5.
+        setLocalTimeRemaining((prev) => (Math.floor(prev) === Math.floor(nextElapsed) ? prev : nextElapsed));
       }, 200);
 
       scheduleHeartbeat();
@@ -812,7 +820,11 @@ export default function GridMemorizationClient() {
     // overlay — which is what made the first digit shift into place.
     if (Capacitor.isNativePlatform()) StatusBar.setOverlaysWebView({ overlay: true }).catch(() => {});
     mountedRef.current = true;
-    
+    // Sound is a single app-wide setting now (Progress page), not a
+    // per-drill toggle — read it once on launch instead of always
+    // defaulting to on.
+    getSettings().then((s) => { if (mountedRef.current) setSoundEnabled(s.soundEnabled !== false); });
+
     const saved = getSavedData();
     setBestScore(saved.bestScore || 0);
     setBestCombo(saved.bestCombo || 0);
@@ -933,15 +945,7 @@ export default function GridMemorizationClient() {
           <div key={f.id} className={`fx-flash fx-flash-${f.variant}`} />
         ))}
 
-        {(gameState === 'countdown' || gameState === 'playing') && (
-          <button
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-            className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
-          >
-            {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
-          </button>
-        )}
+        {/* Mute toggle is rendered once by DrillWrapper (top-centre). */}
 
         {/* ── START SCREEN ── */}
         {gameState === 'start' && !isChallenge && (
@@ -951,7 +955,7 @@ export default function GridMemorizationClient() {
             rules={[
               'Memorise the lit cells',
               'Grid grows every round',
-              'Hits add time, misses cost it',
+              'Untimed · 3 misses ends it',
             ]}
             bestStrip={bestScore > 0 ? [
               { value: bestScore.toLocaleString(), label: 'Best · PTS' },
@@ -980,16 +984,31 @@ export default function GridMemorizationClient() {
         {/* ── PLAYING ── */}
         {gameState === 'playing' && (
           <>
-            <div className="absolute top-5 left-5 z-40 flex flex-col pointer-events-none select-none">
+            <div className="absolute top-5 left-5 z-40 flex flex-col gap-2 pointer-events-none select-none">
               <span className="text-2xl font-hud font-bold text-white leading-none tabular-nums">{score}</span>
+              {/* Miss pips — solo only. Same brand-violet pattern as Shade
+                  Finder's life pips; solo has no clock, so mistakes are the
+                  only fail gate. */}
+              {!isChallenge && (
+                <div className="flex gap-1">
+                  {Array.from({ length: MISS_LIMIT }).map((_, i) => (
+                    <span
+                      key={i}
+                      className={`h-1.5 w-3.5 rounded-full transition-colors ${i < (MISS_LIMIT - missCount) ? 'bg-violet-400' : 'bg-white/12'}`}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
 
-            {/* Timer overlay at top-right */}
+            {/* Timer overlay at top-right — duel shows a real countdown
+                (urgent red under 10s); solo shows a plain elapsed stopwatch,
+                since it's untimed and shouldn't read as a threat. */}
             <div className="absolute top-5 right-5 z-40 flex flex-col items-end pointer-events-none select-none">
-              <span className={`text-3xl font-hud font-bold leading-none tabular-nums ${localTimeRemaining <= 10 ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}>
-                {Math.ceil(localTimeRemaining)}s
+              <span className={`text-3xl font-hud font-bold leading-none tabular-nums ${isChallenge && localTimeRemaining <= 10 ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}>
+                {isChallenge ? Math.ceil(localTimeRemaining) : Math.floor(localTimeRemaining)}s
               </span>
-              <span className="text-[8px] label-tiny text-slate-500 mt-1">Time Left</span>
+              <span className="text-[8px] label-tiny text-slate-500 mt-1">{isChallenge ? 'Time Left' : 'Time'}</span>
             </div>
 
             {/* GAMEPLAY CANVAS */}

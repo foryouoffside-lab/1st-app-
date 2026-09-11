@@ -14,9 +14,64 @@
 // Accent is the brand violet for every drill (one colour across the whole
 // catalogue); `accent` stays a prop so a one-off can override.
 
-import { useState } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect } from 'react';
 
 const BRAND = '#8b5cf6';
+
+// useLayoutEffect warns when a client component is prerendered (static export
+// does prerender these). The measure-and-shrink has to happen before paint to
+// avoid a visible reflow, so keep layout timing in the browser and fall back
+// to useEffect on the server pass, where it never runs anyway.
+const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
+
+// Shrink the drill name until it fits its column on ONE line.
+//
+// The name is wrapped in two accent corner brackets (.lock-mark) that only
+// line up when the text is a single line — on a wrap, `inline-block` sizes to
+// the widest line and the bottom-right bracket floats off the end of the
+// shorter last line (that was the visible bug: "DISTRACTION FIGHTER" broke to
+// two lines and its bottom bracket sat out in space). A `clamp()` can't see
+// text width, so the fit is measured here: force nowrap, and if the text
+// overruns its column scale the font down by exactly the overrun ratio.
+//
+// `baseFontSize` is the intended size (the same clamp() string the style
+// prop uses). It is re-applied on every pass BEFORE measuring — the previous
+// version blanked el.style.fontSize to "measure natural size" and then, for
+// any name that already fit, never put it back, so every title that didn't
+// need shrinking collapsed to the 16px UA default.
+//
+// Runs on mount, once more when the font finishes swapping in, and on resize
+// (a rotation on the start screen). Not a hot path.
+function useFitToWidth(baseFontSize, text, deps = []) {
+  const ref = useRef(null);
+  useIsoLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || typeof window === 'undefined') return undefined;
+    const fit = () => {
+      const parent = el.parentElement;
+      if (!parent) return;
+      el.style.whiteSpace = 'nowrap';
+      el.style.fontSize = baseFontSize;
+      const avail = parent.clientWidth;
+      const natural = el.scrollWidth;
+      if (natural > avail && avail > 0) {
+        const base = parseFloat(getComputedStyle(el).fontSize) || 40;
+        // 0.5px slack so a hairline rounding overrun doesn't force a wrap
+        el.style.fontSize = `${Math.max(20, base * ((avail - 0.5) / natural))}px`;
+      }
+    };
+    fit();
+    // Anton may still be swapping in on first paint — a width measured against
+    // the fallback face is wrong. Re-fit once the real font is ready.
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(() => { if (ref.current) fit(); }).catch(() => {});
+    }
+    window.addEventListener('resize', fit);
+    return () => window.removeEventListener('resize', fit);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseFontSize, text, ...deps]);
+  return ref;
+}
 
 export default function DrillStartCard({
   drillName,
@@ -31,9 +86,11 @@ export default function DrillStartCard({
   const [rulesOpen, setRulesOpen] = useState(false);
   const landscape = orientation === 'landscape';
 
-  const nameStyle = landscape
-    ? { fontSize: 'clamp(34px,7vw,50px)', lineHeight: 0.92, '--lm': accent }
-    : { fontSize: 'clamp(38px,12vw,52px)', lineHeight: 0.92, '--lm': accent };
+  const baseNameSize = landscape ? 'clamp(34px,7vw,50px)' : 'clamp(38px,12vw,52px)';
+  const nameRef = useFitToWidth(baseNameSize, drillName);
+  // line-height is left to .lock-mark (0.8) so the corner brackets clamp the
+  // name the same way they clamp the result-screen score.
+  const nameStyle = { fontSize: baseNameSize, '--lm': accent };
 
   const strip = Array.isArray(bestStrip) && bestStrip.length > 0 ? bestStrip : null;
 
@@ -59,17 +116,22 @@ export default function DrillStartCard({
           title forces the eye down to find it; lifting it ~10% reads first. */}
       <div className={`flex-1 flex flex-col justify-center pb-[10vh] ${landscape ? 'max-w-[520px] mx-auto w-full pb-[6vh]' : ''}`}>
         <h1
+          ref={nameRef}
           className="lock-mark snap font-display text-white inline-block self-start"
           style={nameStyle}
         >
           {drillName}
         </h1>
-        {tagline && <p className="rdg-unit text-[10px] text-slate-500 mt-4">{tagline}</p>}
+        {/* The one-line objective. Keeps the signature tracked-mono kicker
+            look, but a step up in size (11px) and a big step up in contrast
+            (slate-300, was slate-500) so the core "what do I do here" line is
+            actually legible — it was the faintest thing on the card. */}
+        {tagline && <p className="rdg-unit mt-4 max-w-[340px] text-[11px] leading-relaxed text-slate-300">{tagline}</p>}
 
         {rulesOpen && rules.length > 0 && (
           <div className="mt-4 flex flex-col gap-2 max-w-[340px]">
             {rules.map((r) => (
-              <p key={r} className="flex gap-2 text-[11.5px] leading-snug text-slate-400">
+              <p key={r} className="flex gap-2 text-[12.5px] leading-snug text-slate-300">
                 <span className="font-bold" style={{ color: accent }}>/</span>{r}
               </p>
             ))}

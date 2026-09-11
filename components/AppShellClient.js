@@ -14,7 +14,8 @@ import { reportError, identifyUser } from '../lib/crashReporting';
 import { logScreenView, identifyAnalyticsUser } from '../lib/analytics';
 import { ensureDailyReminderScheduled } from '../lib/dailyReminder';
 import { reconcileDrillBests } from '../lib/bestScoreSync';
-import { startPresence } from '../lib/presence';
+import { startProgressCloudSync } from '../lib/progressCloud';
+import { startPresence, getKnownFriendCount, FRIEND_COUNT_EVENT } from '../lib/presence';
 import { LocalNotifications } from '@capacitor/local-notifications';
 
 export default function AppShellClient({ children }) {
@@ -50,6 +51,16 @@ export default function AppShellClient({ children }) {
     reconcileDrillBests().catch(() => {});
   }, []);
 
+  // Carry the player's level, rank badge, streak and bests on their ACCOUNT,
+  // not just this phone. Restores them on sign-in (which is what makes a
+  // reinstall whole again — Android wipes the app's stored progress on
+  // uninstall) and mirrors them back up after each session. Signed-out play is
+  // unaffected: no uid, no sync. See lib/progressCloud.js.
+  useEffect(() => {
+    if (!user?.uid) return undefined;
+    return startProgressCloudSync(user.uid);
+  }, [user?.uid]);
+
   // Tag crash reports and analytics with the signed-in user's uid so either
   // can be traced back to a specific player if they reach out.
   useEffect(() => {
@@ -66,10 +77,18 @@ export default function AppShellClient({ children }) {
     if (pathname) logScreenView(pathname);
   }, [pathname]);
 
-  // Schedule the recurring "come back to your Daily Challenge" reminder once
-  // signed in (no-ops on web / when already scheduled — see lib/dailyReminder.js).
+  // Arm the daily-session reminder once signed in, and RE-ARM it every time
+  // the app comes back to the foreground — that's what moves it off "today"
+  // once the session is done, and what catches the local date rolling over
+  // while the app was backgrounded (see lib/dailyReminder.js). No-op on web.
   useEffect(() => {
-    if (user?.uid) ensureDailyReminderScheduled();
+    if (!user?.uid) return undefined;
+    ensureDailyReminderScheduled();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') ensureDailyReminderScheduled();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
   }, [user?.uid]);
 
   // App-wide "online" presence — keeps `online`/`lastSeen` current while the
@@ -77,9 +96,36 @@ export default function AppShellClient({ children }) {
   // accurate wherever they are, not just in the Arena. Writes only while
   // foregrounded (+ one write on background/close); stops on sign-out.
   // Consumed only by the Friends surfaces — see lib/presence.js.
+  //
+  // ONLY FOR PLAYERS WHO HAVE FRIENDS. This was the app's single biggest
+  // Firestore write cost (~6 of the ~11 writes a session), and for a player
+  // with an empty friends list every one of those writes was read by nobody.
+  // Gated on the count the Arena caches, and re-evaluated live so accepting a
+  // first friend starts presence without needing an app restart.
   useEffect(() => {
     if (!user?.uid) return undefined;
-    return startPresence(user.uid);
+
+    let stop = null;
+    let cancelled = false;
+
+    const sync = async () => {
+      const friendCount = await getKnownFriendCount();
+      if (cancelled) return;
+      if (friendCount > 0 && !stop) stop = startPresence(user.uid);
+      // Last friend removed: stopPresence also writes `online: false`, so they
+      // don't linger on anyone's list as a player who never signed off.
+      else if (friendCount === 0 && stop) { stop(); stop = null; }
+    };
+
+    sync();
+    const onCountChanged = () => { sync(); };
+    window.addEventListener(FRIEND_COUNT_EVENT, onCountChanged);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener(FRIEND_COUNT_EVENT, onCountChanged);
+      if (stop) stop();
+    };
   }, [user?.uid]);
 
   // Route straight to the Daily tab when the reminder above is tapped.

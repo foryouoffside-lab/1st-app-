@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  Volume2, VolumeX,
   Heart, Star, Circle, Square, Triangle,
   Diamond, Target, Award, Zap, Hexagon, Grid, Eye, Activity, Clock
 } from 'lucide-react';
@@ -10,7 +9,7 @@ import { scoreAction, calcEndBonuses, calcSessionXP, getGrade } from '../../../.
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { lockPortrait, unlockOrientation } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
-import { getPlayerName, getPlayerLevel } from '../../../../../lib/progressStore';
+import { getPlayerName, getPlayerLevel, getSettings } from '../../../../../lib/progressStore';
 import { useShareCard } from '../../../../../components/ShareScoreCard';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
@@ -22,14 +21,29 @@ import DrillStartCard from '../../../../../components/drill/DrillStartCard';
 // ============================================================
 // TUNING CONSTANTS
 // ============================================================
-const TOTAL_TIME = 45;
 const STORAGE_KEY = 'skilldrills_card_matching_v1';
+
+const TOTAL_TIME = 60;
+
+// A fixed 60s clock ends the run — but it's the ONLY thing that costs time.
+// A mismatch limit was tried and was wrong: nobody holds 12-28 card positions
+// after a single preview, so mismatches on the bigger boards aren't errors to
+// be punished, they're exactly what working-memory limits look like. So a
+// mismatch here costs only the combo (same as every other solo drill's
+// mistake handling) — never a life, never a second off the clock.
+//
+// The clock's job isn't fairness inside one board, it's giving the drill a
+// finish line worth beating. A drill that ends only once the player SOLVES
+// the biggest board is a puzzle you complete once and then have no reason to
+// replay — the "how many boards can I clear" race against a fixed 60s is
+// what makes coming back and beating your own best actually mean something,
+// the same way every other drill's best-score chase works.
 
 // How long a freshly dealt board is shown face-up before it flips down.
 // Scaled by card count — a 24-card board is genuinely more to take in than a
 // 12-card one, and a fixed duration would make the late levels unfair rather
-// than harder. The game clock is PAUSED for this window (see the timer
-// interval), so the preview never eats into the player's 45 seconds.
+// than harder. The clock is PAUSED for this window (see the timer interval),
+// so the preview never eats into the player's 60 seconds.
 const previewMsFor = (cardCount) => Math.min(2800, 1400 + cardCount * 55);
 
 const BASE_PAIRS = 6;
@@ -263,8 +277,10 @@ const audioSynth = typeof window !== 'undefined' ? new AudioSynthesizer() : null
 const getSavedData = () => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-    return { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0 };
+    const base = { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0 };
+    // Merge over defaults — a bestScoreSync-rebuilt record can be bestScore-only.
+    if (raw) return { ...base, ...JSON.parse(raw) };
+    return base;
   } catch {
     return { bestScore: 0, bestCombo: 0, bestLevel: 1, totalSessions: 0 };
   }
@@ -307,7 +323,6 @@ export default function CardMatchingClient() {
   // Stats
   const [score, setScore] = useState(0);
   const [timeRemaining, setTimeRemaining] = useState(TOTAL_TIME);
-  const [dangerLevel, setDangerLevel] = useState(0);
 
   // Juice & Feedback
   const [flashes, setFlashes] = useState([]);
@@ -341,10 +356,8 @@ export default function CardMatchingClient() {
   const timerIntervalRef = useRef(null);
   const countdownTimerRef = useRef(null);
   const overdriveTimeoutRef = useRef(null);
-  const heartbeatTimerRef = useRef(null);
 
   const pairFirstFlipTimeRef = useRef(null);
-  const heartbeatTempoRef = useRef(1100);
 
   // === JUICE HELPERS ===
   const triggerFlash = useCallback((variant) => {
@@ -442,7 +455,6 @@ export default function CardMatchingClient() {
 
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     if (overdriveTimeoutRef.current) clearTimeout(overdriveTimeoutRef.current);
-    if (heartbeatTimerRef.current) clearTimeout(heartbeatTimerRef.current);
     if (previewTimerRef.current) { clearTimeout(previewTimerRef.current); previewTimerRef.current = null; }
     previewRef.current = false;
 
@@ -574,14 +586,14 @@ export default function CardMatchingClient() {
         scoreRef.current += clearBonus;
         setScore(scoreRef.current);
 
+        // No finish line at MAX_PAIRS — the clock is what ends a run, so a
+        // strong player just keeps clearing max-size boards until it runs
+        // out, same as every other endurance-style drill in the catalog.
         if (pairCountRef.current < MAX_PAIRS) {
           pairCountRef.current += LEVEL_STEP;
           levelRef.current = (pairCountRef.current - BASE_PAIRS) / LEVEL_STEP + 1;
           bestLevelRunRef.current = Math.max(bestLevelRunRef.current, levelRef.current);
         }
-
-        timeRemainingRef.current = TOTAL_TIME;
-        setTimeRemaining(TOTAL_TIME);
 
         waitingRef.current = true;
         setTimeout(() => {
@@ -599,6 +611,10 @@ export default function CardMatchingClient() {
       // "you got it wrong" cue. The cards flipping back over is already
       // clear feedback.
       audioSynth?.playPenalty();
+      // Combo reset only — no run-ending mistake counter. See the file-top
+      // note: a mismatch on a big board isn't a punishable error, it's what
+      // working-memory limits look like, so it costs the same as a mistake
+      // in every other solo drill (combo only) and nothing more.
       comboRef.current = 0;
 
       waitingRef.current = true;
@@ -608,7 +624,7 @@ export default function CardMatchingClient() {
         waitingRef.current = false;
       }, 600);
     }
-  }, [initGrid, triggerFlash, spawnBurst]);
+  }, [initGrid, endGame, triggerFlash, spawnBurst]);
 
   // === CELL CLICK ===
   const handleCardClick = useCallback((index, e) => {
@@ -643,22 +659,10 @@ export default function CardMatchingClient() {
     }
   }, [phase, resolveMatch]);
 
-  // === HEARTBEAT SCHEDULER ===
-  const scheduleHeartbeat = useCallback(() => {
-    if (!gameActiveRef.current) return;
-    const dangerFromTime = timeRemainingRef.current <= 10 ? (10 - timeRemainingRef.current) / 10 : 0;
-    const danger = dangerFromTime;
-    // Clamped: an unclamped tempo goes NEGATIVE once danger exceeds ~1.69 (which
-    // negative lives can produce), and a setTimeout with a negative delay fires
-    // immediately — turning this self-rescheduling callback into a tight loop
-    // spawning audio nodes at full CPU. That was the "phone heats up and makes
-    // noise" bug already fixed in the other drills; this brings the rest in line.
-    const tempo = Math.max(350, Math.round(1100 - danger * 650));
-    heartbeatTempoRef.current = tempo;
-    if (danger > 0.08) audioSynth?.playHeartbeat(danger);
-    if (mountedRef.current) setDangerLevel(danger);
-    heartbeatTimerRef.current = setTimeout(scheduleHeartbeat, tempo);
-  }, []);
+  // No heartbeat/danger scheduler — there's no clock and no mistake limit
+  // left to escalate against (see the file-top note), so there's no honest
+  // "danger" signal to pulse. Manufacturing one anyway would just be pressure
+  // for its own sake in a drill deliberately built to have none.
 
   // === COUNTDOWN LOOP ===
   const runCountdown = useCallback((n) => {
@@ -680,9 +684,8 @@ export default function CardMatchingClient() {
           return;
         }
         const now = Date.now();
-        // Clock is frozen while the board is shown face-up. Advancing lastTick
-        // without spending it is what makes this a PAUSE rather than a debt
-        // that gets deducted in one jump when the preview ends.
+        // Clock is frozen while the board is shown face-up — the preview
+        // shouldn't count against the player's 60 seconds.
         if (previewRef.current) {
           lastTick = now;
           return;
@@ -690,7 +693,7 @@ export default function CardMatchingClient() {
         const deltaMs = now - lastTick;
         lastTick = now;
 
-        const nextTime = Math.max(0, timeRemainingRef.current - (deltaMs / 1000));
+        const nextTime = Math.max(0, timeRemainingRef.current - deltaMs / 1000);
         timeRemainingRef.current = nextTime;
         setTimeRemaining(nextTime);
 
@@ -700,13 +703,12 @@ export default function CardMatchingClient() {
         }
       }, 200);
 
-      scheduleHeartbeat();
       return;
     }
     setCountdownValue(n);
     audioSynth?.playCountdownTick();
     countdownTimerRef.current = setTimeout(() => runCountdown(n - 1), 700);
-  }, [endGame, scheduleHeartbeat, startPreview]);
+  }, [endGame, startPreview]);
 
   // === ENTER DRILL ===
   const enterDrill = useCallback(() => {
@@ -720,7 +722,6 @@ export default function CardMatchingClient() {
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
     if (overdriveTimeoutRef.current) clearTimeout(overdriveTimeoutRef.current);
-    if (heartbeatTimerRef.current) clearTimeout(heartbeatTimerRef.current);
     if (previewTimerRef.current) { clearTimeout(previewTimerRef.current); previewTimerRef.current = null; }
     previewRef.current = false;
 
@@ -729,14 +730,11 @@ export default function CardMatchingClient() {
     // Every run starts at the lowest difficulty. It used to start at 55% of the
     // player's best level, so improving once permanently raised the speed every
     // future run opened at - a silent spike with nothing on screen explaining it.
-    // That head-start only existed because a fixed 45s was too short to climb the
-    // ramp; the endurance clock replaces it.
     const startLevel = 1;
     const startPairs = BASE_PAIRS + (startLevel - 1) * LEVEL_STEP;
 
     setScore(0);
     setTimeRemaining(TOTAL_TIME);
-    setDangerLevel(0);
     setFlashes([]);
     setBursts([]);
     setFlippedIndices([]);
@@ -799,7 +797,11 @@ export default function CardMatchingClient() {
     // overlay — which is what made the first digit shift into place.
     if (Capacitor.isNativePlatform()) StatusBar.setOverlaysWebView({ overlay: true }).catch(() => {});
     mountedRef.current = true;
-    
+    // Sound is a single app-wide setting now (Progress page), not a
+    // per-drill toggle — read it once on launch instead of always
+    // defaulting to on.
+    getSettings().then((s) => { if (mountedRef.current) setSoundEnabled(s.soundEnabled !== false); });
+
     const saved = getSavedData();
     setBestScore(saved.bestScore || 0);
     setBestCombo(saved.bestCombo || 0);
@@ -815,7 +817,6 @@ export default function CardMatchingClient() {
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
       if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
       if (overdriveTimeoutRef.current) clearTimeout(overdriveTimeoutRef.current);
-      if (heartbeatTimerRef.current) clearTimeout(heartbeatTimerRef.current);
       if (previewTimerRef.current) { clearTimeout(previewTimerRef.current); previewTimerRef.current = null; }
       previewRef.current = false;
       unlockOrientation();
@@ -893,25 +894,13 @@ export default function CardMatchingClient() {
           }
         `}</style>
 
-        {phase === 'playing' && dangerLevel > 0.06 && (
-          <div className="fx-vignette" style={{ '--v-min': Math.max(0.05, dangerLevel * 0.25), '--v-max': Math.min(0.55, dangerLevel * 0.75), animationDuration: `${heartbeatTempoRef.current}ms` }} />
-        )}
-
         <div className="absolute inset-0 pointer-events-none" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
 
         {flashes.map((f) => (
           <div key={f.id} className={`fx-flash ${f.variant === 'gold' ? 'fx-flash-gold' : f.variant === 'cyan' ? 'fx-flash-cyan' : 'fx-flash-red'}`} />
         ))}
 
-        {(phase === 'countdown' || phase === 'playing') && (
-          <button
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => { e.stopPropagation(); setSoundEnabled((v) => { audioSynth?.setEnabled(!v); return !v; }); }}
-            className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform cursor-pointer"
-          >
-            {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
-          </button>
-        )}
+        {/* Mute toggle is rendered once by DrillWrapper (top-centre). */}
 
         {/* ── START SCREEN ── */}
         {phase === 'start' && (
@@ -921,7 +910,7 @@ export default function CardMatchingClient() {
             rules={[
               'Flip cards and match the pairs',
               'More pairs each level you clear',
-              'A mismatch resets your combo',
+              '60s on the clock · mistakes cost combo',
             ]}
             bestStrip={bestScore > 0 ? [
               { value: bestScore.toLocaleString(), label: 'Best · PTS' },

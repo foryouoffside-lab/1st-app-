@@ -33,7 +33,8 @@ import {
 // and react, never back into this file, so there is no import cycle.
 import { leaveMatchmakingQueue } from '../lib/challengeEngine';
 import { clearAllProgress } from '../lib/progressStore';
-import { setPlayerName } from '../lib/playerIdentity';
+import { deleteCloudProgress } from '../lib/progressCloud';
+import { setPlayerName, sanitizeUsername, validateUsername } from '../lib/playerIdentity';
 
 const AuthContext = createContext({
   user: null,
@@ -187,10 +188,11 @@ async function resolveProfile(db, fbUser) {
 
   // Brand-new player — don't create the doc yet, they still need to pick a
   // unique display name (see completeSignup below).
-  const suggested = (fbUser.displayName || fbUser.email?.split('@')[0] || 'Player')
-    .replace(/[^a-zA-Z0-9 _-]/g, '')
-    .trim()
-    .slice(0, 20);
+  // Sanitized to the username format (see lib/playerIdentity.js) rather
+  // than just trimmed: Google display names are real-world names with spaces
+  // in them ("Sam Patel"), and a pre-filled suggestion that the Continue
+  // button then refuses is a dead end on the very first screen.
+  const suggested = sanitizeUsername(fbUser.displayName || fbUser.email?.split('@')[0] || 'Player');
 
   return {
     status: 'needs-username',
@@ -314,36 +316,18 @@ export function AuthProvider({ children }) {
   // The value is cached at module scope, so useDuelMatchStart still reads it
   // for free whenever a duel actually happens.
 
-  // 2. Set up visibility presence tracking
-  useEffect(() => {
-    if (!dbInstance || !user) return;
-
-    const userRef = doc(dbInstance, 'users', user.uid);
-
-    const setPresence = async (isOnline) => {
-      try {
-        await updateDoc(userRef, {
-          online: isOnline,
-          lastSeen: serverTimestamp()
-        });
-      } catch (err) {
-        console.error("Presence status update failed:", err);
-      }
-    };
-
-    const handleVisibilityChange = () => {
-      setPresence(document.visibilityState === 'visible');
-    };
-    const handleBeforeUnload = () => setPresence(false);
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [dbInstance, user?.uid]);
+  // 2. Presence tracking USED TO LIVE HERE — a visibilitychange/beforeunload
+  // pair writing { online, lastSeen } to this user's doc. It was removed on
+  // 2026-09-10 because lib/presence.js (started in AppShellClient) had since
+  // been added and writes the SAME two fields on the SAME events, so every
+  // foreground and background was billed twice: two writes, plus two reads,
+  // because the profile onSnapshot listener above is watching the very doc
+  // being written and delivers each change straight back.
+  //
+  // presence.js is the one to keep — it also covers Capacitor's native
+  // appStateChange (visibilitychange is unreliable in Android's WebView when
+  // the whole app backgrounds), coalesces bursts, and carries the 3-minute
+  // backstop heartbeat. Nothing was lost by deleting this copy.
 
   // 2c. Publish the player's XP level onto their public profile doc, so it
   // shows as a rank badge on the Arena profile sheet / leaderboard for other
@@ -369,19 +353,31 @@ export function AuthProvider({ children }) {
       }
     };
 
-    (async () => {
+    const pushCurrentLevel = async () => {
       try {
         const { getPlayerLevel } = await import('../lib/progressStore');
         const { level } = await getPlayerLevel();
         push(level);
       } catch (err) { /* progress store unavailable */ }
-    })();
+    };
+
+    pushCurrentLevel();
 
     const onCelebration = (e) => {
       if (e.detail && e.detail.leveledUp) push(e.detail.leveledUp);
     };
+    // A cloud restore can raise the level well after this effect's first read —
+    // on a reinstall it goes from 1 to whatever the account had earned (see
+    // lib/progressCloud.js). Without this the public badge other players see
+    // would stay stuck at the pre-restore level until the next app open.
+    const onRestored = () => { pushCurrentLevel(); };
+
     window.addEventListener('sd:celebration', onCelebration);
-    return () => window.removeEventListener('sd:celebration', onCelebration);
+    window.addEventListener('sd:progress-restored', onRestored);
+    return () => {
+      window.removeEventListener('sd:celebration', onCelebration);
+      window.removeEventListener('sd:progress-restored', onRestored);
+    };
   }, [dbInstance, user?.uid]);
 
   // 3. Real Google sign-in. A browser popup doesn't work inside the app's
@@ -439,9 +435,12 @@ export function AuthProvider({ children }) {
   const completeSignup = async (displayName) => {
     if (!pendingSignup || !dbInstance) return { ok: false, error: 'Not ready — try again.' };
 
-    const clean = displayName.trim();
-    if (clean.length < 3) return { ok: false, error: 'Must be at least 3 characters.' };
-    if (clean.length > 20) return { ok: false, error: 'Must be 20 characters or fewer.' };
+    // Sanitize first, then validate what's left: a caller that somehow
+    // arrives with a space in the string gets it stripped rather than
+    // silently reserving a name nobody can type into the friend search.
+    const clean = sanitizeUsername(displayName);
+    const problem = validateUsername(clean);
+    if (problem) return { ok: false, error: problem };
 
     const nameKey = clean.toLowerCase();
 
@@ -619,6 +618,16 @@ export function AuthProvider({ children }) {
       } catch (e) {
         console.error('Failed to delete challenge history:', e);
       }
+
+      // Delete the private progress backup (users/{uid}/private/progress —
+      // see lib/progressCloud.js). This has to happen BEFORE the profile doc
+      // and the auth user go, because the rule guarding it needs this player
+      // to still be signed in; and it has to happen at all because deleting
+      // users/{uid} does NOT delete its subcollections. Left behind, the
+      // backup would outlive the deleted account and silently restore all of
+      // this player's XP and bests if they ever signed up again with the same
+      // Google account — after being told it was permanently deleted.
+      await deleteCloudProgress(uid);
 
       // Delete the Firestore profile doc
       try {

@@ -27,11 +27,187 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { Share2, ArrowLeft } from 'lucide-react';
+import { usePathname, useRouter } from 'next/navigation';
+import { Share2, ArrowLeft, ArrowRight, CheckCircle2 } from 'lucide-react';
 import { getGrade } from '../../lib/scoringEngine';
+import { getSessionState } from '../../lib/sessionFlow';
 import useCountUp from '../../lib/useCountUp';
 
 const XP_PER_LEVEL = 1000;
+
+/** Last path segment — the drill id, e.g. /drills/cognitive/focus/shade-finder/ -> shade-finder */
+function drillIdFromPath(pathname) {
+  return (pathname || '').split('/').filter(Boolean).pop() || '';
+}
+
+/**
+ * Loads the guided-session context when this result screen is being shown for
+ * a `?session=1` run. Returns null for free practice / Arena (the normal
+ * Play Again result), and while it is still loading on a real session run.
+ *
+ * Reads the flag off window.location rather than useSearchParams() so this
+ * component never pulls a route into the Suspense-boundary requirement — it
+ * only renders inside an already-client drill page, and only in an effect.
+ */
+function useSessionContext() {
+  const pathname = usePathname();
+  const [ctx, setCtx] = useState(null);
+  const active = typeof window !== 'undefined'
+    && /[?&]session=(1|true)(&|$)/.test(window.location.search);
+
+  useEffect(() => {
+    if (!active) { setCtx(null); return; }
+    let cancelled = false;
+    const drillId = drillIdFromPath(pathname);
+    // assumeDoneId: this drill's own completion write is fire-and-forget in the
+    // drill files, so it may not have landed yet — tell the session layer to
+    // treat this drill as finished regardless, so "Next" never points back at
+    // the drill you just played.
+    getSessionState({ assumeDoneId: drillId })
+      .then((state) => {
+        if (cancelled) return;
+        const inSet = state.drills.some((d) => d.id === drillId);
+        setCtx(inSet ? { ...state, drillId } : null);
+      })
+      .catch(() => { if (!cancelled) setCtx(null); });
+    return () => { cancelled = true; };
+  }, [active, pathname]);
+
+  return { active, ctx };
+}
+
+/**
+ * The action row, shared by both result layouts. Outside a session it is the
+ * long-standing Play Again + share + back. Inside a guided session it leads
+ * with the NEXT drill (or a session wrap-up on the last one) and demotes
+ * Play Again to a secondary link.
+ */
+function ResultActions({ session, lockColor, onPlayAgain, onShare, backHref, compact }) {
+  const router = useRouter();
+  const { active, ctx } = session;
+
+  // Session run, still loading — hold the primary slot so the buttons don't
+  // visibly reshuffle a frame later.
+  if (active && !ctx) {
+    return (
+      <div className={compact ? 'mt-4' : ''}>
+        <button className="lock-btn w-full opacity-60" style={{ '--lb': lockColor }} disabled>Next drill</button>
+      </div>
+    );
+  }
+
+  // The secondary row — an outline "Play again" + icon buttons, matching the
+  // non-session action row's weight instead of a line of tiny text links.
+  const SecondaryRow = ({ showLeave }) => (
+    <div className="mt-2.5 flex gap-2">
+      <button
+        onClick={onPlayAgain}
+        className="flex-1 min-h-[42px] rounded-[13px] border border-white/12 bg-white/[0.04] text-[12px] font-bold text-slate-200 hover:bg-white/[0.07] active:scale-[0.98] transition-transform"
+      >
+        Play again
+      </button>
+      <button
+        onClick={onShare}
+        className="w-11 min-h-[42px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white active:scale-[0.97] transition-transform"
+      >
+        <Share2 className="w-4 h-4" />
+      </button>
+      {showLeave && (
+        <Link
+          href={backHref}
+          className="w-11 min-h-[42px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white active:scale-[0.97] transition-transform"
+        >
+          <ArrowLeft className="w-4 h-4" />
+        </Link>
+      )}
+    </div>
+  );
+
+  if (active && ctx && !ctx.allComplete && ctx.nextDrill) {
+    const nm = ctx.nextDrill.name.length > 18 ? 'Next drill' : `Next: ${ctx.nextDrill.name}`;
+    return (
+      <div className={compact ? 'mt-4' : ''}>
+        <SessionDots total={ctx.total} doneUpTo={ctx.completedCount} />
+        <button
+          onClick={() => router.push(ctx.nextDrill.href)}
+          className="lock-btn w-full mt-3 flex items-center justify-center gap-2"
+          style={{ '--lb': lockColor }}
+        >
+          {nm} <ArrowRight className="w-4 h-4" />
+        </button>
+        <SecondaryRow showLeave />
+      </div>
+    );
+  }
+
+  if (active && ctx && ctx.allComplete) {
+    return (
+      <div className={compact ? 'mt-4' : ''}>
+        <div className="rounded-[13px] border border-emerald-500/25 bg-emerald-500/[0.06] px-4 py-3 text-center">
+          <div className="flex items-center justify-center gap-1.5 text-emerald-400 font-display text-[15px]">
+            <CheckCircle2 className="w-4 h-4" /> Session complete
+          </div>
+          <p className="mt-1 text-[11px] text-slate-300">
+            All {ctx.total} drills done today
+            {ctx.weekly ? <> · <span className="text-white font-semibold">{ctx.weekly.completed}/{ctx.weekly.target}</span> this week</> : null}
+          </p>
+          {ctx.weekly && !ctx.weekly.allDone && (
+            <p className="mt-0.5 text-[10.5px] text-slate-400">
+              {ctx.weekly.target - ctx.weekly.completed} more day{ctx.weekly.target - ctx.weekly.completed === 1 ? '' : 's'} for this week&apos;s badge
+            </p>
+          )}
+        </div>
+        <button
+          onClick={() => router.push('/daily')}
+          className="lock-btn w-full mt-3"
+          style={{ '--lb': lockColor }}
+        >
+          Done
+        </button>
+        <SecondaryRow />
+      </div>
+    );
+  }
+
+  // Free practice / Arena / not in today's set — unchanged.
+  if (compact) {
+    return <button onClick={onPlayAgain} className="lock-btn w-full mt-4" style={{ '--lb': lockColor }}>Play Again</button>;
+  }
+  return (
+    <div className="flex gap-2">
+      <button onClick={onPlayAgain} className="lock-btn flex-1" style={{ '--lb': lockColor }}>Play Again</button>
+      <button
+        onClick={onShare}
+        className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer active:scale-[0.97] transition-transform"
+      >
+        <Share2 className="w-4 h-4" />
+      </button>
+      <Link
+        href={backHref}
+        className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white active:scale-[0.97] transition-transform"
+      >
+        <ArrowLeft className="w-4 h-4 text-slate-400" />
+      </Link>
+    </div>
+  );
+}
+
+function SessionDots({ total, doneUpTo }) {
+  return (
+    <div className="flex items-center justify-center gap-2">
+      <span className="rdg-unit text-[9px] text-slate-400">Session</span>
+      <span className="flex gap-1.5">
+        {Array.from({ length: total }).map((_, i) => (
+          <span
+            key={i}
+            className="h-1.5 w-1.5 rounded-full"
+            style={{ background: i < doneUpTo ? '#34d399' : 'rgba(255,255,255,0.18)' }}
+          />
+        ))}
+      </span>
+    </div>
+  );
+}
 
 // Bar timings. Kept here rather than inline so the level-up branch and the
 // plain branch can't drift apart.
@@ -165,6 +341,9 @@ export default function ResultScreen({
   const isTopGrade = grade.grade === 'S+' || grade.grade === 'S';
   const gradeColor = isTopGrade ? '#fbbf24' : '#a78bfa';
 
+  // Guided-session context — null for free practice and Arena.
+  const session = useSessionContext();
+
   const shownScore = useCountUp(score, 700);
   const shownAccuracy = useCountUp(accuracy, 600);
   const shownXp = useCountUp(xpEarned, 600);
@@ -251,7 +430,14 @@ export default function ResultScreen({
           </div>
         </div>
 
-        <button onClick={onPlayAgain} className="lock-btn mt-4" style={{ '--lb': lockColor }}>Play Again</button>
+        <ResultActions
+          session={session}
+          lockColor={lockColor}
+          onPlayAgain={onPlayAgain}
+          onShare={onShare}
+          backHref={backHref}
+          compact
+        />
 
         {LevelToast}
       </div>
@@ -304,27 +490,13 @@ export default function ResultScreen({
             <ResultStat key={s.label} label={s.label} value={s.value} color={s.color || 'text-slate-300'} delay={350 + i * 70} />
           ))}
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={onPlayAgain}
-            className="lock-btn flex-1"
-            style={{ '--lb': lockColor }}
-          >
-            Play Again
-          </button>
-          <button
-            onClick={onShare}
-            className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer active:scale-[0.97] transition-transform"
-          >
-            <Share2 className="w-4 h-4" />
-          </button>
-          <Link
-            href={backHref}
-            className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white active:scale-[0.97] transition-transform"
-          >
-            <ArrowLeft className="w-4 h-4 text-slate-400" />
-          </Link>
-        </div>
+        <ResultActions
+          session={session}
+          lockColor={lockColor}
+          onPlayAgain={onPlayAgain}
+          onShare={onShare}
+          backHref={backHref}
+        />
       </div>
 
       {/* Non-blocking: no dim, no pause, no input capture, unmounts itself. */}

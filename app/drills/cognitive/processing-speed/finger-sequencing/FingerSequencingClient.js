@@ -2,10 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
-import {
-  Target, Volume2, VolumeX,
-  RotateCw
-} from 'lucide-react';
+import { RotateCw } from 'lucide-react';
 import { scoreAction, calcEndBonuses, calcSessionXP, getGrade, isValidReactionTime } from '../../../../../lib/scoringEngine';
 import {
   applyHit, applyMistake,
@@ -14,7 +11,7 @@ import {
 import { saveLeaderboardEntrySync } from '../../../../../lib/leaderboard';
 import { afterViewportSettled, lockLandscape, unlockOrientation, onOrientationSettled } from '../../../../../lib/orientation';
 import { previewDailyCompletion } from '../../../../../lib/dailyChallenge';
-import { getPlayerName, getPlayerLevel } from '../../../../../lib/progressStore';
+import { getPlayerName, getPlayerLevel, getSettings } from '../../../../../lib/progressStore';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
 import { useShareCard } from '../../../../../components/ShareScoreCard';
@@ -378,6 +375,10 @@ export default function FingerSequencingClient() {
   // Mount / cleanup
   useEffect(() => {
     mountedRef.current = true;
+    // Sound is a single app-wide setting now (Progress page), not a
+    // per-drill toggle — read it once on launch instead of always
+    // defaulting to on.
+    getSettings().then((s) => { if (mountedRef.current) setSoundEnabled(s.soundEnabled !== false); });
     return () => {
       mountedRef.current = false;
       cleanupTimers();
@@ -1592,13 +1593,7 @@ export default function FingerSequencingClient() {
               <span className="text-[8px] label-tiny text-slate-500 mt-1">Time Left</span>
             </div>
 
-            {/* Sound toggle */}
-            <button
-              onClick={() => setSoundEnabled(s => { audioSynth?.setEnabled(!s); return !s; })}
-              className="absolute bottom-5 right-5 z-40 p-2 before:absolute before:top-0 before:left-0 before:-right-[14px] before:-bottom-[14px] before:content-[''] rounded-full bg-black/60 border border-white/10 text-slate-400 active:scale-90 transition-transform pointer-events-auto cursor-pointer"
-            >
-              {soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
-            </button>
+            {/* Mute toggle is rendered once by DrillWrapper (top-centre). */}
 
           </>
         )}

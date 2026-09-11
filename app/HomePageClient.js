@@ -5,14 +5,16 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { collection, limit, onSnapshot, query, where } from 'firebase/firestore';
 import {
-  ArrowRight, CheckCircle2, ChevronRight, Crown, Flag, Flame, Play, Swords,
+  ArrowRight, ChevronRight, Crown, Flame, Play, Swords,
   Target, TrendingUp
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { acceptChallenge, tierForEiq } from '../lib/challengeEngine';
 import { ARENA_ENABLED } from '../lib/featureFlags';
-import { getDailyChallenge } from '../lib/dailyChallenge';
+import { getSessionState, markSessionStarted } from '../lib/sessionFlow';
 import { getPlayerLevel, getStreak, getTopScores } from '../lib/progressStore';
+import { drillTimeHint } from '../lib/drillMeta';
+import { logEvent } from '../lib/analytics';
 import { DRILL_INDEX, byEngagement } from '../lib/drillIndex';
 import { DRILL_GROUPS, getDrillGroup, getGroupIcon } from '../lib/drillGroups';
 import DrillPreview, { hasAnimatedPreview } from '../components/DrillPreview';
@@ -49,7 +51,7 @@ const DRILL_ART = new Set([
 export default function HomePageClient() {
   const { user, db } = useAuth();
   const router = useRouter();
-  const [daily, setDaily] = useState(null);
+  const [session, setSession] = useState(null);
   const [arenaChallenges, setArenaChallenges] = useState([]);
   const [dashboardReady, setDashboardReady] = useState(false);
   // Small solo-progress summary for the home card (level/streak/best are all
@@ -59,19 +61,23 @@ export default function HomePageClient() {
   useEffect(() => {
     async function loadDashboard() {
       try {
-        const [today, lvl, streak, top] = await Promise.all([
-          getDailyChallenge(),
+        const [sess, lvl, streak, top] = await Promise.all([
+          getSessionState(),
           getPlayerLevel(),
           getStreak(),
           getTopScores(1),
         ]);
-        setDaily(today);
+        setSession(sess);
+        const bestDrill = top[0]?.drillId
+          ? (DRILL_INDEX.find(d => d.id === top[0].drillId)?.name || null)
+          : null;
         setProgress({
           level: lvl.level,
           xpInLevel: lvl.xpInLevel,
           xpToNext: lvl.xpToNext,
           streak: streak.current,
           best: top[0]?.best || 0,
+          bestDrill,
         });
       } catch (error) {
         console.error('Unable to load home dashboard', error);
@@ -80,7 +86,22 @@ export default function HomePageClient() {
       }
     }
     loadDashboard();
+
+    // A cloud restore (lib/progressCloud.js) can land just after this screen
+    // has already read its numbers — on the first open after a reinstall, that
+    // is the difference between the player seeing Level 1 and seeing the level
+    // they actually earned. Read again when it does.
+    const onRestored = () => { loadDashboard(); };
+    window.addEventListener('sd:progress-restored', onRestored);
+    return () => window.removeEventListener('sd:progress-restored', onRestored);
   }, []);
+
+  function startSession(source) {
+    if (!session?.nextDrill) return;
+    markSessionStarted().catch(() => {});
+    logEvent('session_start', { source });
+    router.push(session.nextDrill.href);
+  }
 
   useEffect(() => {
     if (!ARENA_ENABLED || !db || !user) return;
@@ -113,9 +134,10 @@ export default function HomePageClient() {
 
   // `allComplete` is `0 === 0` for an empty set, so it reads true if the day's
   // picks ever fail to build. Only a set that actually has drills can be done.
-  const dailyTotal = daily?.total || 3;
-  const dailyDone = !!daily?.allComplete && (daily?.total || 0) > 0;
-  const dailyStarted = (daily?.completedCount || 0) > 0 && !dailyDone;
+  const dailyTotal = session?.total || 3;
+  const dailyDone = !!session?.allComplete && (session?.total || 0) > 0;
+  const dailyCompleted = session?.completedCount || 0;
+  const dailyStarted = dailyCompleted > 0 && !dailyDone;
 
   async function joinArenaChallenge(challenge) {
     if (!user) {
@@ -158,12 +180,15 @@ export default function HomePageClient() {
       ` }} />
 
       <main className="relative mx-auto max-w-lg px-4 sm:px-6" style={{ paddingTop: 'calc(16px + env(safe-area-inset-top))' }}>
-        <header className="mb-7 flex items-center justify-between">
-          <div>
+        <header className="mb-5 flex items-center justify-between gap-3">
+          <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-300">SkillDrills</p>
-            <h1 className="mt-1 text-2xl font-black tracking-tight text-white">Ready to improve, {displayName}?</h1>
+            {/* Reduced from the old two-line 24px block that pushed the session
+                below the fold, but kept as a real headline — one line, still
+                bold and white so it reads as a greeting, not a footnote. */}
+            <h1 className="mt-1 truncate text-xl font-black tracking-tight text-white">Ready to improve, {displayName}?</h1>
           </div>
-          <Link href="/challenge?tab=leaderboard" aria-label="Open leaderboard" className="flex h-11 w-11 items-center justify-center rounded-xl border border-[#232433] bg-[#12131c] text-amber-400 transition-colors hover:border-[#33344a]">
+          <Link href="/challenge?tab=leaderboard" aria-label="Open leaderboard" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#232433] bg-[#12131c] text-amber-400 transition-colors hover:border-[#33344a]">
             <Crown className="h-5 w-5" />
           </Link>
         </header>
@@ -172,27 +197,82 @@ export default function HomePageClient() {
             (mounted once in AppShellClient) so there's a single notification surface
             instead of a duplicate inline card competing with it here. */}
 
-        {/* 2. Daily Challenge — a slim tap-through to /daily, not a
-             dashboard. Icon, label, a quiet state hint, chevron. The
-             three-drill breakdown and streak detail live on /daily
-             (see app/daily/DailyClient.js). Solid surfaces only — no
-             translucent / blurred "glass". */}
-        <Link href="/daily" className={`daily-banner mb-6 ${dailyDone ? 'is-done' : ''}`}>
-          <span className="daily-banner-ic">
-            {dailyDone ? <CheckCircle2 className="h-[18px] w-[18px]" /> : <Flag className="h-[18px] w-[18px]" />}
-          </span>
-          <span className="daily-banner-label">Daily Challenge</span>
-          <span className="daily-banner-state">
-            {!dashboardReady
-              ? ''
-              : dailyDone
-                ? 'Done'
-                : dailyStarted
-                  ? `${daily.completedCount}/${dailyTotal}`
-                  : 'Start'}
-          </span>
-          <ChevronRight className="daily-banner-chev" />
-        </Link>
+        {/* THE daily session — the one clear action, above the catalogue.
+            Shows what it trains, how far through it is, and a state-specific
+            button; the full breakdown + weekly goal live on /daily. Flat
+            surfaces, one violet accent (the border), no glass. */}
+        <section
+          className={`mb-6 overflow-hidden rounded-2xl border bg-[#12131c] ${dailyDone ? 'border-emerald-500/35' : 'border-violet-500/35'}`}
+        >
+          <div className="border-b border-white/5 px-4 py-3">
+            <div className="flex items-center justify-between">
+              <span className="font-display text-base tracking-wide text-white">Today&apos;s Session</span>
+              <div className="flex items-center gap-2">
+                <span className="flex gap-1.5">
+                  {Array.from({ length: dailyTotal }).map((_, i) => (
+                    <span key={i} className="h-1.5 w-1.5 rounded-full" style={{ background: i < dailyCompleted ? '#34d399' : 'rgba(255,255,255,0.16)' }} />
+                  ))}
+                </span>
+                <span className="text-[11px] font-bold tabular-nums text-slate-400">{dailyCompleted}/{dailyTotal}</span>
+              </div>
+            </div>
+            {dashboardReady && session && (
+              <p className="mt-1.5 text-[11.5px] leading-snug text-slate-400">
+                {dailyDone
+                  ? "Done for today — a fresh set unlocks at midnight."
+                  : session.purpose}
+              </p>
+            )}
+          </div>
+
+          <div className="p-4">
+            {!dashboardReady ? (
+              <div className="h-11 animate-pulse rounded-xl bg-white/[0.04]" />
+            ) : dailyDone ? (
+              <>
+                {session?.weekly && (
+                  <p className="mb-3 text-xs text-slate-300">
+                    This week: <span className="font-bold text-white">{session.weekly.completed}/{session.weekly.target}</span> sessions
+                    {!session.weekly.allDone && <span className="text-slate-400"> · {session.weekly.target - session.weekly.completed} more for this week&apos;s badge</span>}
+                  </p>
+                )}
+                <div className="flex gap-2.5">
+                  <Link href="/daily" className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-[#232433] bg-[#1a1b26] px-4 py-2.5 text-xs font-black text-violet-200 transition hover:border-[#33344a]">
+                    Review session
+                  </Link>
+                  <Link href="/progress" className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-[#232433] bg-[#1a1b26] px-4 py-2.5 text-xs font-black text-violet-200 transition hover:border-[#33344a]">
+                    <TrendingUp className="h-3.5 w-3.5" /> Progress
+                  </Link>
+                </div>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={() => startSession('home')}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-sm font-black text-white transition hover:bg-violet-500 active:scale-[.99]"
+                >
+                  <Play className="h-4 w-4 fill-current" />
+                  {dailyStarted ? `Continue — ${dailyTotal - dailyCompleted} drill${dailyTotal - dailyCompleted === 1 ? '' : 's'} left` : "Start today's session"}
+                </button>
+                {/* One row under the button: what's next on the left, the
+                    way into the full breakdown on the right. */}
+                <div className="mt-2.5 flex items-center justify-between gap-3">
+                  <p className="min-w-0 truncate text-[11px] text-slate-400">
+                    {session?.nextDrill ? (
+                      <>
+                        Next: <span className="text-slate-200">{session.nextDrill.name}</span>
+                        {session.nextDrill.timeHint ? ` · ${session.nextDrill.timeHint}` : ' · Endurance'}
+                      </>
+                    ) : null}
+                  </p>
+                  <Link href="/daily" className="flex shrink-0 items-center gap-1 text-[11px] font-semibold text-violet-300 hover:text-violet-200">
+                    Session details <ChevronRight className="h-3 w-3" />
+                  </Link>
+                </div>
+              </>
+            )}
+          </div>
+        </section>
 
         {/* 3. Category browser.
              The chips filter the drill rail directly beneath them, in place —
@@ -256,7 +336,7 @@ export default function HomePageClient() {
                       decoding="async"
                     />
                   )}
-                  <span className="dur">{drill.duration || '45s'}</span>
+                  <span className="dur">{drillTimeHint(drill.id) || '1 min+'}</span>
                   <span className="play"><Play className="h-3 w-3 fill-current" /></span>
                 </span>
                 <span className="body">
@@ -307,11 +387,17 @@ export default function HomePageClient() {
                   <StatTile label="EIQ" value={(user.eiq || 0).toLocaleString()} />
                   <StatTile label="Best score" value={progress.best.toLocaleString()} />
                 </div>
+                {/* Name the drill the best belongs to — a bare number next to
+                    Level and EIQ reads as a third profile-wide stat when it is
+                    actually one drill's high score. */}
+                {progress.bestDrill && progress.best > 0 && (
+                  <p className="mt-1.5 text-right text-[10px] text-slate-400">best is on {progress.bestDrill}</p>
+                )}
 
                 <div className="mt-3 h-1 overflow-hidden rounded-full bg-white/[.06]">
                   <div className="h-full bg-violet-500" style={{ width: `${Math.max(2, (progress.xpInLevel / 1000) * 100)}%` }} />
                 </div>
-                <p className="mt-1.5 text-[10px] text-slate-500">
+                <p className="mt-1.5 text-[10px] text-slate-400">
                   {progress.xpToNext.toLocaleString()} XP to level {progress.level + 1}
                 </p>
               </Link>

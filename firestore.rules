@@ -190,6 +190,28 @@ service cloud.firestore {
       allow delete: if request.auth != null && request.auth.uid == uid;
     }
 
+    // A player's own cloud backup of their solo progress — XP (and therefore
+    // their training level and rank badge), streak, per-drill bests, weekly
+    // badges. See lib/progressCloud.js: all of that normally lives only in the
+    // app's on-device storage, which Android deletes outright when the app is
+    // uninstalled, so it is mirrored here and restored on the next sign-in.
+    //
+    // PRIVATE, unlike users/{uid} itself. That doc is the leaderboard /
+    // opponent card and is readable by every signed-in player; this one is
+    // read by nobody but its owner, which is why it is a subcollection rather
+    // than more fields on the profile. Rules do NOT cascade into
+    // subcollections in Firestore, so without this block the catch-all at the
+    // bottom denies it — the users/{uid} rules above have no effect here.
+    //
+    // No field-level bounds: nothing here is competitive. It feeds only this
+    // player's own screens, never a leaderboard, an EIQ, or a duel outcome, so
+    // a forged value buys the forger a bigger number on their own Progress
+    // page and nothing else. (The level pushed onto the public profile for the
+    // rank badge is already self-reported the same way.)
+    match /users/{uid}/private/{docId} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
     // Username reservations — doc id is the lowercased display name, so
     // Firestore's own "a create only succeeds if the document doesn't
     // already exist" guarantee IS the uniqueness lock: two signups racing for
@@ -208,7 +230,19 @@ service cloud.firestore {
       // Google sign-in has already succeeded. Open reads here let anyone
       // enumerate every registered player name without an account.
       allow read: if request.auth != null;
-      allow create: if request.auth != null && request.resource.data.uid == request.auth.uid;
+
+      // The {name} wildcard IS the lowercased username, so the format rule
+      // can be enforced right here on the document id: 3-10 characters,
+      // lowercase letters and digits only. Matches sanitizeUsername() /
+      // validateUsername() in lib/playerIdentity.js — that pair is what the
+      // sign-up form uses, and this is the copy that a modified client
+      // cannot talk its way past. Reserving a name with a space or a
+      // zero-width character in it would produce a handle nobody can type
+      // into the Arena friend search and one that can be made to render
+      // identically to somebody else's.
+      allow create: if request.auth != null
+        && request.resource.data.uid == request.auth.uid
+        && name.matches('^[a-z0-9]{3,10}$');
 
       // A name is claimed for good. Once someone has used it, it is never
       // handed to anybody else — not after they stop playing, and not after

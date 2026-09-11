@@ -59,3 +59,14 @@ Thumbs.db
 graphify-out/
 .next-previews/
 previews-raw/
+
+# Local scratch — never belongs in the repo.
+# .design-review/ is a folder of review screenshots and drill-backups/ holds
+# dated copies of drill files taken before a risky edit. Both are working
+# material for one machine, both are megabytes of images/duplicates, and
+# neither is something a fresh checkout needs.
+.design-review/
+drill-backups/
+
+# Per-machine Claude Code settings (permissions/env for THIS checkout).
+.claude/settings.local.json

@@ -74,10 +74,43 @@ and one who sees they're far behind gives up.
 
 **Capacity after all that, on the free tier:** roughly 800 duel matches/day
 (~550 before the score sync was deleted), ~400+ duelling players/day, ~500
-Arena browsers/day, solo-only players effectively unlimited. These are DAILY
-CUMULATIVE limits — concurrency is a non-issue, Firestore allows a million
-simultaneous connections. "500 people at once" is fine; "500 people duelling
-over 24 hours" is the ceiling.
+Arena browsers/day. These are DAILY CUMULATIVE limits — concurrency is a
+non-issue, Firestore allows a million simultaneous connections. "500 people at
+once" is fine; "500 people duelling over 24 hours" is the ceiling.
+
+**Correction, 2026-09-10 — "solo players are unlimited" is no longer true.**
+PLAYING is still free and always will be: a drill run makes zero network calls,
+online or offline. But three things added since this brief was written cost
+writes for merely being signed in with the app open, whether the player duels
+or not:
+
+  - `lib/presence.js` (2026-09-08), an app-wide `online`/`lastSeen` heartbeat;
+  - the level-badge sync in `AuthContext` (2026-09-07);
+  - `lib/progressCloud.js` (2026-09-10), the cloud progress backup.
+
+Counted properly, a signed-in solo player cost ~11 writes per session, of which
+presence was ~6 — the biggest single line on the whole budget. Two fixes
+shipped the same day:
+
+  1. **The duplicate presence writer is gone.** `AuthContext` had its own
+     visibilitychange/beforeunload pair writing the SAME two fields as
+     `presence.js` on the SAME events, so every foreground/background was
+     billed twice over — and each of those writes ALSO cost a read, because the
+     profile `onSnapshot` listener watches the very doc being written.
+  2. **Presence now only runs for players who have friends.** It is read by
+     nothing but the Arena's Friends tab (green dot + Duel button gate), so for
+     an empty friends list every one of those writes was read by nobody.
+     `AppShellClient` gates `startPresence` on a friend count cached by the
+     Arena's own friends listener (`setKnownFriendCount`).
+
+Known trade-off of (2): a friendless player stops advertising presence 8
+minutes after sign-in, so they drop out of OTHER players' global "Online"
+opponent list unless they are actually sitting on the Arena screen — which has
+its own heartbeat, and is exactly when they want a duel anyway.
+
+**Solo-only capacity now: ~4,000-5,000 players/day at one session each**
+(~4 writes per session), versus ~1,700 before these two fixes. Writes still
+bind before reads.
 
 ### What to do, in this order
 
@@ -221,7 +254,7 @@ Deploy with:
 | Can it crash from too many users? | No. Static app, solo play is offline. |
 | What breaks then? | Firestore refuses requests when the daily free quota is gone. |
 | Will Crashlytics tell me? | **No.** Check Firestore → Usage instead. |
-| How many can it handle free? | ~800 duels/day. Solo players: unlimited. |
+| How many can it handle free? | ~800 duels/day, or ~4,000-5,000 solo players/day. PLAYING is free; being signed in with the app open is what costs. |
 | Concurrent user limit? | Effectively none. The limits are daily totals. |
 | First thing to do when it breaks? | Switch to Blaze + set a budget alert. |
 | Could I get a surprise bill? | Very unlikely — no Cloud Functions, no Storage. |

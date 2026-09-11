@@ -49,7 +49,16 @@ export const viewport = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en" className={`${inter.variable} ${anton.variable} ${ibmPlexMono.variable} scroll-smooth`}>
+    // suppressHydrationWarning: the Android/ColorOS WebView injects inline
+    // --safe-area-inset-* custom properties onto <html> before React hydrates,
+    // which trips a dev-only hydration mismatch on this element. The attribute
+    // silences the warning for <html>'s own attributes only (not its subtree),
+    // and has no effect on the production static export.
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={`${inter.variable} ${anton.variable} ${ibmPlexMono.variable} scroll-smooth`}
+    >
       <head>
         {/* No Google Fonts preconnect here on purpose. next/font SELF-HOSTS
             Inter, Anton and IBM Plex Mono into /_next/static/media at build time, so

@@ -18,7 +18,7 @@ import {
   cancelFriendRequest, removeFriend, friendPairId,
   listenIncomingRequests, listenOutgoingRequests, listenFriends,
 } from '../../lib/friends';
-import { isPresenceFresh } from '../../lib/presence';
+import { isPresenceFresh, setKnownFriendCount } from '../../lib/presence';
 
 // Leaderboard results survive tab switches and remounts for a minute. Opening
 // the tab used to mean sitting on a spinner through a full network round trip
@@ -79,6 +79,28 @@ const MATCHMAKING_INVITE_MAX_AGE_MS = 90 * 1000;
 // while you were already waiting, and their own join-time scan catches that
 // pairing anyway, from the other side.
 const MATCHMAKING_POLL_MS = 8000;
+
+// How long the side that ISN'T the designated initiator waits before sending
+// the invite itself.
+//
+// Pairing is decided by a uid tie-break (only the lexicographically lower uid
+// of a pair sends the challenge) so two clients spotting each other at the
+// same instant can't both mint a match. That guard is correct, but on its own
+// it made HALF of all pairings slow, and for a reason no player could ever
+// guess: whoever joins second scans immediately and finds the player already
+// waiting — but if the second joiner holds the HIGHER uid it is not allowed to
+// act on what it just found. It went back to sleep, and the match then waited
+// on the FIRST player's 8-second poll to come round and notice the same pair
+// from the other side. So the duel you were matched for took up to 8 extra
+// seconds to appear, entirely at random, on a coin flip of user ids.
+//
+// After this grace the passive side sends the invite regardless. The grace is
+// what still prevents the simultaneous double-send: the designated initiator
+// gets a clear first go, and this only fires if that invite never arrived.
+// It cannot produce a duplicate afterwards either, because whoever accepts an
+// invite tears their own search timers down and leaves the queue, so the
+// other side's later poll never runs.
+const MATCHMAKING_TAKEOVER_MS = 1800;
 
 // Presence freshness. `online: true` is written at sign-in and cleared on
 // visibilitychange/beforeunload — neither of which fires when Android kills a
@@ -196,6 +218,13 @@ export default function ChallengeArenaClient() {
   // Keeps this player's queue entry fresh for the whole search — see
   // refreshMatchmakingQueue.
   const matchmakingHeartbeatRef = useRef(null);
+  // One-shot timer for the passive-side takeover above.
+  const matchmakingTakeoverRef = useRef(null);
+  // Mirror of matchmakingState readable from inside timer callbacks, which
+  // close over a stale copy of the state value itself. The takeover timer
+  // fires ~2s after it was armed and must not send an invite into a search
+  // that has since been answered or cancelled.
+  const matchmakingStateRef = useRef('idle');
   // Elapsed search seconds, readable from inside the poll callback — drives
   // the widening EIQ search window (see matchmakingEiqRange).
   const matchmakingElapsedRef = useRef(0);
@@ -519,7 +548,15 @@ export default function ChallengeArenaClient() {
   useEffect(() => {
     if (!ARENA_ENABLED || !db || !uid) return;
     const unsubs = [
-      listenFriends(db, uid, setFriends),
+      // Also cache how many friends this player has. This screen's listener is
+      // the ONLY place friends are ever loaded, so it is the only place that
+      // can answer it — and the app-wide presence heartbeat is gated on the
+      // answer, because presence is read by nothing but the Friends surfaces
+      // below (see lib/presence.js).
+      listenFriends(db, uid, (list) => {
+        setFriends(list);
+        setKnownFriendCount(list.length).catch(() => {});
+      }),
       listenIncomingRequests(db, uid, setIncomingFriendReqs),
       listenOutgoingRequests(db, uid, setOutgoingFriendReqs),
     ];
@@ -642,6 +679,7 @@ export default function ChallengeArenaClient() {
     if (matchmakingTickRef.current) { clearInterval(matchmakingTickRef.current); matchmakingTickRef.current = null; }
     if (matchmakingTimeoutRef.current) { clearTimeout(matchmakingTimeoutRef.current); matchmakingTimeoutRef.current = null; }
     if (matchmakingHeartbeatRef.current) { clearInterval(matchmakingHeartbeatRef.current); matchmakingHeartbeatRef.current = null; }
+    if (matchmakingTakeoverRef.current) { clearTimeout(matchmakingTakeoverRef.current); matchmakingTakeoverRef.current = null; }
   };
 
   const cancelMatchmaking = async () => {
@@ -664,11 +702,33 @@ export default function ChallengeArenaClient() {
     if (user) leaveMatchmakingQueue(user.uid).catch(() => {});
   };
 
-  const attemptMatchmakingScan = async (drill) => {
+  // `takeover` is the passive side acting after its grace period — see
+  // MATCHMAKING_TAKEOVER_MS. A normal scan still respects the uid tie-break.
+  const attemptMatchmakingScan = async (drill, takeover = false) => {
     // Ranked pairing: tight ±300 EIQ window for the first 15s, then
     // progressively wider so a small player pool still finds matches.
     const candidate = await scanForMatch(user, drill.slug, matchmakingEiqRange(matchmakingElapsedRef.current));
-    if (!candidate || user.uid >= candidate.uid) return; // not found, or the other side will initiate
+    if (!candidate) return;
+
+    if (!takeover && user.uid >= candidate.uid) {
+      // We found somebody but it is the other side's turn to send. Give them
+      // a short head start, then send it ourselves if nothing arrived — the
+      // alternative is sitting out a full poll interval for a match that is
+      // already sitting right there. Re-armed on each scan, and torn down the
+      // moment anything moves the search on (stopMatchmakingTimers).
+      if (!matchmakingTakeoverRef.current) {
+        matchmakingTakeoverRef.current = setTimeout(() => {
+          matchmakingTakeoverRef.current = null;
+          // Only if we are still actually searching. The other side's invite
+          // may have landed and been auto-accepted while this was pending,
+          // and minting a second match on top of that would route the pair
+          // into two different duels.
+          if (matchmakingStateRef.current !== 'searching') return;
+          attemptMatchmakingScan(drill, true);
+        }, MATCHMAKING_TAKEOVER_MS);
+      }
+      return;
+    }
 
     stopMatchmakingTimers();
     try {
@@ -745,6 +805,8 @@ export default function ChallengeArenaClient() {
     }, 20000);
     matchmakingTimeoutRef.current = setTimeout(() => { cancelMatchmaking(); }, 60000);
   };
+
+  useEffect(() => { matchmakingStateRef.current = matchmakingState; }, [matchmakingState]);
 
   // Losing the connection mid-search can't produce a match, and none of the
   // polling can report the failure — scanForMatch just returns nothing while
@@ -1694,26 +1756,30 @@ export default function ChallengeArenaClient() {
                 <h1 className="font-display text-[28px] text-white">Reflex Arena</h1>
               </div>
 
-              {/* Sub-tab controllers */}
+              {/* Sub-tab controllers.
+                  The first tab used to also read "Online (N)", the exact same
+                  label as the Online/Friends toggle it contains — two controls,
+                  one word, stacked. It's "Duel" now: the place you go to find
+                  someone and start a match. */}
               <div className="flex bg-[#0e0f16] p-1 border border-[#232433] rounded-2xl">
                 <button
                   onClick={() => router.push('/challenge')}
                   className={`flex-1 py-2 px-3 rounded-xl text-[11px] font-black transition duration-200 flex items-center justify-center gap-1 cursor-pointer ${
-                    activeTab === 'players' 
-                      ? 'bg-[#1a1b26] text-white border border-[#232433]' 
-                      : 'text-neutral-500 hover:text-white'
+                    activeTab === 'players'
+                      ? 'bg-[#1a1b26] text-white border border-[#232433]'
+                      : 'text-neutral-400 hover:text-white'
                   }`}
                 >
-                  <Users className="w-3.5 h-3.5" />
-                  Online ({freshPlayers.length})
+                  <Swords className="w-3.5 h-3.5" />
+                  Duel
                 </button>
-                
+
                 <button
                   onClick={() => router.push('/challenge?tab=invites')}
                   className={`flex-1 py-2 px-3 rounded-xl text-[11px] font-black transition duration-200 flex items-center justify-center gap-1 relative cursor-pointer ${
-                    activeTab === 'invites' 
-                      ? 'bg-[#1a1b26] text-white border border-[#232433]' 
-                      : 'text-neutral-500 hover:text-white'
+                    activeTab === 'invites'
+                      ? 'bg-[#1a1b26] text-white border border-[#232433]'
+                      : 'text-neutral-400 hover:text-white'
                   }`}
                 >
                   <Mail className="w-3.5 h-3.5" />
@@ -1726,9 +1792,9 @@ export default function ChallengeArenaClient() {
                 <button
                   onClick={() => router.push('/challenge?tab=results')}
                   className={`flex-1 py-2 px-3 rounded-xl text-[11px] font-black transition duration-200 flex items-center justify-center gap-1 cursor-pointer ${
-                    activeTab === 'results' 
-                      ? 'bg-[#1a1b26] text-white border border-[#232433]' 
-                      : 'text-neutral-500 hover:text-white'
+                    activeTab === 'results'
+                      ? 'bg-[#1a1b26] text-white border border-[#232433]'
+                      : 'text-neutral-400 hover:text-white'
                   }`}
                 >
                   <BarChart3 className="w-3.5 h-3.5" />
@@ -1939,18 +2005,33 @@ export default function ChallengeArenaClient() {
 
                   {/* Online Opponents list */}
                   {playersScope === 'online' && (filteredPlayers.length === 0 ? (
-                    <div className="rounded-2xl border border-[#232433] bg-[#12131c] px-5 py-8 text-center">
-                      <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-2xl border border-[#232433] bg-[#1a1b26] text-neutral-500">
+                    <div className="rounded-2xl border border-[#232433] bg-[#12131c] px-5 py-7 text-center">
+                      <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-2xl border border-[#232433] bg-[#1a1b26] text-neutral-400">
                         <Users className="h-5 w-5" />
                       </div>
                       <h3 className="font-display text-lg text-white">
                         {searchTerm.trim() ? 'No match' : 'Nobody else online'}
                       </h3>
-                      <p className="mx-auto mt-1 max-w-xs text-[11px] leading-relaxed text-neutral-500">
+                      <p className="mx-auto mt-1 max-w-xs text-[11px] leading-relaxed text-neutral-400">
                         {searchTerm.trim()
                           ? 'No online player by that name right now.'
-                          : 'Post an invite above — it stays up for anyone who comes online.'}
+                          : 'Post an invite above — it stays up for anyone who comes online. Or play the same drills solo while you wait:'}
                       </p>
+                      {!searchTerm.trim() && (() => {
+                        // A real, immediately-playable alternative — the solo
+                        // version of a duel drill, rotated by the day. Not a
+                        // fake opponent, not a queue: just a drill to play now.
+                        const soloPick = DUEL_DRILLS[new Date().getDate() % DUEL_DRILLS.length];
+                        return soloPick ? (
+                          <button
+                            onClick={() => router.push(`/drills/${soloPick.slug}`)}
+                            className="mx-auto mt-3 flex items-center gap-2 rounded-xl border border-[#232433] bg-[#1a1b26] px-4 py-2.5 text-xs font-black text-violet-300 transition hover:border-[#33344a] hover:text-violet-200"
+                          >
+                            <Target className="h-3.5 w-3.5" />
+                            Practice {soloPick.name} solo
+                          </button>
+                        ) : null;
+                      })()}
                     </div>
                   ) : (
                     <div className="grid gap-3">

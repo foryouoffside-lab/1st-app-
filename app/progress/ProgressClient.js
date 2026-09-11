@@ -9,18 +9,21 @@ import Link from 'next/link';
 import AvatarEditor from 'react-avatar-editor';
 import {
   Volume2, VolumeOff, ChevronRight, LogOut, ShieldAlert, Camera,
-  FileText
+  FileText, TrendingUp, TrendingDown, Minus, Lock, Bell, BellOff
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { doc, updateDoc } from 'firebase/firestore';
-import { 
-  getStreak, getPlayerLevel, getTotalSessions, getDrillsPlayed, 
-  getTopScores, clearAllProgress, getSettings, updateSettings 
+import {
+  getStreak, getPlayerLevel, getTotalSessions, getDrillsPlayed,
+  clearAllProgress, getSettings, updateSettings
 } from '../../lib/progressStore';
 import { Storage } from '../../lib/storage';
 import { DRILL_INDEX } from '../../lib/drillIndex';
-import { RANK_TIERS, getRankTier } from '../../lib/leaderboard';
 import { DRILL_GROUPS, getDrillGroup } from '../../lib/drillGroups';
+import { getDrillTrends, getHeadlineTrend } from '../../lib/progressInsights';
+import { resolveAchievements } from '../../lib/achievements';
+import { getWeeklyGoal } from '../../lib/weeklyGoal';
+import { getReminderSettings, setReminderPref } from '../../lib/dailyReminder';
 import LevelBadge from '../../components/LevelBadge';
 
 const RADAR_CATEGORIES = DRILL_GROUPS.map(g => ({ slug: g.id, name: g.name }));
@@ -40,7 +43,6 @@ export default function ProgressClient() {
   const [streak,   setStreak]   = useState({ current: 0, longest: 0 });
   const [sessions, setSessions] = useState(0);
   const [drillsP,  setDrillsP]  = useState(0);
-  const [bestCombo, setBestCombo] = useState(0);
   const [sound,    setSound]    = useState(true);
   const [cleared,  setCleared]  = useState(false);
 
@@ -50,16 +52,23 @@ export default function ProgressClient() {
 
   const [radarAxes, setRadarAxes] = useState([]);
   const [heatmapCells, setHeatmapCells] = useState([]);
-  const [unlockedBadges, setUnlockedBadges] = useState(new Set());
+  const [trends, setTrends] = useState([]);
+  const [headline, setHeadline] = useState(null);
+  const [achievements, setAchievements] = useState(null);
+  const [reminder, setReminder] = useState(null);
 
   const displayName = user?.displayName || guestName;
 
   useEffect(() => {
     async function load() {
-      const [lv, s, sess, dp, ts, settings, history, scores] = await Promise.all([
+      const [lv, s, sess, dp, settings, history, scores, drillTrends, headlineTrend, weekly, rem] = await Promise.all([
         getPlayerLevel(), getStreak(), getTotalSessions(),
-        getDrillsPlayed(), getTopScores(10), getSettings(),
-        Storage.getJSON('sd_history', {}), Storage.getJSON('sd_scores', {})
+        getDrillsPlayed(), getSettings(),
+        Storage.getJSON('sd_history', {}), Storage.getJSON('sd_scores', {}),
+        getDrillTrends().catch(() => []),
+        getHeadlineTrend().catch(() => null),
+        getWeeklyGoal().catch(() => null),
+        getReminderSettings().catch(() => null),
       ]);
 
       setLevel(lv.level);
@@ -70,6 +79,15 @@ export default function ProgressClient() {
       setSessions(sess);
       setDrillsP(dp);
       setSound(settings.soundEnabled ?? true);
+      setTrends(drillTrends);
+      setHeadline(headlineTrend);
+      setReminder(rem);
+      setAchievements(resolveAchievements({
+        sessions: sess,
+        drillsPlayed: dp,
+        longestStreak: s.longest || 0,
+        weeksCompleted: weekly?.weeksCompleted || 0,
+      }));
 
       // Load guest name
       if (typeof window !== 'undefined') {
@@ -77,19 +95,11 @@ export default function ProgressClient() {
         if (saved) setGuestName(saved);
       }
 
-      // Calculate best combo from history
-      const maxCombo = Object.values(history || {}).reduce((max, list) => {
-        const listMax = list.reduce((m, item) => Math.max(m, item.combo || 0), 0);
-        return Math.max(max, listMax);
-      }, 0);
-      setBestCombo(maxCombo);
-
-      // Calculate radar chart axes
+      // Radar axes: unique drills touched + total sessions per category.
       const categoryData = {};
       RADAR_CATEGORIES.forEach(c => {
         categoryData[c.slug] = { uniquePlayed: 0, totalSessions: 0 };
       });
-
       Object.entries(scores || {}).forEach(([drillId, data]) => {
         const drill = DRILL_INDEX.find(d => d.id === drillId);
         const slug = drill ? getDrillGroup(drill) : 'attention';
@@ -98,28 +108,19 @@ export default function ProgressClient() {
           categoryData[slug].totalSessions += (data.attempts || 0);
         }
       });
-
       const activeAxes = RADAR_CATEGORIES.map(c => {
         const stats = categoryData[c.slug];
         const value = Math.min(100, (stats.uniquePlayed * 25) + (stats.totalSessions * 2.5));
-        return {
-          ...c,
-          value,
-          totalSessions: stats.totalSessions
-        };
+        return { ...c, value, totalSessions: stats.totalSessions };
       }).filter(axis => axis.totalSessions > 0);
 
       let finalAxes = [...activeAxes];
       if (finalAxes.length < 3) {
-        const defaults = ['fps', 'cognitive', 'memory'];
+        const defaults = ['attention', 'focus', 'memory'];
         defaults.forEach(slug => {
           if (!finalAxes.some(a => a.slug === slug)) {
             const cat = RADAR_CATEGORIES.find(c => c.slug === slug);
-            finalAxes.push({
-              ...cat,
-              value: 0,
-              totalSessions: 0
-            });
+            if (cat) finalAxes.push({ ...cat, value: 0, totalSessions: 0 });
           }
         });
       }
@@ -155,17 +156,16 @@ export default function ProgressClient() {
         });
       }
       setHeatmapCells(tempCells);
-
-      // Calculate unlocked badges based on best scores
-      const unlocked = new Set();
-      ts.forEach(item => {
-        const pct = Math.min(100, Math.round(item.best / 10));
-        const tier = getRankTier(pct);
-        if (tier) unlocked.add(tier.id);
-      });
-      setUnlockedBadges(unlocked);
     }
     load();
+
+    // Re-read when a cloud restore lands (lib/progressCloud.js) — on the first
+    // open after a reinstall this screen can otherwise sit on the empty
+    // pre-restore numbers, which is precisely the screen the player opens to
+    // check their level and rank badge survived.
+    const onRestored = () => { load(); };
+    window.addEventListener('sd:progress-restored', onRestored);
+    return () => window.removeEventListener('sd:progress-restored', onRestored);
   }, [cleared]);
 
   async function toggleSound() {
@@ -173,6 +173,24 @@ export default function ProgressClient() {
     setSound(next);
     await updateSettings({ soundEnabled: next });
   }
+
+  async function toggleReminder() {
+    if (!reminder) return;
+    const next = await setReminderPref({ enabled: !reminder.enabled });
+    setReminder(next);
+  }
+
+  async function changeReminderTime(value) {
+    // <input type="time"> gives "HH:MM"
+    const [h, m] = String(value || '').split(':').map(Number);
+    if (!Number.isInteger(h) || !Number.isInteger(m)) return;
+    const next = await setReminderPref({ hour: h, minute: m });
+    setReminder(next);
+  }
+
+  const reminderTimeValue = reminder
+    ? `${String(reminder.hour).padStart(2, '0')}:${String(reminder.minute).padStart(2, '0')}`
+    : '18:00';
 
   const handleEditName = () => {
     setTempName(displayName);
@@ -519,23 +537,64 @@ export default function ProgressClient() {
           </div>
         </div>
 
-        {/* ── Stats ── */}
-        <div className="p-stats">
-          <div>
-            <b>{drillsP}</b>
-            <span>Drills Played</span>
+        {/* ── Activity (how much you've trained — NOT how well) ── */}
+        <div>
+          <div className="section-label">Activity</div>
+          <div className="grid grid-cols-3 gap-2.5">
+            <div className="rounded-2xl border border-[#232433] bg-[#12131c] p-3 text-center">
+              <b className="block font-hud text-lg font-semibold tabular-nums text-white">{sessions}</b>
+              <span className="mt-0.5 block text-[9px] font-black uppercase tracking-[0.08em] text-[var(--text-faint)]">Sessions</span>
+            </div>
+            <div className="rounded-2xl border border-[#232433] bg-[#12131c] p-3 text-center">
+              <b className="block font-hud text-lg font-semibold tabular-nums text-white">{streak.current}d</b>
+              <span className="mt-0.5 block text-[9px] font-black uppercase tracking-[0.08em] text-[var(--text-faint)]">Day streak</span>
+            </div>
+            <div className="rounded-2xl border border-[#232433] bg-[#12131c] p-3 text-center">
+              <b className="block font-hud text-lg font-semibold tabular-nums text-white">{drillsP}/10</b>
+              <span className="mt-0.5 block text-[9px] font-black uppercase tracking-[0.08em] text-[var(--text-faint)]">Drills tried</span>
+            </div>
           </div>
-          <div>
-            <b>{streak.current}d</b>
-            <span>Day Streak</span>
-          </div>
-          <div>
-            <b>{bestCombo}</b>
-            <span>Best Combo</span>
-          </div>
-          <div>
-            <b>{sessions}</b>
-            <span>Total Sessions</span>
+        </div>
+
+        {/* ── Your scores (performance — kept separate from Activity) ── */}
+        <div>
+          <div className="section-label">Your scores</div>
+          <div className="rounded-2xl border border-[#232433] bg-[#12131c] p-4">
+            {headline && (
+              <p className={`text-[12.5px] leading-snug ${headline.enough ? 'text-slate-200' : 'text-slate-400'}`}>
+                {headline.text}
+              </p>
+            )}
+
+            {trends.some(t => t.enough) ? (
+              <div className="mt-3 space-y-1.5">
+                {trends.filter(t => t.enough).slice(0, 6).map(t => {
+                  const Icon = t.direction === 'up' ? TrendingUp : t.direction === 'down' ? TrendingDown : Minus;
+                  const col = t.direction === 'up' ? 'text-emerald-400' : t.direction === 'down' ? 'text-orange-400' : 'text-slate-400';
+                  return (
+                    <div key={t.drillId} className="flex items-center justify-between gap-3 rounded-lg bg-white/[0.02] px-2.5 py-2">
+                      <span className="min-w-0 flex-1 truncate text-[12px] text-slate-200">{t.name}</span>
+                      <span className="shrink-0 text-[11px] tabular-nums text-slate-400">
+                        {t.earlier.toLocaleString()} → <span className="text-slate-200">{t.recent.toLocaleString()}</span>
+                      </span>
+                      <span className={`flex shrink-0 items-center gap-0.5 text-[11px] font-bold tabular-nums ${col}`}>
+                        <Icon className="h-3 w-3" />
+                        {t.deltaPct > 0 ? '+' : ''}{t.deltaPct}%
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="mt-2 text-[11px] text-slate-500">
+                Each drill needs about {8} scored runs before a recent-vs-earlier comparison is meaningful.
+              </p>
+            )}
+
+            <p className="mt-3 border-t border-white/5 pt-2.5 text-[10px] leading-relaxed text-slate-500">
+              &ldquo;Recent&rdquo; is the median of your last 5 runs, compared with the 5 before them — so one lucky run
+              doesn&apos;t read as progress. These are game-score trends, not a measure of real-world ability.
+            </p>
           </div>
         </div>
 
@@ -557,11 +616,7 @@ export default function ProgressClient() {
           <div className="bg-[#12131c] border border-neutral-800 rounded-2xl p-5">
             <div className="heatmap">
               {heatmapCells.map((cell, idx) => (
-                <i 
-                  key={idx} 
-                  className={cell.levelClass} 
-                  title={cell.title} 
-                />
+                <i key={idx} className={cell.levelClass} title={cell.title} />
               ))}
             </div>
             <div className="heatmap-legend">
@@ -575,26 +630,53 @@ export default function ProgressClient() {
           </div>
         </div>
 
-        {/* ── Achievements Badges ── */}
-        <div>
-          <div className="section-label">Achievements</div>
-          <div className="p-badges">
-            {RANK_TIERS.map(tier => {
-              const isUnlocked = unlockedBadges.has(tier.id) || (tier.id === 'practice' && drillsP > 0);
-              const Icon = tier.icon;
-              return (
-                <span
-                  key={tier.id}
-                  className={`p-badge ${tier.bg} ${tier.border} ${tier.color} border transition duration-200 ${isUnlocked ? 'opacity-100' : 'opacity-25'}`}
-                  title={isUnlocked ? `Unlocked! Achieved on a drill.` : `Locked. Achieve ${tier.minScore}% to unlock.`}
+        {/* ── Achievements ── */}
+        {achievements && (
+          <div>
+            <div className="section-label">Achievements · {achievements.earnedCount}/{achievements.total}</div>
+
+            {achievements.next && (
+              <div className="mb-3 rounded-2xl border border-violet-500/25 bg-violet-500/[0.06] p-3.5">
+                <div className="flex items-center gap-2.5">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-violet-500/30 bg-violet-500/10 text-violet-300">
+                    <achievements.next.icon className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-bold text-white">Next: {achievements.next.name}</p>
+                    <p className="text-[10.5px] text-slate-400">{achievements.next.requirement}</p>
+                  </div>
+                  <span className="shrink-0 text-[11px] font-black tabular-nums text-violet-300">
+                    {achievements.next.current}/{achievements.next.target}
+                  </span>
+                </div>
+                <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/[.06]">
+                  <div className="h-full bg-violet-500" style={{ width: `${Math.max(3, achievements.next.pct)}%` }} />
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-2">
+              {achievements.list.map(a => (
+                <div
+                  key={a.id}
+                  className={`flex items-center gap-2.5 rounded-xl border p-2.5 ${
+                    a.earned ? 'border-amber-500/25 bg-amber-500/[0.06]' : 'border-[#232433] bg-[#12131c]'
+                  }`}
                 >
-                  <Icon className="w-3 h-3" />
-                  <span>{tier.name}</span>
-                </span>
-              );
-            })}
+                  <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${a.earned ? 'text-amber-400' : 'text-slate-600'}`}>
+                    {a.earned ? <a.icon className="h-4 w-4" /> : <Lock className="h-3.5 w-3.5" />}
+                  </span>
+                  <div className="min-w-0">
+                    <p className={`truncate text-[11px] font-bold ${a.earned ? 'text-white' : 'text-slate-300'}`}>{a.name}</p>
+                    <p className="truncate text-[9.5px] tabular-nums text-slate-500">
+                      {a.earned ? 'Earned' : `${a.current} / ${a.target} · ${a.short}`}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* ── Account settings ── */}
         <div>
@@ -607,14 +689,46 @@ export default function ProgressClient() {
                 {sound ? <Volume2 className="w-4 h-4 text-violet-400" /> : <VolumeOff className="w-4 h-4 text-neutral-500" />}
                 <span>Sound Effects</span>
               </div>
-              <button 
+              <button
                 onClick={toggleSound}
                 className="w-10 h-6 rounded-full transition-colors duration-200 relative cursor-pointer"
                 style={{ background: sound ? '#6366f1' : 'rgba(255,255,255,0.1)' }}
               >
-                <div 
+                <div
                   className="absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform duration-200"
                   style={{ transform: sound ? 'translateX(18px)' : 'translateX(2px)' }}
+                />
+              </button>
+            </div>
+
+            {/* Daily reminder — optional, at a time the player picks. Off ->
+                nothing is scheduled; on -> a single notification for the next
+                time the session is open (see lib/dailyReminder.js). */}
+            <div className="acct-row justify-between">
+              <div className="flex items-center gap-3">
+                {reminder?.enabled ? <Bell className="w-4 h-4 text-violet-400" /> : <BellOff className="w-4 h-4 text-neutral-500" />}
+                <div>
+                  <span>Daily reminder</span>
+                  {reminder?.enabled && (
+                    <input
+                      type="time"
+                      value={reminderTimeValue}
+                      onChange={(e) => changeReminderTime(e.target.value)}
+                      className="ml-2 rounded-md border border-[#232433] bg-[#0e0f16] px-1.5 py-0.5 text-[11px] text-slate-200 focus:border-violet-500/50 focus:outline-none"
+                      aria-label="Reminder time"
+                    />
+                  )}
+                </div>
+              </div>
+              <button
+                onClick={toggleReminder}
+                disabled={!reminder}
+                className="relative h-6 w-10 rounded-full transition-colors duration-200 disabled:opacity-40"
+                style={{ background: reminder?.enabled ? '#6366f1' : 'rgba(255,255,255,0.1)' }}
+              >
+                <div
+                  className="absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform duration-200"
+                  style={{ transform: reminder?.enabled ? 'translateX(18px)' : 'translateX(2px)' }}
                 />
               </button>
             </div>

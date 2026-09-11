@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { X, Swords } from 'lucide-react';
 import { useChallenge } from '../contexts/ChallengeContext';
+import { useAuth } from '../contexts/AuthContext';
 
 // An invite older than this is never auto-joined, however its status reads — a
 // second safety net behind the transition check below.
@@ -17,6 +18,7 @@ const MAX_AUTO_JOIN_AGE_MS = 3 * 60 * 1000;
 
 export default function ChallengeStatusToast() {
   const { outgoingChallenge } = useChallenge();
+  const { user } = useAuth();
   const router = useRouter();
   const [declinedNotice, setDeclinedNotice] = useState(null);
   // Last status we actually OBSERVED per challenge id, so we can tell a live
@@ -25,7 +27,7 @@ export default function ChallengeStatusToast() {
 
   useEffect(() => {
     if (!outgoingChallenge) return;
-    const { id, status, drillSlug, toName, createdAt, withdrawnBySender } = outgoingChallenge;
+    const { id, status, drillSlug, toName, createdAt, withdrawnBySender, cancelledBy } = outgoingChallenge;
 
     const previousStatus = seenStatusRef.current.get(id);
     if (previousStatus === status) return;
@@ -51,15 +53,15 @@ export default function ChallengeStatusToast() {
 
     if (status === 'accepted') {
       router.push(`/drills/${drillSlug}?challengeId=${id}`);
-    } else if (status === 'declined' && !withdrawnBySender) {
+    } else if (status === 'declined' && !withdrawnBySender && cancelledBy !== user?.uid) {
       // `withdrawnBySender` means WE cancelled this invite — see
       // withdrawChallenge. A cancellation and a decline both land as
       // status:'declined', so without this check the sender's own Cancel
       // Request came back to them as "Global Arena Pool declined your duel"
       // a moment later, which is the opposite of what happened.
-      setDeclinedNotice({ id, toName });
+      setDeclinedNotice({ id, toName, left: Boolean(cancelledBy) });
     }
-  }, [outgoingChallenge, router]);
+  }, [outgoingChallenge, router, user?.uid]);
 
   // The decline notice dismisses itself — it carries no action, so there is
   // nothing lost by letting it slide away on its own. The X stays for anyone
@@ -78,7 +80,8 @@ export default function ChallengeStatusToast() {
         <div className="flex items-center gap-2.5 min-w-0">
           <Swords className="w-4 h-4 text-red-400 shrink-0" />
           <p className="text-xs text-neutral-200 min-w-0 truncate">
-            <strong className="text-white">{declinedNotice.toName || 'Your opponent'}</strong> declined your duel.
+            <strong className="text-white">{declinedNotice.toName || 'Your opponent'}</strong>{' '}
+            {declinedNotice.left ? 'left the duel.' : 'declined your duel.'}
           </p>
         </div>
         <button
