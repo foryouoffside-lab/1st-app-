@@ -91,6 +91,11 @@ const MATCH_PLAYING_FALLBACK_MS = 1500;
 // and it still hasn't landed, and how long to keep trying before telling the
 // player the match isn't going to start. See effect 2c.
 const MATCH_START_RETRY_MS = 1200;
+
+// Retries for the "I'm here" write that admits a player to the match. Three
+// attempts at 1.5s/3s finish inside the 30s lobby wait with room to spare.
+const READY_ATTEMPTS = 3;
+const READY_RETRY_MS = 1500;
 const COUNTDOWN_STALL_MS = 12000;
 
 // How recent a player's presence heartbeat has to be for them to still count
@@ -286,8 +291,9 @@ export default function DrillWrapper({
   }, [db, user, showInviteDrawer]);
 
   // 2. Check if challenge mode is active and set role
+  const duelUserUid = user?.uid;
   useEffect(() => {
-    if (!challengeId || !db || !user) return;
+    if (!challengeId || !db || !duelUserUid) return;
 
     setIsChallengeMode(true);
     const challengeRef = doc(db, 'challenges', challengeId);
@@ -306,7 +312,7 @@ export default function DrillWrapper({
       lastChallengeStatusRef.current = data.status;
       setChallengeData(data);
 
-      const host = data.fromUid === user.uid;
+      const host = data.fromUid === duelUserUid;
       setIsHost(host);
       setOpponentName(host ? data.toName : data.fromName);
       const nextOpponentPhoto = host ? data.toPhoto : data.fromPhoto;
@@ -375,7 +381,7 @@ export default function DrillWrapper({
         // console error. 'declined' is included for the same reason: there's
         // nothing left to ready up for.
         if (challengeData.status === 'completed' || challengeData.status === 'declined') return;
-        const isHost = challengeData.fromUid === user.uid;
+        const isHost = challengeData.fromUid === duelUserUid;
 
         const readyUpdates = {};
         if (isHost && !challengeData.fromReady) {
@@ -389,12 +395,38 @@ export default function DrillWrapper({
         }
       } catch (err) {
         console.error("Failed to mark player as ready:", err);
+        throw err;
       }
     };
-    markAsReady();
 
-    return () => unsubscribe();
-  }, [challengeId, db, user]);
+    // Retried, because this ONE write is what admits the player to the match.
+    //
+    // It ran once and swallowed its own error. A single dropped request — the
+    // usual phone reasons, a cell handoff or a socket that hadn't reconnected
+    // after the app came to the foreground — meant `fromReady`/`toReady` was
+    // never set, so ensureMatchStart's "are both players ready?" guard could
+    // never pass. Both players then sat in the lobby for the full 30-second
+    // wait and were told the OTHER one had failed to load, which was wrong and
+    // unfixable from either side: no button on that screen retries this.
+    //
+    // Spaced out to comfortably outlast a blip while still finishing well
+    // inside LOBBY_WAIT_SECONDS, so a recovered write still starts the match
+    // rather than landing after the lobby has already given up.
+    let readyCancelled = false;
+    let readyRetryTimer;
+    const attemptReady = async (attempt = 1) => {
+      if (readyCancelled) return;
+      try {
+        await markAsReady();
+      } catch {
+        if (attempt >= READY_ATTEMPTS || readyCancelled) return;
+        readyRetryTimer = setTimeout(() => attemptReady(attempt + 1), READY_RETRY_MS * attempt);
+      }
+    };
+    attemptReady();
+
+    return () => { readyCancelled = true; clearTimeout(readyRetryTimer); unsubscribe(); };
+  }, [challengeId, db, duelUserUid, drillSlug]);
 
   // The duel result card is portrait, always — the landscape duel drills
   // (Multi-Tasking, Sequence Aim, Tower of Hanoi) would otherwise show it
@@ -687,14 +719,20 @@ export default function DrillWrapper({
   // real explanation on screen and offers a manual retry instead of leaving
   // them on an eternal "waiting for opponent" spinner while the opponent's
   // abandoned-match rescue quietly takes the win.
+  const submittingMatchRef = useRef(null);
   const submitFinalScore = async () => {
+    if (!challengeId || !user?.uid || submittingMatchRef.current === challengeId) return;
+    const submittingId = challengeId;
+    submittingMatchRef.current = submittingId;
     setFinalScoreSubmitted(true);
     setSubmitFailed(false);
     try {
       await submitScore(challengeId, user.uid, score || 0);
     } catch (err) {
       console.error("Failed to submit final score:", err);
-      setSubmitFailed(true);
+      if (prevChallengeIdRef.current === submittingId) setSubmitFailed(true);
+    } finally {
+      if (submittingMatchRef.current === submittingId) submittingMatchRef.current = null;
     }
   };
   const submitFinalScoreRef = useRef(submitFinalScore);
@@ -1386,7 +1424,7 @@ export default function DrillWrapper({
                   </div>
                 </div>
                 <div>
-                  <h3 className="font-display text-lg text-white">Time's up!</h3>
+                  <h3 className="font-display text-lg text-white">Time&apos;s up!</h3>
                   <p className="text-xs text-neutral-400 mt-1">Waiting for {opponentName?.split(' ')[0]} to finish...</p>
                 </div>
               </>
@@ -1417,6 +1455,11 @@ export default function DrillWrapper({
           const oppFirst = opponentName?.split(' ')[0] || 'Opponent';
           // A forfeit result can show a scoreline that contradicts the outcome
           // (you can lose while "ahead" if you walked out), so say so outright.
+          // Stamped only when the repeat-opponent decay actually reduced the
+          // swing (see eiqRepeatFactor) — without a word of explanation a
+          // shrinking or zero EIQ change reads as the game being broken.
+          const repeatFactor = challengeData?.eiqRepeatFactor;
+          const repeatWins = challengeData?.eiqRepeatWins;
           const forfeitedBy = challengeData?.forfeitedBy;
           const iForfeited = forfeitedBy && forfeitedBy === user?.uid;
           const EiqDelta = ({ v }) => (
@@ -1492,6 +1535,16 @@ export default function DrillWrapper({
                         <EiqDelta v={oppEiqGained} />
                       </span>
                     </div>
+
+                    {typeof repeatFactor === 'number' && !iForfeited && (
+                      <p className="mt-3 text-center text-[10px] font-semibold leading-relaxed text-amber-400/90">
+                        {repeatFactor === 0 ? (
+                          <>Win {repeatWins} over {oppFirst} today &mdash; no EIQ at stake. Find a duel for full rank.</>
+                        ) : (
+                          <>Win {repeatWins} over {oppFirst} today &mdash; EIQ reduced. Find a duel for full rank.</>
+                        )}
+                      </p>
+                    )}
 
                     {iForfeited && (
                       <p className="mt-3 text-center text-[10px] font-semibold leading-relaxed text-rose-400/90">

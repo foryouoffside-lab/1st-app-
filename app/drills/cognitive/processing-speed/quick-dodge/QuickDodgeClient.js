@@ -15,7 +15,7 @@ import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
 import { useShareCard } from '../../../../../components/ShareScoreCard';
 import DrillWrapper from '../../../../../components/DrillWrapper';
-import { useDuelMatchStart } from '../../../../../lib/challengeEngine';
+import { useDuelMatchStart, DUEL_DURATION_SECONDS, duelSecondsRemaining } from '../../../../../lib/challengeEngine';
 import { motionDpr } from '../../../../../lib/canvasFx';
 import { APP_SHARE_URL } from '../../../../../lib/shareLinks';
 import ResultScreen from '../../../../../components/drill/ResultScreen';
@@ -103,79 +103,13 @@ const LEVEL_TABLE = [
 ];
 
 // ── Joystick tuning ────────────────────────────────────────────────────────
-// Top speed of the dot at full stick deflection, in % of the field's WIDTH per
-// second — i.e. 105 crosses the long axis in a shade under a second. Same unit
-// as the obstacle `speed` column above, so the two are directly comparable: you
-// outrun early hazards outright and, past level 11 or so, can only sidestep
-// them. This is THE difficulty dial for the new controls; raise it if the top
-// levels feel unwinnable, lower it if they feel tame.
-//
-// Applied ISOTROPICALLY (see the movement block in gameStep). The engine's
-// coordinates are a percentage of each axis separately, so a plain `y += v*dt`
-// would move the dot at the field's aspect ratio — on a landscape phone,
-// vertical steering would come out roughly half the speed of horizontal, and a
-// stick pushed at 45° would send the dot off at about 25°. A directional
-// control has to move where it points.
-// 105, up from 80. At 80 the dot could not outrun the mid-table hazards
-// (speed 63-92 in LEVEL_TABLE), so from about level 5 the only way past a
-// closing gap was to have already been there — which reads as the stick being
-// slow rather than the dot being slow. 105 crosses the long axis in a shade
-// under a second and keeps you genuinely faster than every hazard up to the
-// level 12 band, so dodging stays a decision instead of a prediction.
-const PLAYER_MAX_SPEED = 105;
+// Fixed-base analog joystick: the knob sets direction and travel speed.
+// Full push travels 107.91% of the shorter field dimension each second.
+const PLAYER_MAX_SPEED = 107.91;
+// The knob radius is 42% of the base radius (qd-stick-knob-dot in CSS).
+const STICK_TRAVEL_FRAC = 0.58;
 
-// How quickly the dot's velocity chases the thumb, as exponential time
-// constants in seconds. There are THREE of them, and which one is used depends
-// on what the thumb is asking for relative to where the dot is already going.
-//
-// There used to be one constant, 0.05, for all three cases, and it is the
-// single biggest reason this drill was reported as "the joystick has a lot of
-// delay" and "the dot keeps moving in a straight line after I let go":
-//
-//   • Release. A 0.05 tau decaying to the old 0.004 park threshold takes
-//     0.05 * ln(1/0.004) = 276ms. At the top speed below that is roughly 4% of
-//     the field COASTED after the thumb has already come off the stick. The
-//     player has stopped steering and the dot keeps going — which is exactly
-//     the complaint, and it is not a latency bug, it is a glide.
-//   • Reversal. Swinging from full one way to full the other passes through
-//     zero on the same 0.05 curve, so a hard direction change took ~170ms and
-//     ~7% of the field of travel the wrong way first. That reads as the dot
-//     ignoring the stick.
-//   • Acceleration from rest is the ONE case the smoothing was actually for:
-//     without it the dot snapped 0 -> full and overshot every gap.
-//
-// So acceleration keeps (a slightly tightened) ease, and turning and stopping
-// are made close to immediate. Written as an exponential approach against dt,
-// so the feel is identical at 60, 90 and 120Hz.
-const PLAYER_ACCEL_TAU = 0.034;
-// Demand pointing more than ~60 deg away from the current heading. Cutting the
-// old velocity almost dead and rebuilding it toward the new direction is what
-// makes the dot feel like it pivots rather than banks.
-const PLAYER_TURN_TAU = 0.012;
-// Thumb lifted (or inside the dead zone). ~3 frames to a standstill instead of
-// ~17, so the dot parks where the thumb left it.
-const PLAYER_STOP_TAU = 0.014;
-// cos(60 deg). Below this the demand counts as a turn, not an acceleration.
-const PLAYER_TURN_COS = 0.5;
-// Below this the dot is crawling on the asymptote of the ease-out; park it so
-// it stops cleanly rather than creeping, and so movePlayer can early-out.
-// Raised with the stop tau above — at 0.004 the tail of the decay was still a
-// visible drift.
-const PLAYER_VEL_EPSILON = 0.02;
-// Fraction of the stick's radius that reads as "no input". Below this a resting
-// thumb's micro-movement would drift the dot into a hazard. Kept small on
-// purpose: a big dead zone is the other way a stick feels laggy, because the
-// first part of every push does nothing at all.
-const STICK_DEAD_ZONE = 0.05;
-
-// Full-deflection radius, as a fraction of the field's SHORT side, and the px
-// range it is clamped to. Was 0.15 / 44..78, which on a landscape phone put
-// full speed roughly 60px — about 10mm of thumb travel — from the anchor. That
-// is the "the joystick takes a lot of movement / it stretches" report: the
-// stick was not slow, it was long. At 0.115 / 32..54 the same push reaches the
-// rim in a little over half the distance, so the useful part of the throw sits
-// inside one comfortable thumb sweep and full speed is genuinely reachable
-// without re-planting.
+// Size of the floating gesture indicator.
 const STICK_RADIUS_FRAC = 0.115;
 const STICK_RADIUS_MIN = 32;
 const STICK_RADIUS_MAX = 54;
@@ -423,7 +357,12 @@ export default function QuickDodgeClient() {
   const searchParams = useSearchParams();
   const challengeId = searchParams ? searchParams.get('challengeId') : null;
   const isChallenge = !!challengeId;
-  const totalTime = isChallenge ? 30 : TOTAL_TIME;
+  const totalTime = isChallenge ? DUEL_DURATION_SECONDS : TOTAL_TIME;
+  const matchStartAt = useDuelMatchStart(challengeId);
+  const duelStartRef = useRef(null);
+  duelStartRef.current = matchStartAt;
+  const launchSequenceRef = useRef(0);
+  const cancelLaunchRef = useRef(null);
 
   const [isClient, setIsClient] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -496,12 +435,7 @@ export default function QuickDodgeClient() {
   const shockwavesRef = useRef([]);
 
   // ── Virtual joystick ──────────────────────────────────────────────────
-  // Movement used to be a 1:1 drag: the dot tracked the finger's delta, which
-  // meant the finger sat on top of the thing it was steering and covered the
-  // hazards closing in on it. This is the floating thumbstick the console and
-  // battle-royale phone games settled on instead — press anywhere, the base
-  // snaps under your thumb, and the stick's deflection is a VELOCITY, so the
-  // hand never has to be near the dot.
+  // The base anchors at touch-down; the thumb moves only the inner knob.
   const stickElRef = useRef(null);
   const stickKnobRef = useRef(null);
   // Live stick state. Never React state: this is written on every pointermove
@@ -521,17 +455,18 @@ export default function QuickDodgeClient() {
     pointerId: null,    // the one pointer that owns the stick (multi-touch safe)
     active: false,
     fieldX: 0, fieldY: 0, // field origin in client px, sampled once per press
+    fieldW: 1, fieldH: 1, // cached field dimensions for resize detection
     baseX: 0, baseY: 0,   // anchor, field-relative px
     curX: 0, curY: 0,     // live thumb position, field-relative px
     radius: 60,           // full-deflection distance, in px
-    vx: 0, vy: 0,         // normalised input, -1..1, dead zone already removed
+    vx: 0, vy: 0,         // current joystick or keyboard input, -1..1
     dirty: true,          // the widget's DOM is behind the numbers above
     shown: false,         // class state we last wrote, so we toggle only on change
   });
 
   // Engine state
   const engine = useRef({
-    // vx/vy are the SMOOTHED velocity (see movePlayer), not the raw stick.
+    // Velocity follows the latest input immediately, without inertia.
     player: { x: 50, y: 50, vx: 0, vy: 0 },
     obstacles: [],
     obstacleIdCounter: 0,
@@ -575,6 +510,8 @@ export default function QuickDodgeClient() {
     return () => {
       clearTimeout(t);
       mountedRef.current = false;
+      launchSequenceRef.current += 1;
+      cancelLaunchRef.current?.();
       gameActiveRef.current = false;
       if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
       if (heartbeatTimerRef.current) clearTimeout(heartbeatTimerRef.current);
@@ -598,25 +535,21 @@ export default function QuickDodgeClient() {
   // here is allowed to read or write the DOM.
 
   const handlePointerDown = useCallback((e) => {
-    // Live through the COUNTDOWN as well as the round. Planting a thumb during
-    // "3, 2, 1" and already pushing on GO is how people actually hold this
-    // drill, and refusing the press here meant the stick did not exist until
-    // they lifted and pressed again — so the first half-second of every round
-    // had no controls at all. That is most of the reported "delay": not a slow
-    // stick, a dead one. Movement itself is still gated on the round having
-    // started (see movePlayer's call site), so anchoring early cannot move the
-    // dot early.
+    // Accept a held finger during countdown, but only move the player once
+    // the round is active. The same thumb can stay down through GO.
     if (!gameActiveRef.current && phaseRef.current !== 'countdown') return;
     const s = stickRef.current;
     // First finger down owns the stick. A second finger is ignored outright
     // rather than stealing the anchor mid-dodge.
-    if (s.pointerId !== null) return;
+    if (s.pointerId !== null || (e.pointerType === 'mouse' && e.button !== 0)) return;
 
     // The one layout read in the whole input path, and it happens once per
     // press rather than once per move. The field cannot move while a finger is
     // held down, so this stays valid for the life of the gesture.
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
+    s.fieldW = Math.max(1, rect.width);
+    s.fieldH = Math.max(1, rect.height);
     s.fieldX = rect.left;
     s.fieldY = rect.top;
 
@@ -649,13 +582,20 @@ export default function QuickDodgeClient() {
   const handlePointerMove = useCallback((e) => {
     const s = stickRef.current;
     if (!s.active || e.pointerId !== s.pointerId) return;
-    // e.clientX is already the newest sample. When the WebView coalesces a
-    // burst of moves it dispatches the LAST one and files the rest under
-    // getCoalescedEvents() — that history matters for drawing a stroke, but a
-    // stick only ever wants "where is the thumb now", and asking for it would
-    // allocate an array of events on every move for nothing.
-    s.curX = e.clientX - s.fieldX;
-    s.curY = e.clientY - s.fieldY;
+    // The base never follows the thumb. Only the knob moves inside its ring.
+    const dx = e.clientX - s.fieldX - s.baseX;
+    const dy = e.clientY - s.fieldY - s.baseY;
+    const distance = Math.hypot(dx, dy);
+    const travelRadius = s.radius * STICK_TRAVEL_FRAC;
+    const scale = distance > travelRadius ? travelRadius / distance : 1;
+    s.curX = s.baseX + dx * scale;
+    s.curY = s.baseY + dy * scale;
+    // The same bounded vector drives both the visible knob and the player.
+    // Half travel means half speed at every angle, with no dead zone or ramp.
+    s.vx = dx * scale / travelRadius;
+    s.vy = dy * scale / travelRadius;
+    engine.current.player.vx = s.vx;
+    engine.current.player.vy = s.vy;
     s.dirty = true;
   }, []);
 
@@ -667,26 +607,9 @@ export default function QuickDodgeClient() {
     s.vx = 0; s.vy = 0;
     s.curX = s.baseX;
     s.curY = s.baseY;
+    engine.current.player.vx = 0;
+    engine.current.player.vy = 0;
     s.dirty = true;
-  }, []);
-
-  // Turn the recorded thumb position into the input vector. Pure arithmetic,
-  // called once per frame from the rAF loop just before physics, so the vector
-  // the step reads is always built from the newest sample — and built once,
-  // not once per pointermove.
-  const sampleStick = useCallback(() => {
-    const s = stickRef.current;
-    if (!s.active) { s.vx = 0; s.vy = 0; return; }
-    const dx = s.curX - s.baseX;
-    const dy = s.curY - s.baseY;
-    const dist = Math.hypot(dx, dy);
-    const dead = s.radius * STICK_DEAD_ZONE;
-    if (dist <= dead) { s.vx = 0; s.vy = 0; return; }
-    // Rescale past the dead zone so the first millimetre of real travel is a
-    // genuine crawl rather than a jump straight to dead-zone speed.
-    const mag = Math.min(1, (dist - dead) / (s.radius - dead));
-    s.vx = (dx / dist) * mag;
-    s.vy = (dy / dist) * mag;
   }, []);
 
   // The widget's only DOM writes, batched into the frame. Writes and nothing
@@ -703,9 +626,10 @@ export default function QuickDodgeClient() {
       const dx = s.curX - s.baseX;
       const dy = s.curY - s.baseY;
       const dist = Math.hypot(dx, dy);
-      // The knob clamps to the ring; pushing past it is just "full speed that
-      // way", which is what the vector above already encodes.
-      const k = dist > s.radius ? s.radius / dist : 1;
+      // Keep the base at the original press; the knob stays inside the ring.
+      el.style.transform = 'translate3d(' + s.baseX + 'px,' + s.baseY + 'px,0)';
+      const travelRadius = s.radius * STICK_TRAVEL_FRAC;
+      const k = dist > travelRadius ? travelRadius / dist : 1;
       knob.style.transform = 'translate3d(' + (dx * k) + 'px,' + (dy * k) + 'px,0)';
     } else {
       knob.style.transform = 'translate3d(0px,0px,0)';
@@ -726,9 +650,7 @@ export default function QuickDodgeClient() {
     }
   }, []);
 
-  // Keyboard fallback. Feeds the SAME vector the stick does, so desktop and
-  // touch now share one movement model instead of the old discrete 3%-per-
-  // keypress hop, which moved in visible steps and ignored held keys.
+  // Keyboard fallback uses held-key velocity when no pointer is steering.
   useEffect(() => {
     const held = new Set();
     const apply = () => {
@@ -764,7 +686,7 @@ export default function QuickDodgeClient() {
     };
     // A tab-out leaves keys "held" forever otherwise, and the dot drifts into a
     // hazard while the player is not even looking at the page.
-    const onBlur = () => { held.clear(); apply(); };
+    const onBlur = () => { held.clear(); handlePointerUp(); apply(); };
     window.addEventListener('keydown', onDown);
     window.addEventListener('keyup', onUp);
     window.addEventListener('blur', onBlur);
@@ -773,7 +695,7 @@ export default function QuickDodgeClient() {
       window.removeEventListener('keyup', onUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, []);
+  }, [handlePointerUp]);
 
   // Expanding hollow ring left at an impact point. Same visual language as the
   // obstacles themselves (a ring rising out of a centre dot), so a hit reads as
@@ -905,7 +827,9 @@ export default function QuickDodgeClient() {
     e.basePoints = over === 0 ? lo.basePoints : Math.round(last.basePoints * (1 + over * 0.1));
   }, []);
 
-  const endGame = useCallback(async (reason) => {
+  const endGame = useCallback(async () => {
+    if (!gameActiveRef.current) return;
+    phaseRef.current = 'ended';
     gameActiveRef.current = false;
     setPhase('ended');
     stepRef.current = null;
@@ -981,7 +905,7 @@ export default function QuickDodgeClient() {
       xpEarned: xpResult.xp,
       prevBest: prev.bestScore,
     });
-  }, []);
+  }, [isChallenge]);
 
   const scheduleHeartbeat = useCallback(() => {
     if (isChallenge) return;
@@ -1012,81 +936,26 @@ export default function QuickDodgeClient() {
   };
 
   // ── Move the dot ────────────────────────────────────────────────────────
-  // Deliberately NOT part of the fixed physics step, and this is the other half
-  // of the "the stick lags my thumb" fix.
-  //
-  // gameStep runs on a fixed 1/60 clock so hit detection and the difficulty
-  // ramp stay deterministic, and the renderer hides the unevenness of that by
-  // INTERPOLATING the hazards across it. The player was never interpolated — it
-  // was drawn at the raw stepped position — so on any frame where the
-  // accumulator did not reach a whole step, the dot did not move while
-  // everything around it did. On a 60Hz panel that is the odd stalled frame; on
-  // the 90 and 120Hz phones this ships to it is structural, because a 1/60 step
-  // can only land on two frames in three (90Hz) or one in two (120Hz). The
-  // thumb was being sampled every frame and acted on a fraction of them, which
-  // is exactly what "the joystick has a delay" feels like.
-  //
-  // A directly controlled object does not need to be deterministic, it needs to
-  // be immediate. This integrates once per RENDERED frame against the display
-  // interval, so the dot advances on every single vsync. Nothing is smoothed
-  // and nothing is interpolated: where the thumb is this frame is where the dot
-  // is this frame.
+  // One movement model: knob deflection controls velocity every frame.
+  // No direct drag displacement, delayed boost, or moving/recentering base.
   const movePlayer = useCallback((dt) => {
     const s = stickRef.current;
     const e = engine.current;
     const pl = e.player;
-
-    // Pick the response constant from what the thumb is asking for RELATIVE to
-    // where the dot is already going — see the three-tau note at the top of the
-    // file. Speeding up is eased (so the dot does not snap to full and overshoot
-    // every gap); turning and stopping are near-immediate (so the dot never
-    // coasts on past the point the player stopped steering it).
-    let tau;
-    if (s.vx === 0 && s.vy === 0) {
-      tau = PLAYER_STOP_TAU;
-    } else {
-      const dot = s.vx * pl.vx + s.vy * pl.vy;
-      // Guard the zero case: from a standstill any demand is an acceleration,
-      // and dot/mag would be 0/0.
-      const mag = Math.hypot(pl.vx, pl.vy) * Math.hypot(s.vx, s.vy);
-      tau = (mag > 0 && dot < mag * PLAYER_TURN_COS) ? PLAYER_TURN_TAU : PLAYER_ACCEL_TAU;
-    }
-
-    // Exponential approach against dt rather than a fixed per-frame fraction,
-    // so the feel is identical at 60, 90 and 120Hz — a plain lerp would make
-    // the dot accelerate twice as fast on a 120Hz panel.
-    const k = 1 - Math.exp(-dt / tau);
-    pl.vx += (s.vx - pl.vx) * k;
-    pl.vy += (s.vy - pl.vy) * k;
-
-    // Stop cleanly. Without this the ease-out never quite reaches zero and the
-    // dot creeps for the rest of the round.
-    if (s.vx === 0 && s.vy === 0 &&
-        Math.abs(pl.vx) < PLAYER_VEL_EPSILON && Math.abs(pl.vy) < PLAYER_VEL_EPSILON) {
-      pl.vx = 0; pl.vy = 0;
-    }
-    if (pl.vx === 0 && pl.vy === 0) return;
-
-    // Per-axis scale that turns one pixel speed into the two percentage speeds
-    // this coordinate system needs. x is the reference axis, so it is 1; y is
-    // stretched by the aspect ratio, which is exactly the factor the render
-    // divides back out for the field height. This is what keeps the dot moving
-    // at the same speed in every direction rather than at the field's aspect.
-    const aspect = (e.containerH > 0) ? e.containerW / e.containerH : 1;
-
-    // Same 3..97 walls as before, but the velocity into a wall is zeroed as
-    // well as the position. With momentum in the system, clamping position
-    // alone would let the dot bank a full tank of unspent speed while held
-    // against an edge and then fling itself off the moment the thumb turned.
-    const nx = pl.x + pl.vx * PLAYER_MAX_SPEED * dt;
-    if (nx <= 3)       { pl.x = 3;  if (pl.vx < 0) pl.vx = 0; }
-    else if (nx >= 97) { pl.x = 97; if (pl.vx > 0) pl.vx = 0; }
-    else               { pl.x = nx; }
-
-    const ny = pl.y + pl.vy * PLAYER_MAX_SPEED * aspect * dt;
-    if (ny <= 3)       { pl.y = 3;  if (pl.vy < 0) pl.vy = 0; }
-    else if (ny >= 97) { pl.y = 97; if (pl.vy > 0) pl.vy = 0; }
-    else               { pl.y = ny; }
+    // Input handlers publish the direction immediately. Do not ease toward
+    // it or recompute a different speed curve from the visible knob.
+    pl.vx = s.vx;
+    pl.vy = s.vy;
+    const w = Math.max(1, e.containerW);
+    const h = Math.max(1, e.containerH);
+    const travel = PLAYER_MAX_SPEED * Math.min(w, h) * dt;
+    const dx = pl.vx * travel / w;
+    const dy = pl.vy * travel / h;
+    // Resolve each axis independently: a wall removes only the outward
+    // component, never the movement parallel to it. No stored overshoot or
+    // anchor reset, so changing direction responds on the very next frame.
+    pl.x = Math.max(3, Math.min(97, pl.x + dx));
+    pl.y = Math.max(3, Math.min(97, pl.y + dy));
   }, []);
 
   // Hoisted out of runGameLoop. It used to be re-created on every round, which
@@ -1096,7 +965,7 @@ export default function QuickDodgeClient() {
   const gameStep = useCallback((dt) => {
       const e = engine.current;
 
-      e.timeLeft -= dt;
+      e.timeLeft = isChallenge ? duelSecondsRemaining(duelStartRef.current) : e.timeLeft - dt;
       e.elapsedTime += dt;
 
       // The elapsed-time stop is the duel's fixed window. In solo the run is
@@ -1194,7 +1063,6 @@ export default function QuickDodgeClient() {
 
           if (e.streak > 0 && e.streak % 5 === 0) {
             audioSynth?.playHit();
-            spawnBurst(px, py, '#fbbf24', 14);
           }
         }
       }
@@ -1294,6 +1162,7 @@ export default function QuickDodgeClient() {
     if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
     if (n <= 0) {
       if (!isChallenge) audioSynth?.playGo();
+      phaseRef.current = 'playing';
       setPhase('playing');
       gameActiveRef.current = true;
 
@@ -1348,9 +1217,12 @@ export default function QuickDodgeClient() {
     setCountdownValue(n);
     if (!isChallenge) audioSynth?.playCountdownTick();
     countdownTimerRef.current = setTimeout(() => runCountdown(n - 1), 700);
-  }, [runGameLoop, scheduleHeartbeat, bestLevel, totalTime, isChallenge]);
+  }, [runGameLoop, scheduleHeartbeat, totalTime, isChallenge]);
 
   const enterDrill = useCallback(async () => {
+    const launch = ++launchSequenceRef.current;
+    cancelLaunchRef.current?.();
+    const current = () => mountedRef.current && launch === launchSequenceRef.current;
     // Unmount the start card on the tap itself, before the rotation begins.
     setLaunching(true);
     try { if (audioSynth) audioSynth.init(); } catch {}
@@ -1376,6 +1248,7 @@ setDangerLevel(0); setEndSummary(null);
     if (!isChallenge && !document.fullscreenElement && containerRef.current) {
       try { await containerRef.current.requestFullscreen(); } catch {}
     }
+    if (!current()) return;
     if (Capacitor.isNativePlatform()) {
       StatusBar.setOverlaysWebView({ overlay: true }).catch(() => {});
       StatusBar.hide().catch(() => {});
@@ -1386,18 +1259,20 @@ setDangerLevel(0); setEndSummary(null);
     // Wait for the viewport to actually stop moving before showing the countdown,
     // instead of guessing with a fixed delay — see afterViewportSettled in
     // lib/orientation.js. A blind timeout let the "3" mount mid-resize and jump.
-    afterViewportSettled(() => {
-      if (!mountedRef.current) return;
+    if (!current()) return;
+    cancelLaunchRef.current = afterViewportSettled(() => {
+      if (!current()) return;
       if (window.innerHeight > window.innerWidth) {
+        phaseRef.current = 'rotate-hint';
         setPhase('rotate-hint');
       } else {
+        phaseRef.current = 'countdown';
         setPhase('countdown');
         runCountdown(isChallenge ? 0 : 3);
       }
     });
   }, [runCountdown, isChallenge, totalTime]);
 
-  const matchStartAt = useDuelMatchStart(challengeId);
   const duelAutoStartedRef = useRef(false);
   useEffect(() => {
     if (!isChallenge || !matchStartAt || phase !== 'start' || duelAutoStartedRef.current) return;
@@ -1413,17 +1288,26 @@ setDangerLevel(0); setEndSummary(null);
   useEffect(() => {
     if (challengeId === prevChallengeIdRef.current) return;
     prevChallengeIdRef.current = challengeId;
+    launchSequenceRef.current += 1;
+    cancelLaunchRef.current?.();
+    gameActiveRef.current = false;
+    stepRef.current = null;
+    clearTimeout(countdownTimerRef.current);
+    clearTimeout(heartbeatTimerRef.current);
+    handlePointerUp();
+    phaseRef.current = 'start';
     duelAutoStartedRef.current = false;
     setPhase('start');
     setLaunching(false);
     setScore(0);
     setEndSummary(null);
     setTimeRemaining(totalTime);
-  }, [challengeId, totalTime]);
+  }, [challengeId, totalTime, handlePointerUp]);
 
   useEffect(() => {
     const handleResize = () => {
-      if (phase === 'rotate-hint' && window.innerWidth > window.innerHeight) {
+      if (phaseRef.current === 'rotate-hint' && window.innerWidth > window.innerHeight) {
+        phaseRef.current = 'countdown';
         setPhase('countdown');
         runCountdown(isChallenge ? 0 : 3);
       }
@@ -1468,6 +1352,9 @@ setDangerLevel(0); setEndSummary(null);
       const el = containerRef.current;
       if (!cvs || !el) return;
       const rect = el.getBoundingClientRect();
+      // A held gesture's cached coordinates become invalid after rotation.
+      const st = stickRef.current;
+      if (st.active && (st.fieldW !== rect.width || st.fieldH !== rect.height || st.fieldX !== rect.left || st.fieldY !== rect.top)) handlePointerUp();
       const dpr = motionDpr();
       const bw = Math.round(rect.width * dpr);
       const bh = Math.round(rect.height * dpr);
@@ -1582,17 +1469,7 @@ setDangerLevel(0); setEndSummary(null);
     };
 
     // ── Player dot ─────────────────────────────────────────────────────
-    // The body used to be a sprite blit and the halo and pulse ring were two
-    // live arc() passes per frame, driven off `time`. All three are static
-    // pictures whose only animation is a scale and a fade, so they are CSS
-    // now: the halo breathes on a 2.094s ease (the old sin(time*3)) and the
-    // ring expands to 2.4x over 1.5s (the old drawPulseRing arguments). The
-    // compositor runs both, which means they keep their timing even on a frame
-    // where the main thread is busy — and the loop's whole job for the player
-    // is one transform write.
-    //
-    // Sized in px whenever the radius changes, which is on a resize and
-    // otherwise never.
+    // Size the steady player body only when the field dimensions change.
     let playerSizedR = -1;
     // Last translate written to the player node; see the skip at the write site.
     let playerTx = NaN;
@@ -1601,18 +1478,8 @@ setDangerLevel(0); setEndSummary(null);
       const el = playerElRef.current;
       if (!el || playerSizedR === pr) return;
       playerSizedR = pr;
-      const body = el.children[2];
-      const ring = el.children[1];
-      const halo = el.children[0];
-      if (!body || !ring || !halo) return;
-      // Halo: the old radius swung between pr*1.8 and pr*2.34, so the element
-      // is the larger of the two and the keyframes scale it down to 0.77.
-      const hr = pr * 2.34;
-      halo.style.cssText = `position:absolute;border-radius:9999px;background:rgba(16,185,129,.14);left:${-hr}px;top:${-hr}px;width:${hr * 2}px;height:${hr * 2}px;animation:qdHalo 2.094s ease-in-out infinite;`;
-      ring.style.left = -pr + 'px';
-      ring.style.top = -pr + 'px';
-      ring.style.width = pr * 2 + 'px';
-      ring.style.height = pr * 2 + 'px';
+      const body = el.children[0];
+      if (!body) return;
       body.style.left = -pr + 'px';
       body.style.top = -pr + 'px';
       body.style.width = pr * 2 + 'px';
@@ -1634,17 +1501,6 @@ setDangerLevel(0); setEndSummary(null);
     // steps fall.
     let accumulator = 0;
     let alpha = 1;
-
-    // Learned display interval, for the vsync quantiser in the draw loop.
-    // 0 = not learned yet. Tracked off `prevTs`, which ticks on every frame
-    // including the countdown, so the round opens with a converged estimate
-    // instead of learning one from its own first (slow) frames.
-    let vsyncMs = 0;
-    let prevTs = 0;
-    let vsyncOutliers = 0;
-    // Parity for the high-refresh throttle in the draw loop.
-    let frameParity = 0;
-
 
     // ── Cold-path warm-up state ────────────────────────────────────────
     // Dummy obstacles the countdown runs the real render and physics code
@@ -1896,113 +1752,20 @@ setDangerLevel(0); setEndSummary(null);
         if (!ctx) { drawAnimRef.current = requestAnimationFrame(draw); return; }
       }
 
-      // ── Display-interval estimate ────────────────────────────────────
-      // Kept up to date on EVERY frame, countdown included, and off its own
-      // timestamp rather than the physics clock (which resets to 0 at the
-      // start of a round and would feed this a bogus zero-length gap).
-      //
-      // The snap-down branch used to have no floor and no way back. A single
-      // sub-millisecond gap — the WebView does emit them, e.g. two rAFs
-      // coalesced after a stall — set vsyncMs to that value permanently: real
-      // 16.7ms gaps then fell outside the 0.6x-1.6x tracking band, so the EWMA
-      // could never pull it back, and every frame afterwards quantised to the
-      // clamp of 3 "vsyncs" of a wrong base. That is a game that judders for
-      // the rest of the round from one bad frame. The floor rejects the short
-      // gaps outright, the snap-down now needs three in a row to be believed,
-      // and a long run of gaps that fit nothing at all re-seeds from scratch.
-      if (prevTs) {
-        const gap = timestamp - prevTs;
-        if (gap > 4 && gap < 40) {
-          if (!vsyncMs) {
-            vsyncMs = gap;
-            vsyncOutliers = 0;
-          } else if (gap > vsyncMs * 0.75 && gap < vsyncMs * 1.35) {
-            vsyncMs += (gap - vsyncMs) * 0.05;
-            vsyncOutliers = 0;
-          } else if (gap < vsyncMs * 0.75) {
-            // Genuinely faster than we thought, or a bad seed — but only after
-            // three consecutive frames agree.
-            if (++vsyncOutliers >= 3) { vsyncMs = gap; vsyncOutliers = 0; }
-          } else {
-            // A multiple of the interval (a dropped frame) is normal and must
-            // not move the estimate. A long run of them means the estimate is
-            // simply wrong; throw it away and learn again.
-            if (++vsyncOutliers >= 20) { vsyncMs = 0; vsyncOutliers = 0; }
-          }
-        }
-      }
-      prevTs = timestamp;
-
-      // ── High-refresh throttle ────────────────────────────────────────
-      // On a 120Hz+ panel every layer in this drill — up to 56 hazard nodes,
-      // the player, the stick and the danger vignette — is composited twice as
-      // often as it is on the 60Hz phones this was tuned against. That is
-      // double the GPU work for the same game, and it is the largest single
-      // reason the device gets hot enough to start thermal-throttling
-      // mid-run. Rendering on every OTHER vsync there puts the drill back at
-      // the ~60fps it was designed for and roughly halves the frame cost.
-      //
-      // This is NOT the old `if (timestamp - lastDrawTs < 14) skip` cap, which
-      // is what used to make the hazards snag. That compared a jittery
-      // timestamp against a fixed millisecond threshold, so WHICH frames got
-      // dropped was effectively random and the survivors advanced by uneven
-      // amounts. This is a fixed COUNT — every second vsync, always — so the
-      // gap between rendered frames is exactly two display intervals and the
-      // quantiser below advances the clock by exactly two. Motion stays even.
-      //
-      // 90Hz panels are deliberately left alone: halving one lands at 45fps,
-      // which costs more in feel than it saves in heat. Only genuine 120Hz+
-      // (an interval under 10.5ms) is throttled, and only once the estimate
-      // has actually converged.
-      if (vsyncMs && vsyncMs < 10.5) {
-        frameParity ^= 1;
-        if (frameParity) { drawAnimRef.current = requestAnimationFrame(draw); return; }
-      } else if (frameParity) {
-        frameParity = 0;
-      }
-
-      // Build this frame's input vector from the newest thumb sample, once,
-      // before physics reads it. Pure arithmetic — the DOM side of the widget
-      // is written further down with the rest of the frame's style writes.
-      sampleStick();
-
+      // Render every display callback, including 90/120Hz panels. Skipping
+      // alternate frames adds visible latency to direct pointer steering.
       // Physics, stepped from this same callback (see runGameLoop).
       const stepFn = stepRef.current;
       if (gameActiveRef.current && stepFn) {
         if (!lastTimeRef.current) lastTimeRef.current = timestamp;
-        let deltaMs = timestamp - lastTimeRef.current;
+        const deltaMs = timestamp - lastTimeRef.current;
         lastTimeRef.current = timestamp;
-        if (deltaMs > 250) deltaMs = 250;
-
-        // ── Vsync quantiser ────────────────────────────────────────────
-        // The fixed timestep keeps the SIMULATION even, but what actually
-        // reaches the screen is the INTERPOLATED position, and that is a
-        // continuous function of `accumulator` — i.e. of the raw rAF
-        // timestamp. The Android WebView puts a couple of ms of jitter on
-        // those timestamps, so obstacle step length wobbled frame to frame
-        // even though every frame was delivered on time (measured on device:
-        // p50 16.9ms, p90 16.9ms, p99 17ms, ~0 drops — yet the motion still
-        // read as snagging). The fixed timestep did not protect the visuals;
-        // interpolation handed the jitter straight back to them.
-        //
-        // What reaches the screen is always a WHOLE number of vsyncs, so
-        // learn the panel's interval and advance the clock in exact multiples
-        // of it. Same approach as batch-processing. Real-time speed is
-        // preserved (the estimate tracks the true interval), but consecutive
-        // frames now advance by identical amounts.
-        // The estimate itself is maintained at the top of this callback, not
-        // here — it has to keep learning through the countdown, and it must
-        // not see the deltaMs of 0 that the first frame of a round produces.
-        const baseMs = vsyncMs || 16.667;
-        let vsyncs = Math.round(deltaMs / baseMs);
-        if (vsyncs < 1) vsyncs = 1; else if (vsyncs > 3) vsyncs = 3;
-        const frameDt = (vsyncs * baseMs) / 1000;
+        // Use elapsed time without rounding to estimated display intervals.
+        // Cap stalls to avoid a large player jump after resuming the app.
+        const frameDt = Math.max(0, Math.min(deltaMs, 50)) / 1000;
         accumulator += frameDt;
 
-        // The dot moves HERE, once per rendered frame against the display
-        // interval, and before the fixed steps below read its position. See
-        // the long note on movePlayer: this is what stops the stick feeling
-        // like it is a frame or two behind the thumb.
+        // Advance joystick and keyboard movement before collisions.
         movePlayer(frameDt);
 
         let steps = 0;
@@ -2139,8 +1902,8 @@ setDangerLevel(0); setEndSummary(null);
           // Same skip-if-unchanged as the hazards. The dot is stationary
           // whenever the thumb is off the stick, which over a run is a lot of
           // frames writing the identical string.
-          const px = Math.round(((e.player.x / 100) * w) * 10) / 10;
-          const py = Math.round(((e.player.y / 100) * h) * 10) / 10;
+          const px = (e.player.x / 100) * w;
+          const py = (e.player.y / 100) * h;
           if (px !== playerTx || py !== playerTy) {
             playerTx = px; playerTy = py;
             pel.style.transform = 'translate3d(' + px + 'px,' + py + 'px,0)';
@@ -2236,7 +1999,7 @@ setDangerLevel(0); setEndSummary(null);
     // long task / 117ms frame at round start. `playLayerMounted` is true across
     // BOTH phases, so the whole round is now one uninterrupted setup, and the
     // loop reads the live phase from phaseRef instead.
-  }, [playLayerMounted]);
+  }, [playLayerMounted, movePlayer, paintStick, handlePointerUp]);
 
   // Score card. Drawn and encoded while the result screen sits idle,
   // not on the tap - see useShareCard in components/ShareScoreCard.js.
@@ -2283,6 +2046,7 @@ setDangerLevel(0); setEndSummary(null);
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
+        onLostPointerCapture={handlePointerUp}
         onContextMenu={(e) => { if (gameActiveRef.current) e.preventDefault(); }}
         className={`absolute inset-0 select-none overflow-hidden bg-[#050508] text-white`}
         // touch-action is read off `phase`, not off gameActiveRef. A ref does
@@ -2305,7 +2069,7 @@ setDangerLevel(0); setEndSummary(null);
 
         {/* Mute toggle is rendered once by DrillWrapper (top-centre). */}
 
-        {phase === 'rotate-hint' && !isChallenge && (
+        {phase === 'rotate-hint' && (
           <div className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-black/95 text-center p-6">
             <div className="animate-bounce mb-5 text-emerald-400"><RotateCcw className="w-12 h-12 mx-auto" /></div>
             <p className="text-sm font-bold text-white">Rotate your phone to play</p>
@@ -2317,9 +2081,9 @@ setDangerLevel(0); setEndSummary(null);
         {phase === 'start' && !launching && !isChallenge && (
           <DrillStartCard
             drillName="Quick Dodge"
-            tagline="Hold to steer · dodge the hunters"
+            tagline="Drag to steer · dodge the hunters"
             rules={[
-              'Hold anywhere to steer your dot',
+              'Move the knob inside the joystick; center or release to stop',
               'Red circles hunt you down',
               'Dodging adds time, hits cost it',
             ]}
@@ -2368,8 +2132,6 @@ setDangerLevel(0); setEndSummary(null);
                   the halo, the pulse ring and the body hanging off it — the
                   first two animated entirely in CSS. */}
               <div ref={playerElRef} className="qd-player">
-                <div className="qd-player-halo" />
-                <div className="qd-player-ring" />
                 <div className="qd-player-body"><div className="qd-player-sheen" /></div>
               </div>
 

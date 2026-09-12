@@ -20,8 +20,8 @@ to Production on Google Play, for a worldwide audience.
 | Account deletion — in app | Done (`Progress → Delete Account & Wipe Data`) |
 | Account deletion — public URL | Done — `/delete-account` page added 2026-08-22 |
 | Firestore security rules | Published and verified live |
-| Data Safety form answers | Drafted in `PLAY_STORE_SUBMISSION.md` §6 |
-| Content rating questionnaire | Drafted in `PLAY_STORE_SUBMISSION.md` §4 |
+| Data Safety form answers | Drafted in the appendix below (§6) |
+| Content rating questionnaire | Drafted in the appendix below (§4) |
 | Placeholders in legal pages | Done 2026-08-22 — Sangmesh, India |
 | Store listing claims | Rewritten 2026-08-22 — see §4 |
 | **OAuth consent screen branding** | Outstanding (Console only) |
@@ -86,7 +86,7 @@ requires to be reachable without installing the app.
 | In-app account deletion | Done | Play requires both routes; you have both |
 | Data Safety form matches reality | Draft | Must declare Crashlytics + Analytics |
 | Target audience & content | Draft | Declare **13+**, never "children" |
-| Content rating (IARC) | Draft | Answers in `PLAY_STORE_SUBMISSION.md` §4 |
+| Content rating (IARC) | Draft | Answers in the appendix below (§4) |
 | Ads declaration | None | Correct — no ad SDK present |
 | Financial features | None | No IAP, no payments |
 | Permissions justified | Yes | Only INTERNET + VIBRATE |
@@ -111,7 +111,7 @@ rejected over this routinely.
 This matters more than everything else on this page, because it is the one place
 where a regulator has actually fined companies in this exact category.
 
-The current listing copy in `PLAY_STORE_SUBMISSION.md` says:
+The current listing copy (see `PLAY_STORE_ASO.md`) says:
 
 - "24 **science-based** drills"
 - "**Sharpen the mental skills that matter every day** ... staying focused under
@@ -228,7 +228,7 @@ the only fields in that category; email is correctly excluded from the document.
 - [x] Fill the operator identity (§1) — Sangmesh, India
 - [x] Redeploy the website so both privacy policies match (§2) — live 2026-08-23
 - [x] Rewrite the store listing claims (§4) — done, copy is in the submission doc
-- [ ] Set the OAuth consent screen App name (see `PLAY_STORE_SUBMISSION.md` §1)
+- [ ] Set the OAuth consent screen App name (see the appendix below, §1)
 - [ ] Enter the data deletion URL in Play Console —
       `https://skilldrills.online/delete-account` (live and returning 200 as of
       2026-08-23; Data safety → Data deletion)
@@ -279,3 +279,124 @@ Still open after this pass: the OAuth consent screen name (Console only), and
 the lawyer question below — the EU/UK Article 27 representative is the live
 part of it, because the controller is established in India rather than the
 EEA/UK.
+
+---
+
+# Appendix — rescued from PLAY_STORE_SUBMISSION.md
+
+That file was deleted on 2026-09-11 once the app was uploaded and in testing.
+These are the only sections the open checklist above still points at, kept
+verbatim so those items stay actionable.
+
+## 1. App identity
+
+- **App name (on-device label):** SkillDrills — set in
+  `android/app/src/main/res/values/strings.xml` and `capacitor.config.ts`.
+  This is what shows under the launcher icon and in the Google account picker.
+  The "Pro" was dropped on 2026-08-23 to match the legal pages, the login
+  screen, and the OAuth consent screen.
+- **Store listing title:** `SkillDrills: Focus & Reaction` (see §2) — the Play
+  title is a separate, keyword-weighted field and does not have to match the
+  on-device label.
+- **Package name:** com.skilldrills.pro
+- **Category:** Education (or Puzzle/Trivia — "Education" fits best given the
+  cognitive-training framing; pick whichever Play Console suggests as closest match)
+- **Contains ads:** No
+- **In-app purchases:** No
+- **Price:** Free
+
+### Google sign-in consent screen — needs a Console visit
+
+The Google sign-in consent screen currently reads **"Sign in to
+skilldrills-42ddc.firebaseapp.com"**, because Firebase auto-created the OAuth
+consent screen and no App name was ever set, so Google falls back to showing
+the raw auth domain.
+
+This does **not** affect the Play Store build: on native, sign-in goes through
+`FirebaseAuthentication.signInWithGoogle()` (see `contexts/AuthContext.js`,
+the `Capacitor.isNativePlatform()` branch), which shows Android's own account
+picker with the app name and no domain. Only the website's `signInWithPopup`
+path shows this screen.
+
+**To fix (Console only — there is no CLI or API for this, so it cannot be
+scripted):** Google Cloud Console -> project `skilldrills-42ddc` -> **Google
+Auth Platform -> Branding** (older UI: APIs & Services -> OAuth consent
+screen). Set App name to `SkillDrills`, add the app logo, and fill in the
+support email and developer contact. The screen then reads "Sign in to
+SkillDrills".
+
+Worth doing before opening sign-ups to the public regardless: Google requires
+OAuth consent screen verification for published apps, and this same Branding
+page is where that process starts.
+
+**Optional, larger:** the popup's URL bar still shows `firebaseapp.com` even
+once the name is set. Removing that needs a custom auth domain — attach a
+domain to Firebase Hosting (only the default `skilldrills-42ddc.web.app`
+exists today), add the DNS records, then change `authDomain` in
+`lib/firebase.js` to match. Website-only polish; not needed for the app.
+
+---
+
+
+## 4. Content rating questionnaire — expected answers
+
+Play's rating questionnaire is dynamic, but based on what this app actually is
+(no violence, no user-generated content shown publicly beyond a display name,
+no gambling, no real-money elements):
+
+- Violence: None
+- Sexual content: None
+- Profanity: None
+- Controlled substances: None
+- Gambling/contests with real money: None
+- User-generated content shared with others: displayName and photo are visible
+  to other players (leaderboard/opponent cards) — declare this honestly if asked
+- Shares location: No
+- Digitally purchases: No
+
+This should land the app at the lowest rating tier (e.g., "Everyone" / PEGI 3),
+but let the actual questionnaire's specific wording decide — answer honestly
+question-by-question rather than assuming the tier.
+
+---
+
+
+## 6. Data Safety form — exact answers
+
+**Does your app collect or share any user data?** → Yes
+
+**Personal info**
+| Data type | Collected? | Shared with 3rd parties? | Purpose |
+|---|---|---|---|
+| Name | Yes | No | App functionality (leaderboard identity) |
+| Email address | Yes | No | Account management (Google Sign-In; not stored in the app's database) |
+
+**Photos**
+| Data type | Collected? | Shared? | Purpose |
+|---|---|---|---|
+| Photos | Yes (Google profile photo, or user-uploaded) | No | App functionality (leaderboard/duel cards) |
+
+**App activity**
+| Data type | Collected? | Purpose |
+|---|---|---|
+| App interactions (screen views) | Yes | Analytics |
+| Other user-generated content (drill/category/score events) | Yes | Analytics |
+
+**App info and performance**
+| Data type | Collected? | Purpose |
+|---|---|---|
+| Crash logs | Yes (Crashlytics) | App functionality |
+| Diagnostics (device model, OS, app version) | Yes | Analytics |
+
+**Device or other IDs**
+| Data type | Collected? | Purpose |
+|---|---|---|
+| Device or other IDs | Yes (Firebase install ID) | Analytics |
+
+**Other standard questions:**
+- Is data encrypted in transit? → Yes
+- Can users request data deletion? → Yes — in-app: Progress → Delete Account & Wipe Data
+- Required or optional? → Name + email: required. Photo: optional (falls back to a generated avatar).
+
+---
+

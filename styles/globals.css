@@ -2143,3 +2143,10 @@ body.is-drill-page footer {
   transform:translateX(-50%); color:transparent; white-space:nowrap;
   -webkit-text-stroke:1px var(--line); z-index:-1; pointer-events:none;
 }
+
+/* Pause card previews outside the viewport and in hidden tabs. */
+.drill-preview-viewport[data-paused="true"] *,
+.drill-preview-viewport[data-paused="true"] *::before,
+.drill-preview-viewport[data-paused="true"] *::after {
+  animation-play-state: paused !important;
+}

@@ -10,13 +10,13 @@ import { ARENA_ENABLED } from '../lib/featureFlags';
 // switch for all Arena entry points — hidden while Arena is off so its
 // realtime listeners and duel UI stay completely unreachable on phones.
 const TABS = [
-  { label: 'Home', href: '/', icon: Home, active: (pathname, hash, searchParams) => pathname === '/' && hash !== '#daily-challenge' },
-  { label: 'Daily', href: '/daily', icon: CalendarDays, active: (pathname, hash, searchParams) => pathname.startsWith('/daily') },
+  { label: 'Home', href: '/', icon: Home, active: (pathname, hash) => pathname === '/' && hash !== '#daily-challenge' },
+  { label: 'Daily', href: '/daily', icon: CalendarDays, active: (pathname) => pathname.startsWith('/daily') },
   ...(ARENA_ENABLED ? [
     { label: 'Arena', href: '/challenge', icon: Swords, active: (pathname, hash, searchParams) => pathname.startsWith('/challenge') && searchParams?.get('tab') !== 'leaderboard' },
     { label: 'Ranks', href: '/challenge?tab=leaderboard', icon: Trophy, active: (pathname, hash, searchParams) => pathname.startsWith('/challenge') && searchParams?.get('tab') === 'leaderboard' },
   ] : []),
-  { label: 'Progress', href: '/progress', icon: BarChart3, active: (pathname, hash, searchParams) => pathname.startsWith('/progress') },
+  { label: 'Progress', href: '/progress', icon: BarChart3, active: (pathname) => pathname.startsWith('/progress') },
 ];
  
 export default function BottomNav() {

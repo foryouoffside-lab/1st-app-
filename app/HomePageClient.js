@@ -12,7 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { acceptChallenge, tierForEiq } from '../lib/challengeEngine';
 import { ARENA_ENABLED } from '../lib/featureFlags';
 import { getSessionState, markSessionStarted } from '../lib/sessionFlow';
-import { getPlayerLevel, getStreak, getTopScores } from '../lib/progressStore';
+import { usePlayerProgress } from '../contexts/PlayerProgressContext';
 import { drillTimeHint } from '../lib/drillMeta';
 import { logEvent } from '../lib/analytics';
 import { DRILL_INDEX, byEngagement } from '../lib/drillIndex';
@@ -54,47 +54,24 @@ export default function HomePageClient() {
   const [session, setSession] = useState(null);
   const [arenaChallenges, setArenaChallenges] = useState([]);
   const [dashboardReady, setDashboardReady] = useState(false);
-  // Small solo-progress summary for the home card (level/streak/best are all
-  // local reads; EIQ/tier come from the signed-in profile).
-  const [progress, setProgress] = useState(null);
+  const { progress: snapshot, status: progressStatus } = usePlayerProgress();
+  const progress = snapshot ? {
+    ...snapshot,
+    bestDrill: DRILL_INDEX.find(d => d.id === snapshot.bestDrillId)?.name || null,
+  } : null;
 
   useEffect(() => {
-    async function loadDashboard() {
-      try {
-        const [sess, lvl, streak, top] = await Promise.all([
-          getSessionState(),
-          getPlayerLevel(),
-          getStreak(),
-          getTopScores(1),
-        ]);
-        setSession(sess);
-        const bestDrill = top[0]?.drillId
-          ? (DRILL_INDEX.find(d => d.id === top[0].drillId)?.name || null)
-          : null;
-        setProgress({
-          level: lvl.level,
-          xpInLevel: lvl.xpInLevel,
-          xpToNext: lvl.xpToNext,
-          streak: streak.current,
-          best: top[0]?.best || 0,
-          bestDrill,
-        });
-      } catch (error) {
-        console.error('Unable to load home dashboard', error);
-      } finally {
-        setDashboardReady(true);
-      }
-    }
-    loadDashboard();
-
-    // A cloud restore (lib/progressCloud.js) can land just after this screen
-    // has already read its numbers — on the first open after a reinstall, that
-    // is the difference between the player seeing Level 1 and seeing the level
-    // they actually earned. Read again when it does.
-    const onRestored = () => { loadDashboard(); };
-    window.addEventListener('sd:progress-restored', onRestored);
-    return () => window.removeEventListener('sd:progress-restored', onRestored);
-  }, []);
+    let disposed = false;
+    setDashboardReady(false);
+    getSessionState().then(sess => {
+      if (!disposed) setSession(sess);
+    }).catch(error => {
+      console.error('Unable to load home dashboard', error);
+    }).finally(() => {
+      if (!disposed) setDashboardReady(true);
+    });
+    return () => { disposed = true; };
+  }, [snapshot, user?.uid]);
 
   function startSession(source) {
     if (!session?.nextDrill) return;
@@ -354,6 +331,13 @@ export default function HomePageClient() {
              whole card links to /progress. Level/streak/best are local reads;
              EIQ/tier come from the signed-in profile, so it only renders when
              signed in (the home page is behind AuthGate anyway). */}
+        {user && !progress && (
+          <section className="mb-6 rounded-2xl border border-[#232433] bg-[#12131c] p-4" aria-live="polite">
+            <p className="text-sm text-slate-400">{progressStatus === 'unavailable'
+              ? 'Waiting for a connection to restore your progress?'
+              : 'Restoring your progress?'}</p>
+          </section>
+        )}
         {user && progress && (() => {
           const tier = tierForEiq(user.eiq || 0);
           return (

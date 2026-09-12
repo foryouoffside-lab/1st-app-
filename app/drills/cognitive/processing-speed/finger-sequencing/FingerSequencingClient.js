@@ -282,7 +282,6 @@ export default function FingerSequencingClient() {
   const [bestScore, setBestScore] = useState(0);
   const [bestCombo, setBestCombo] = useState(0);
   const [bestReadStreak, setBestReadStreak] = useState(0);
-  const [bestLevel, setBestLevel] = useState(1);
 
   // === Live Stats (UI Sync) ===
   const [timeLeft, setTimeLeft] = useState(totalTime);
@@ -344,6 +343,8 @@ export default function FingerSequencingClient() {
   const heartbeatTimerRef = useRef(null);
   const heartbeatTempoRef = useRef(1000);
   const mountedRef = useRef(false);
+  const launchSequenceRef = useRef(0);
+  const cancelLaunchRef = useRef(null);
 
   // Heartbeat scheduling
   const scheduleHeartbeat = useCallback(() => {
@@ -381,6 +382,9 @@ export default function FingerSequencingClient() {
     getSettings().then((s) => { if (mountedRef.current) setSoundEnabled(s.soundEnabled !== false); });
     return () => {
       mountedRef.current = false;
+      gameActiveRef.current = false;
+      launchSequenceRef.current += 1;
+      cancelLaunchRef.current?.();
       cleanupTimers();
     };
   }, []);
@@ -954,8 +958,6 @@ export default function FingerSequencingClient() {
       if (savedCombo) setBestCombo(parseInt(savedCombo, 10));
       const savedStreak = localStorage.getItem('sequenceAim_bestReadStreak');
       if (savedStreak) setBestReadStreak(parseInt(savedStreak, 10));
-      const savedBestLevel = localStorage.getItem('sequenceAim_bestLevel');
-      if (savedBestLevel) setBestLevel(parseInt(savedBestLevel, 10));
     } catch {}
 
     return () => {
@@ -988,6 +990,7 @@ export default function FingerSequencingClient() {
   // Shared countdown runner — duels skip the visible 3-2-1 (n=0) and its
   // audio, per ARENA_INTEGRATION.md rule 2.
   const runCountdown = useCallback((n) => {
+    if (!mountedRef.current) return;
     if (countdownTimerRef.current) clearTimeout(countdownTimerRef.current);
     setPhase('countdown');
     if (n <= 0) {
@@ -1078,6 +1081,9 @@ export default function FingerSequencingClient() {
 
   // Play initiator
   const startGame = useCallback(async () => {
+    const launch = ++launchSequenceRef.current;
+    cancelLaunchRef.current?.();
+    const current = () => mountedRef.current && launch === launchSequenceRef.current;
     // Unmount the start card on the tap itself, before the rotation begins.
     setLaunching(true);
     if (audioSynth) audioSynth.init();
@@ -1086,12 +1092,14 @@ export default function FingerSequencingClient() {
     if (!isChallenge && containerRef.current && !document.fullscreenElement) {
       try { await containerRef.current.requestFullscreen(); } catch {}
     }
+    if (!current()) return;
     if (Capacitor.isNativePlatform()) {
       StatusBar.setOverlaysWebView({ overlay: true }).catch(() => {});
       StatusBar.hide().catch(() => {});
     }
 
     try { await lockLandscape(); } catch {}
+    if (!current()) return;
 
     // Every run starts at the lowest difficulty. It used to start at 55% of the
     // player's best level, so improving once permanently raised the speed every
@@ -1133,14 +1141,15 @@ export default function FingerSequencingClient() {
     // Wait for the viewport to actually stop moving before showing the countdown,
     // instead of guessing with a fixed delay — see afterViewportSettled in
     // lib/orientation.js. A blind timeout let the "3" mount mid-resize and jump.
-    afterViewportSettled(() => {
+    cancelLaunchRef.current = afterViewportSettled(() => {
+      if (!current()) return;
       if (window.innerHeight > window.innerWidth && ('ontouchstart' in window || navigator.maxTouchPoints > 0)) {
         setPhase('rotate-hint');
       } else {
         runCountdown(isChallenge ? 0 : 3);
       }
     });
-  }, [runCountdown, bestLevel, isChallenge, totalTime]);
+  }, [runCountdown, isChallenge, totalTime]);
 
   // Duel auto-start — both clients begin at the exact same wall-clock
   // instant via the shared matchStartAt timestamp (ARENA_INTEGRATION.md rule 2).
@@ -1191,6 +1200,11 @@ export default function FingerSequencingClient() {
   useEffect(() => {
     if (challengeId === prevChallengeIdRef.current) return;
     prevChallengeIdRef.current = challengeId;
+    launchSequenceRef.current += 1;
+    cancelLaunchRef.current?.();
+    gameActiveRef.current = false;
+    clearTimeout(countdownTimerRef.current);
+    clearTimeout(heartbeatTimerRef.current);
     duelAutoStartedRef.current = false;
     setPhase('start');
     setLaunching(false);
@@ -1550,11 +1564,11 @@ export default function FingerSequencingClient() {
         ))}
 
         {/* Rotate Gating Screen */}
-        {phase === 'rotate-hint' && !isChallenge && (
+        {phase === 'rotate-hint' && (
           <div className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-black/95 text-center p-6 select-none">
             <div className="animate-bounce mb-5 text-emerald-400"><RotateCw className="w-12 h-12 mx-auto" /></div>
             <p className="text-sm font-bold text-white">Rotate your phone to play</p>
-            <p className="text-xs text-slate-500 mt-1.5 max-w-[220px] mx-auto font-sans">Your browser can't rotate this for you — turn your device to landscape.</p>
+            <p className="text-xs text-slate-500 mt-1.5 max-w-[220px] mx-auto font-sans">Your browser can&apos;t rotate this for you — turn your device to landscape.</p>
           </div>
         )}
 

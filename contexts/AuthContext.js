@@ -40,7 +40,7 @@ const AuthContext = createContext({
   user: null,
   loading: true,
   pendingSignup: null,
-  completeSignup: async (displayName) => ({ ok: false, error: 'Not ready.' }),
+  completeSignup: async () => ({ ok: false, error: 'Not ready.' }),
   signInWithGoogle: async () => {},
   signOut: async () => {},
   deleteAccount: async () => ({ ok: false, error: 'Not ready.' }),
@@ -104,18 +104,18 @@ async function resolveProfile(db, fbUser) {
     // this Google-sync path touch it at all.
     const hasCustomPhoto = typeof data.photoURL === 'string' && data.photoURL.startsWith('data:');
     if (hasCustomPhoto) {
-      try { localStorage.removeItem(PHOTO_CANDIDATE_KEY); } catch (e) {}
+      try { localStorage.removeItem(PHOTO_CANDIDATE_KEY); } catch {}
     } else if (fbUser.photoURL && fbUser.photoURL !== data.photoURL) {
       let candidate = null;
-      try { candidate = JSON.parse(localStorage.getItem(PHOTO_CANDIDATE_KEY) || 'null'); } catch (e) {}
+      try { candidate = JSON.parse(localStorage.getItem(PHOTO_CANDIDATE_KEY) || 'null'); } catch {}
       if (candidate && candidate.uid === fbUser.uid && candidate.url === fbUser.photoURL) {
         updates.photoURL = fbUser.photoURL;
-        try { localStorage.removeItem(PHOTO_CANDIDATE_KEY); } catch (e) {}
+        try { localStorage.removeItem(PHOTO_CANDIDATE_KEY); } catch {}
       } else {
-        try { localStorage.setItem(PHOTO_CANDIDATE_KEY, JSON.stringify({ uid: fbUser.uid, url: fbUser.photoURL })); } catch (e) {}
+        try { localStorage.setItem(PHOTO_CANDIDATE_KEY, JSON.stringify({ uid: fbUser.uid, url: fbUser.photoURL })); } catch {}
       }
     } else if (fbUser.photoURL) {
-      try { localStorage.removeItem(PHOTO_CANDIDATE_KEY); } catch (e) {}
+      try { localStorage.removeItem(PHOTO_CANDIDATE_KEY); } catch {}
     }
     // Self-heal: earlier versions stored email on this publicly-readable doc.
     // Strip it going forward — it only ever needs to live in Firebase Auth
@@ -182,7 +182,7 @@ async function resolveProfile(db, fbUser) {
       // was migrated once before) or the write fails, this account still
       // owns the name via its users/{uid} doc either way.
       await setDoc(doc(db, 'usernames', merged.displayName.toLowerCase()), { uid: fbUser.uid }, { merge: false });
-    } catch (e) {}
+    } catch {}
     return { status: 'ready', profile: { ...merged, email: fbUser.email || legacy.email || '' } };
   }
 
@@ -247,13 +247,13 @@ export function AuthProvider({ children }) {
         // expired) — this only changes what's shown while that happens.
         setLoading(false);
       }
-    } catch (e) {}
+    } catch {}
 
     const unsubscribe = onAuthStateChanged(initialized.auth, async (fbUser) => {
       if (!fbUser) {
         setUser(null);
         setPendingSignup(null);
-        try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+        try { localStorage.removeItem(SESSION_KEY); } catch {}
         setLoading(false);
         return;
       }
@@ -263,7 +263,7 @@ export function AuthProvider({ children }) {
           setUser(result.profile);
           preloadImage(result.profile?.photoURL);
           setPendingSignup(null);
-          try { localStorage.setItem(SESSION_KEY, JSON.stringify(result.profile)); } catch (e) {}
+          try { localStorage.setItem(SESSION_KEY, JSON.stringify(result.profile)); } catch {}
         } else {
           setUser(null);
           setPendingSignup(result.pending);
@@ -294,7 +294,7 @@ export function AuthProvider({ children }) {
       setUser((prev) => {
         if (!prev) return prev;
         const merged = { ...prev, ...snap.data(), uid: prev.uid };
-        try { localStorage.setItem(SESSION_KEY, JSON.stringify(merged)); } catch (e) {}
+        try { localStorage.setItem(SESSION_KEY, JSON.stringify(merged)); } catch {}
         return merged;
       });
     }, (err) => console.error('Profile live-sync error:', err));
@@ -344,11 +344,11 @@ export function AuthProvider({ children }) {
 
     const push = async (level) => {
       const lv = Math.floor(Number(level) || 0);
-      if (lv < 1 || lv === lastPushed) return;
+      if (lv < 1 || lv <= lastPushed) return;
       lastPushed = lv;
       try {
         await updateDoc(userRef, { level: lv });
-      } catch (err) {
+      } catch {
         // Non-critical — the badge just stays a level behind until next open.
       }
     };
@@ -358,7 +358,7 @@ export function AuthProvider({ children }) {
         const { getPlayerLevel } = await import('../lib/progressStore');
         const { level } = await getPlayerLevel();
         push(level);
-      } catch (err) { /* progress store unavailable */ }
+      } catch { /* progress store unavailable */ }
     };
 
     pushCurrentLevel();
@@ -505,7 +505,7 @@ export function AuthProvider({ children }) {
       const profile = { ...publicProfile, email: pendingSignup.email || '' };
       setUser(profile);
       setPendingSignup(null);
-      try { localStorage.setItem(SESSION_KEY, JSON.stringify(profile)); } catch (e) {}
+      try { localStorage.setItem(SESSION_KEY, JSON.stringify(profile)); } catch {}
       return { ok: true };
     } catch (err) {
       console.error('Failed to complete signup:', err);
@@ -555,7 +555,7 @@ export function AuthProvider({ children }) {
     }
     setUser(null);
     setPendingSignup(null);
-    try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+    try { localStorage.removeItem(SESSION_KEY); } catch {}
   };
 
   // 5. Permanently delete the account: duel/challenge history, Firestore
@@ -658,11 +658,11 @@ export function AuthProvider({ children }) {
       }
 
       // Wipe local on-device data too
-      try { await clearAllProgress(); } catch (e) {}
+      try { await clearAllProgress(); } catch {}
       if (Capacitor.isNativePlatform()) {
-        try { await FirebaseAuthentication.signOut(); } catch (e) {}
+        try { await FirebaseAuthentication.signOut(); } catch {}
       }
-      try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+      try { localStorage.removeItem(SESSION_KEY); } catch {}
 
       setUser(null);
       setPendingSignup(null);

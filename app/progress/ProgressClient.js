@@ -12,9 +12,10 @@ import {
   FileText, TrendingUp, TrendingDown, Minus, Lock, Bell, BellOff
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
+import { usePlayerProgress } from '../../contexts/PlayerProgressContext';
 import { doc, updateDoc } from 'firebase/firestore';
 import {
-  getStreak, getPlayerLevel, getTotalSessions, getDrillsPlayed,
+  getStreak, getTotalSessions, getDrillsPlayed,
   clearAllProgress, getSettings, updateSettings
 } from '../../lib/progressStore';
 import { Storage } from '../../lib/storage';
@@ -36,10 +37,11 @@ export default function ProgressClient() {
   const [photoError, setPhotoError] = useState('');
   const avatarEditorRef = useRef(null);
   const fileInputRef = useRef(null);
-  const [level,    setLevel]    = useState(1);
-  const [xpIn,     setXpIn]     = useState(0);
-  const [xpTo,     setXpTo]     = useState(1000);
-  const [totalXP,  setTotalXP]  = useState(0);
+  const { progress: playerProgress, status: progressStatus } = usePlayerProgress();
+  const level = playerProgress?.level ?? null;
+  const xpIn = playerProgress?.xpInLevel ?? 0;
+  const xpTo = playerProgress?.xpToNext ?? 1000;
+  const totalXP = playerProgress?.xp ?? 0;
   const [streak,   setStreak]   = useState({ current: 0, longest: 0 });
   const [sessions, setSessions] = useState(0);
   const [drillsP,  setDrillsP]  = useState(0);
@@ -61,8 +63,8 @@ export default function ProgressClient() {
 
   useEffect(() => {
     async function load() {
-      const [lv, s, sess, dp, settings, history, scores, drillTrends, headlineTrend, weekly, rem] = await Promise.all([
-        getPlayerLevel(), getStreak(), getTotalSessions(),
+      const [s, sess, dp, settings, history, scores, drillTrends, headlineTrend, weekly, rem] = await Promise.all([
+        getStreak(), getTotalSessions(),
         getDrillsPlayed(), getSettings(),
         Storage.getJSON('sd_history', {}), Storage.getJSON('sd_scores', {}),
         getDrillTrends().catch(() => []),
@@ -71,10 +73,6 @@ export default function ProgressClient() {
         getReminderSettings().catch(() => null),
       ]);
 
-      setLevel(lv.level);
-      setXpIn(lv.xpInLevel);
-      setXpTo(lv.xpToNext);
-      setTotalXP(lv.xp);
       setStreak(s);
       setSessions(sess);
       setDrillsP(dp);
@@ -509,9 +507,9 @@ export default function ProgressClient() {
               <>
                 <div className="flex items-center gap-2 flex-wrap">
                   <b>{displayName}</b>
-                  <LevelBadge level={level} />
+                  {playerProgress && <LevelBadge level={level} />}
                 </div>
-                <span>Level {level} · {drillsP} drills played</span>
+                <span>{playerProgress ? `Level ${level} / ${drillsP} drills played` : (progressStatus === 'unavailable' ? 'Waiting to restore progress?' : 'Restoring progress?')}</span>
               </>
             )}
           </div>
@@ -524,7 +522,7 @@ export default function ProgressClient() {
         </div>
 
         {/* ── Level Progress ── */}
-        <div className="p-xp">
+        {playerProgress && <div className="p-xp">
           <div className="p-xp-top">
             <span>XP PROGRESS</span>
             <b>{xpIn.toLocaleString()} / {(xpIn + xpTo).toLocaleString()} XP</b>
@@ -535,7 +533,7 @@ export default function ProgressClient() {
           <div className="text-[10px] text-neutral-500 mt-2 text-center">
             Total lifetime: <span className="text-violet-400 font-bold">{totalXP.toLocaleString()} XP</span>
           </div>
-        </div>
+        </div>}
 
         {/* ── Activity (how much you've trained — NOT how well) ── */}
         <div>

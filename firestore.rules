@@ -132,6 +132,28 @@ service cloud.firestore {
           // player's stats with no relationship to them at all, and
           // unlimited free-form self-grinding with no match required.
           //
+          // oppDay/oppWins ride this same branch because they are written in
+          // the same transaction that moves EIQ, and for the same reason it is
+          // bounded: they are what DECIDES the size of that EIQ move. They
+          // record how many times this player has duelled each opponent today,
+          // so a pair arranging wins for each other sees the payout fall to
+          // nothing (see eiqRepeatFactor in lib/challengeEngine.js). Letting
+          // them move on the self-service branch below would let a player
+          // clear their own counter and farm the same opponent indefinitely.
+          //
+          // oppWins counts WINS over a given opponent today, not matches — a
+          // player who keeps losing rematches is never penalised for it — and
+          // only for duels where the opponent was CHOSEN (invite / friend /
+          // rematch / open lobby). Blind matchmaking is exempt and always pays
+          // full. See eiqRepeatFactor in lib/challengeEngine.js.
+          //
+          // Deliberately NOT given a value constraint here. A rule cannot
+          // check a map's contents usefully, and the honest limit is the one
+          // already stated for every other Arena stat: the client computes
+          // these, so a modified client can lie about them. What this branch
+          // does guarantee is that they only ever move alongside a real,
+          // verified match between exactly these two players.
+          //
           // forfeitStreak/arenaLockedUntil are the same anti-abuse pair:
           // forfeitStreak can only move like streak above (+1, or reset to
           // 0 the moment a match is actually finished — see
@@ -144,7 +166,7 @@ service cloud.firestore {
           request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastMatchId']) &&
           matchupValid(uid, request.resource.data.lastMatchId) &&
           request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['wins', 'losses', 'streak', 'lastSeen', 'online', 'eiq', 'forfeitStreak', 'arenaLockedUntil', 'lastMatchId']) &&
+            .hasOnly(['wins', 'losses', 'streak', 'lastSeen', 'online', 'eiq', 'forfeitStreak', 'arenaLockedUntil', 'lastMatchId', 'oppDay', 'oppWins']) &&
           request.resource.data.get('wins', 0) <= resource.data.get('wins', 0) + 1 &&
           request.resource.data.get('losses', 0) <= resource.data.get('losses', 0) + 1 &&
           request.resource.data.get('streak', 0) <= resource.data.get('streak', 0) + 1 &&
@@ -182,7 +204,7 @@ service cloud.firestore {
           request.auth.uid == uid &&
           !('email' in request.resource.data) &&
           !request.resource.data.diff(resource.data).affectedKeys()
-            .hasAny(['wins', 'losses', 'streak', 'eiq', 'displayName', 'forfeitStreak', 'arenaLockedUntil', 'lastMatchId']) &&
+            .hasAny(['wins', 'losses', 'streak', 'eiq', 'displayName', 'forfeitStreak', 'arenaLockedUntil', 'lastMatchId', 'oppDay', 'oppWins']) &&
           (!('photoURL' in request.resource.data) || request.resource.data.photoURL.size() < 300000)
         )
       );

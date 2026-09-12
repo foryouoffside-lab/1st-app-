@@ -39,12 +39,13 @@ export function ChallengeProvider({ children }) {
   // listeners would keep running for every signed-in user even while Arena
   // is switched off, which was the actual source of the extra background
   // CPU/battery draw on phones.
+  const userUid = user?.uid;
   useEffect(() => {
-    if (!ARENA_ENABLED || !user || !db) {
+    if (!ARENA_ENABLED || !userUid || !db) {
       setIncomingChallenges([]);
       return;
     }
-    const unsubscribe = listenForIncomingChallenges(user.uid, (mine) => {
+    const unsubscribe = listenForIncomingChallenges(userUid, (mine) => {
       // Only push a new array when the set of invites actually changed.
       //
       // The listener is now scoped server-side to this user's own invites, so
@@ -64,7 +65,7 @@ export function ChallengeProvider({ children }) {
       });
     });
     return () => unsubscribe();
-  }, [user, db]);
+  }, [userUid, db]);
 
   // This user's own most recent sent challenge, live. Scoped server-side to
   // `fromUid` + the transient statuses this actually cares about — it used to
@@ -80,13 +81,13 @@ export function ChallengeProvider({ children }) {
   // update" behavior as before, just without dragging the user's whole match
   // history along for the ride.
   useEffect(() => {
-    if (!ARENA_ENABLED || !user || !db) {
+    if (!ARENA_ENABLED || !userUid || !db) {
       setOutgoingChallenge(null);
       return;
     }
     const q = query(
       collection(db, 'challenges'),
-      where('fromUid', '==', user.uid),
+      where('fromUid', '==', userUid),
       where('status', 'in', ['pending', 'accepted', 'declined'])
     );
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -114,7 +115,7 @@ export function ChallengeProvider({ children }) {
       });
     }, (error) => console.error('Outgoing challenge listener error:', error));
     return () => unsubscribe();
-  }, [user, db]);
+  }, [userUid, db]);
 
   // Memoized so the two guards above actually pay off. A fresh object literal
   // here would re-render every consumer on ANY provider render regardless of

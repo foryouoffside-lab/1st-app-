@@ -21,14 +21,14 @@ export default function PrivacyPolicyPage() {
         <p className="text-[12px] text-slate-500 mb-8">Last updated: {LAST_UPDATED}</p>
 
         <Section title="Overview">
-          <p>SkillDrills ("we", "us") is a cognitive and reaction-training app. This policy explains what information we collect when you use it, why we collect it, and how you can control or delete it.</p>
+          <p>SkillDrills (&quot;we&quot;, &quot;us&quot;) is a cognitive and reaction-training app. This policy explains what information we collect when you use it, why we collect it, and how you can control or delete it.</p>
         </Section>
 
         <Section title="Information we collect">
           <p><strong className="text-slate-300">Account information.</strong> Signing in requires a Google account. We receive your name, email address, and profile photo from Google Sign-In to create your player profile.</p>
           <p><strong className="text-slate-300">Gameplay data.</strong> Drill scores, streaks, XP/level progress, and daily challenge history are stored against your account so your progress is saved and can sync across sessions.</p>
           <p><strong className="text-slate-300">Diagnostic data.</strong> We use Firebase Crashlytics to automatically collect crash reports and basic device information (device model, OS version, app version) so we can find and fix bugs. This data is not linked to your name or used for advertising.</p>
-          <p><strong className="text-slate-300">Usage analytics.</strong> The app uses Firebase Analytics to understand which drills and features are actually used — screen views and events like completing a drill (drill, category, score). It doesn't use cookies or track you across other websites or apps, and isn't used for advertising.</p>
+          <p><strong className="text-slate-300">Usage analytics.</strong> The app uses Firebase Analytics to understand which drills and features are actually used — screen views and events like completing a drill (drill, category, score). It doesn&apos;t use cookies or track you across other websites or apps, and isn&apos;t used for advertising.</p>
           <p><strong className="text-slate-300">Device preferences.</strong> Settings like sound on/off are stored locally on your device only and are never sent to us.</p>
         </Section>
 
@@ -41,11 +41,11 @@ export default function PrivacyPolicyPage() {
         </Section>
 
         <Section title="Data retention & deletion">
-          <p>We keep your account data for as long as your account exists. You can permanently delete your account and all associated data at any time from <span className="text-slate-300">Progress → Delete Account &amp; Wipe Data</span> inside the app. If you no longer have the app installed, email <span className="text-slate-300">skilldrills.contact@gmail.com</span> from the address associated with your account and we'll delete your data within 30 days.</p>
+          <p>We keep your account data for as long as your account exists. You can permanently delete your account and all associated data at any time from <span className="text-slate-300">Progress → Delete Account &amp; Wipe Data</span> inside the app. If you no longer have the app installed, email <span className="text-slate-300">skilldrills.contact@gmail.com</span> from the address associated with your account and we&apos;ll delete your data within 30 days.</p>
         </Section>
 
         <Section title="Children's privacy">
-          <p>SkillDrills is not directed at children under 13, and creating an account requires a Google account. If we become aware that we've collected information from a child under 13 without appropriate consent, we will delete it — contact us below to request this.</p>
+          <p>SkillDrills is not directed at children under 13, and creating an account requires a Google account. If we become aware that we&apos;ve collected information from a child under 13 without appropriate consent, we will delete it — contact us below to request this.</p>
         </Section>
 
         <Section title="Who is responsible for your data">
@@ -76,11 +76,11 @@ export default function PrivacyPolicyPage() {
         </Section>
 
         <Section title="Security">
-          <p>Sign-in is handled entirely by Google — we never see or store your password. Your data is protected using Firebase's standard authentication and access-control rules.</p>
+          <p>Sign-in is handled entirely by Google — we never see or store your password. Your data is protected using Firebase&apos;s standard authentication and access-control rules.</p>
         </Section>
 
         <Section title="Changes to this policy">
-          <p>If this policy changes, we'll update the date at the top of this page. Continued use of SkillDrills after a change means you accept the updated policy.</p>
+          <p>If this policy changes, we&apos;ll update the date at the top of this page. Continued use of SkillDrills after a change means you accept the updated policy.</p>
         </Section>
 
         <Section title="Contact us">

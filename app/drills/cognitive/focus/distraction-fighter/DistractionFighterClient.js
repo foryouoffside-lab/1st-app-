@@ -1,5 +1,7 @@
 'use client';
 
+import { DUEL_DURATION_SECONDS } from '../../../../../lib/challengeEngine';
+
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 
@@ -338,7 +340,7 @@ export default function DistractionFighterClient() {
   const searchParams = useSearchParams();
   const challengeId = searchParams ? searchParams.get('challengeId') : null;
   const isChallenge = !!challengeId;
-  const totalTime = isChallenge ? 30 : TOTAL_TIME;
+  const totalTime = isChallenge ? DUEL_DURATION_SECONDS : TOTAL_TIME;
 
   // === Phase Machine State ===
   const [phase, setPhase] = useState('start'); // 'start' | 'countdown' | 'playing' | 'ended'

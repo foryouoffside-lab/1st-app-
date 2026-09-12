@@ -25,7 +25,44 @@ import DrillStartCard from '../../../../../components/drill/DrillStartCard';
 // ============================================================
 // TUNING
 // ============================================================
-const TOTAL_TIME = 45;      // fixed countdown — no add/remove-time gimmick
+const TOTAL_TIME = 60;      // opening bank of seconds; correct hits buy more
+
+// Seconds a correct tap buys back, for THIS drill only (passed to applyHit;
+// the shared default in lib/drillRules.js stays 1.0 for everyone else).
+//
+// The real fix for "this drill ends too fast" is TOTAL_TIME above, not this.
+// The opening bank compounds: more seconds means more targets crossing the
+// screen, which means more seconds. Going 45 -> 60 roughly DOUBLES a typical
+// run on its own (measured, 300 sims per point):
+//
+//     accuracy      45s bank      60s bank
+//        60%           53s          1.2m
+//        70%           65s          1.5m
+//        80%           90s          2.2m
+//
+// 1.1 rather than 1.0 is a small amount of headroom on top, and it is aimed at
+// one specific band. This drill's TARGET supply is thinner than it looks — one
+// shape every spawnRate/2 ms, and only 35% of them are targets — so it hands
+// out 0.70 targets/sec at level 1 against a clock draining 1/sec. Holding
+// steady needs
+//
+//     rate x accuracy x reward  >=  1 + rate x (1 - accuracy) x penalty
+//
+// which at level 1 wants ~2.0s/hit at 80% accuracy. Nothing sane pays that, so
+// the opening is MEANT to drain — that is the pressure. The player climbs out
+// of it: by the time spawn rate reaches its floor the supply is ~2.1
+// targets/sec, where break-even at 80% is only 0.84s and the run can extend.
+// 1.1 widens that sustainable window slightly, which moves an 80% run from
+// 2.2m to ~3.1m and lands it on the 2.7m-at-78% figure lib/drillRules.js was
+// tuned around.
+//
+// Not higher: at 1.5 an 80% run ran 7.6 minutes and a 95% one 9.3, well past
+// anything this drill is paced for.
+//
+// The decay in timePerHit() still applies on top (0.99 per 6 hits), so the
+// payout keeps shrinking with depth and a run always ends. Do not flatten it:
+// a constant payout above break-even is the "runs never end" bug.
+const TIME_PER_HIT_SECONDS = 1.1;
 
 // How a solo run is won and lost — the clock as the only fail state, what a hit
 // earns, what a mistake costs — is defined once in lib/drillRules.js and shared
@@ -672,7 +709,7 @@ export default function MultiTaskingClient() {
     // local may move. No state is set here; the existing tick redraws the
     // seconds when the displayed number changes, so this costs nothing per hit.
     if (!isChallenge) {
-      timeRemainingRef.current = applyHit({ timeRemaining: timeRemainingRef.current, level: levelRef.current, hits: correctActionsRef.current });
+      timeRemainingRef.current = applyHit({ timeRemaining: timeRemainingRef.current, level: levelRef.current, hits: correctActionsRef.current, reward: TIME_PER_HIT_SECONDS });
     }
     comboRef.current = comboBefore + 1;
     bestComboRef.current = Math.max(bestComboRef.current, comboRef.current);
@@ -1156,7 +1193,7 @@ export default function MultiTaskingClient() {
       const hidden = document.visibilityState !== 'visible';
       shapesRef.current.forEach((s) => {
         if (!s.anim) return;
-        try { hidden ? s.anim.pause() : s.anim.play(); } catch {}
+        try { if (hidden) s.anim.pause(); else s.anim.play(); } catch {}
       });
     };
     document.addEventListener('visibilitychange', onVisibility);
@@ -1290,11 +1327,11 @@ export default function MultiTaskingClient() {
         ))}
 
         {/* ── ROTATE HINT ── */}
-        {phase === 'rotate-hint' && !isChallenge && (
+        {phase === 'rotate-hint' && (
           <div className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-black/95 text-center p-6 backdrop-blur-sm">
             <div className="animate-bounce mb-5 text-violet-500"><RotateCcw className="w-14 h-14 mx-auto" /></div>
             <h3 className="text-lg font-bold text-white mb-2">Rotate to play</h3>
-            <p className="text-xs text-gray-400 max-w-xs mx-auto">This drill runs in landscape. Turn your device — it'll continue on its own.</p>
+            <p className="text-xs text-gray-400 max-w-xs mx-auto">This drill runs in landscape. Turn your device — it&apos;ll continue on its own.</p>
           </div>
         )}
 

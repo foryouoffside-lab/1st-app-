@@ -93,7 +93,7 @@ function roundRectPath(ctx, x, y, w, h, r) {
  */
 export function drawShareCard(ctx, data) {
   const {
-    score = 0, bestScore = 0, accuracy = 0, bestCombo = 0,
+    score = 0, bestScore = 0,
     rating, isNewBest = false, drillName = 'Drill', playerName = null,
     linkText = 'SKILLDRILLS.ONLINE', fonts, duel = null,
   } = data;

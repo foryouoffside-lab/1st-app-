@@ -456,7 +456,7 @@ export default function TowerOfHanoiClient() {
 
   const endGameRef = useRef(null);
 
-  const endGame = useCallback(async (reason) => {
+  const endGame = useCallback(async () => {
     if (!gameActiveRef.current) return;
     gameActiveRef.current = false;
 
@@ -933,7 +933,7 @@ export default function TowerOfHanoiClient() {
           <div className="fx-vignette" style={{ '--v-min': Math.max(0.05, dangerLevel * 0.25), '--v-max': Math.min(0.55, dangerLevel * 0.75), animationDuration: `${heartbeatTempoRef.current}ms` }} />
         )}
 
-        {phase === 'rotate-hint' && !isChallenge && (
+        {phase === 'rotate-hint' && (
           <div className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-black/95 text-center p-6">
             <div className="animate-bounce mb-5 text-blue-500"><RotateCcw className="w-12 h-12 mx-auto" /></div>
             <p className="text-sm font-bold text-white">Rotate your phone to play</p>

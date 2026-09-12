@@ -19,7 +19,7 @@ import { useShareCard } from '../../../../../components/ShareScoreCard';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
 import DrillWrapper from '../../../../../components/DrillWrapper';
-import { useDuelMatchStart } from '../../../../../lib/challengeEngine';
+import { useDuelMatchStart, DUEL_DURATION_SECONDS, duelSecondsRemaining } from '../../../../../lib/challengeEngine';
 import { motionDpr, createLayeredSpriteCache, SPRITE_PAD } from '../../../../../lib/canvasFx';
 import { APP_SHARE_URL } from '../../../../../lib/shareLinks';
 import ResultScreen from '../../../../../components/drill/ResultScreen';
@@ -302,8 +302,10 @@ export default function KineticInterceptClient() {
   const searchParams = useSearchParams();
   const challengeId = searchParams ? searchParams.get('challengeId') : null;
   const isChallenge = !!challengeId;
-  const totalTime = isChallenge ? 30 : TOTAL_TIME;
+  const totalTime = isChallenge ? DUEL_DURATION_SECONDS : TOTAL_TIME;
   const matchStartAt = useDuelMatchStart(challengeId);
+  const duelStartRef = useRef(null);
+  duelStartRef.current = matchStartAt;
   const duelAutoStartedRef = useRef(false);
 
   // === UI State ===
@@ -610,7 +612,7 @@ export default function KineticInterceptClient() {
 
   const endGameRef = useRef(null);
 
-  const resolveWrong = useCallback((kind = 'miss') => {
+  const resolveWrong = useCallback(() => {
     if (!gameActiveRef.current) return;
     comboRef.current = 0;
     mistakesRef.current += 1;
@@ -680,7 +682,7 @@ export default function KineticInterceptClient() {
     setTimeout(() => { if (gameActiveRef.current) spawnTarget(); }, 150);
   }, [triggerFlash, spawnBurst, updateDifficulty, spawnTarget, totalTime, clearTarget, isChallenge]);
 
-  const endGame = useCallback(async (reason) => {
+  const endGame = useCallback(async () => {
     if (!gameActiveRef.current) return;
     gameActiveRef.current = false;
 
@@ -873,7 +875,9 @@ export default function KineticInterceptClient() {
     let shownSecond = Math.ceil(timeRemainingRef.current);
     gameTimerRef.current = setInterval(() => {
       if (!gameActiveRef.current) { clearInterval(gameTimerRef.current); return; }
-      timeRemainingRef.current -= 0.2;
+      timeRemainingRef.current = duelStartRef.current
+        ? duelSecondsRemaining(duelStartRef.current)
+        : timeRemainingRef.current - 0.2;
       if (timeRemainingRef.current <= 0) {
         timeRemainingRef.current = 0;
         setTimeRemaining(0);
@@ -1104,7 +1108,7 @@ export default function KineticInterceptClient() {
           );
         })}
 
-        {phase === 'rotate-hint' && !isChallenge && (
+        {phase === 'rotate-hint' && (
           <div className="absolute inset-0 z-[100] flex flex-col items-center justify-center bg-black/95 text-center p-6">
             <div className="animate-bounce mb-5 text-red-500"><RotateCcw className="w-12 h-12 mx-auto" /></div>
             <p className="text-sm font-bold text-white">Rotate your phone to play</p>

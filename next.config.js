@@ -6,6 +6,8 @@ const nextConfig = {
   // ============================================
   
   reactStrictMode: true,
+  // Keep tracing inside this app when a parent directory also has a lockfile.
+  outputFileTracingRoot: __dirname,
   compress: true,
   poweredByHeader: false,
   productionBrowserSourceMaps: false,

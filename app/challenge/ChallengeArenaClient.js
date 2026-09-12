@@ -7,12 +7,12 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useChallenge } from '../../contexts/ChallengeContext';
 import {
-  sendChallenge, sendGlobalChallenge, acceptChallenge, declineChallenge, withdrawChallenge, cleanupStaleChallenges,
+  sendChallenge, sendGlobalChallenge, acceptChallenge, declineChallenge, withdrawChallenge, cleanupStaleChallenges, leaveBeforeStart,
   joinMatchmakingQueue, leaveMatchmakingQueue, refreshMatchmakingQueue, scanForMatch, matchmakingEiqRange,
   tierForEiq, EIQ_TIERS, DUEL_DRILLS, getServerClockOffset, isInviteFresh,
   isPlayerBusy, arenaLockoutRemainingMs, FORFEIT_GRACE_COUNT,
 } from '../../lib/challengeEngine';
-import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, updateDoc, serverTimestamp, getCountFromServer, documentId } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, updateDoc, serverTimestamp, getCountFromServer, documentId, getDoc } from 'firebase/firestore';
 import {
   searchUserByName, sendFriendRequest, acceptFriendRequest, declineFriendRequest,
   cancelFriendRequest, removeFriend, friendPairId,
@@ -209,7 +209,7 @@ export default function ChallengeArenaClient() {
   const [duelPickerFor, setDuelPickerFor] = useState(null);
 
   // Automated matchmaking state
-  const [matchmakingState, setMatchmakingState] = useState('idle'); // 'idle' | 'searching' | 'found'
+  const [matchmakingState, renderMatchmakingState] = useState('idle'); // 'idle' | 'searching' | 'found'
   const [matchmakingDrill, setMatchmakingDrill] = useState(null);
   const [matchmakingSeconds, setMatchmakingSeconds] = useState(0);
   const matchmakingPollRef = useRef(null);
@@ -225,6 +225,12 @@ export default function ChallengeArenaClient() {
   // fires ~2s after it was armed and must not send an invite into a search
   // that has since been answered or cancelled.
   const matchmakingStateRef = useRef('idle');
+  const matchmakingSessionRef = useRef(0);
+  const matchmakingScanRef = useRef(null);
+  const setMatchmakingState = (next) => {
+    matchmakingStateRef.current = next;
+    renderMatchmakingState(next);
+  };
   // Elapsed search seconds, readable from inside the poll callback — drives
   // the widening EIQ search window (see matchmakingEiqRange).
   const matchmakingElapsedRef = useRef(0);
@@ -560,7 +566,7 @@ export default function ChallengeArenaClient() {
       listenIncomingRequests(db, uid, setIncomingFriendReqs),
       listenOutgoingRequests(db, uid, setOutgoingFriendReqs),
     ];
-    return () => unsubs.forEach((u) => { try { u(); } catch (e) {} });
+    return () => unsubs.forEach((u) => { try { u(); } catch {} });
   }, [db, uid]);
 
   // The viewer's own training level, for their own badge on the profile sheet.
@@ -591,7 +597,7 @@ export default function ChallengeArenaClient() {
       },
       (e) => console.error('friend profiles listener failed', e),
     ));
-    return () => unsubs.forEach((u) => { try { u(); } catch (e) {} });
+    return () => unsubs.forEach((u) => { try { u(); } catch {} });
   }, [db, friends]);
 
   // 5. Fetch this user's duel history (Results tab).
@@ -683,6 +689,7 @@ export default function ChallengeArenaClient() {
   };
 
   const cancelMatchmaking = async () => {
+    matchmakingSessionRef.current += 1;
     stopMatchmakingTimers();
     // An invite we minted for a matched opponent goes with the search. Without
     // this, cancelling from "Opponent Found!" left it live: the opponent could
@@ -705,70 +712,66 @@ export default function ChallengeArenaClient() {
   // `takeover` is the passive side acting after its grace period — see
   // MATCHMAKING_TAKEOVER_MS. A normal scan still respects the uid tie-break.
   const attemptMatchmakingScan = async (drill, takeover = false) => {
-    // Ranked pairing: tight ±300 EIQ window for the first 15s, then
-    // progressively wider so a small player pool still finds matches.
-    const candidate = await scanForMatch(user, drill.slug, matchmakingEiqRange(matchmakingElapsedRef.current));
-    if (!candidate) return;
-
-    if (!takeover && user.uid >= candidate.uid) {
-      // We found somebody but it is the other side's turn to send. Give them
-      // a short head start, then send it ourselves if nothing arrived — the
-      // alternative is sitting out a full poll interval for a match that is
-      // already sitting right there. Re-armed on each scan, and torn down the
-      // moment anything moves the search on (stopMatchmakingTimers).
-      if (!matchmakingTakeoverRef.current) {
-        matchmakingTakeoverRef.current = setTimeout(() => {
-          matchmakingTakeoverRef.current = null;
-          // Only if we are still actually searching. The other side's invite
-          // may have landed and been auto-accepted while this was pending,
-          // and minting a second match on top of that would route the pair
-          // into two different duels.
-          if (matchmakingStateRef.current !== 'searching') return;
-          attemptMatchmakingScan(drill, true);
-        }, MATCHMAKING_TAKEOVER_MS);
-      }
-      return;
-    }
-
-    stopMatchmakingTimers();
+    const session = matchmakingSessionRef.current;
+    const current = () => session === matchmakingSessionRef.current && matchmakingStateRef.current === 'searching';
+    if (!current() || matchmakingScanRef.current === session) return;
+    matchmakingScanRef.current = session;
     try {
-      const newChallengeId = await sendChallenge(user, candidate, drill.slug, drill.name, { matchmaking: true });
-      matchedChallengeIdRef.current = newChallengeId;
-      await leaveMatchmakingQueue(user.uid);
-      setMatchmakingState('found');
-      // ChallengeStatusToast (mounted globally) auto-routes us in the moment
-      // the matched opponent accepts. But if they never do — they cancelled
-      // their own search in the same instant, or dropped off — nothing else
-      // would ever move this modal off "Opponent Found! Connecting you both
-      // to the lobby...", and its Cancel button only renders while
-      // 'searching'. That left the player stranded with no way out. Bound the
-      // wait, then withdraw the invite we created and reset to idle.
-      matchmakingTimeoutRef.current = setTimeout(async () => {
-        // withdrawChallenge only cancels an invite still sitting unanswered.
-        // A blind decline here raced the opponent's accept: they were already
-        // being routed into the drill when this fired, and arrived to find
-        // the duel marked declined out from under them.
-        if (newChallengeId) {
-          matchedChallengeIdRef.current = null;
-          const withdrawn = await withdrawChallenge(newChallengeId).catch(() => false);
-          // They accepted just as we gave up — follow them in rather than
-          // dropping a match both players are now expecting.
-          if (!withdrawn) {
-            stopMatchmakingTimers();
-            await leaveMatchmakingQueue(user.uid).catch(() => {});
-            router.push(`/drills/${drill.slug}?challengeId=${newChallengeId}`);
-            return;
-          }
+      const candidate = await withConnectionTimeout(scanForMatch(user, drill.slug, matchmakingEiqRange(matchmakingElapsedRef.current)));
+      if (!current() || !candidate) return;
+      if (!takeover && user.uid >= candidate.uid) {
+        if (!matchmakingTakeoverRef.current) {
+          matchmakingTakeoverRef.current = setTimeout(() => {
+            matchmakingTakeoverRef.current = null;
+            if (current()) attemptMatchmakingScan(drill, true);
+          }, MATCHMAKING_TAKEOVER_MS);
         }
-        cancelMatchmaking();
+        return;
+      }
+      stopMatchmakingTimers();
+      const sending = sendChallenge(user, candidate, drill.slug, drill.name, { matchmaking: true });
+      // A Firestore write can finish after cancellation or connection timeout.
+      // Withdraw that late invite rather than reviving an abandoned search.
+      sending.then((id) => { if (!current() && id) withdrawChallenge(id).catch(() => {}); }, () => {});
+      const newChallengeId = await withConnectionTimeout(sending);
+      if (!current()) return;
+      if (!newChallengeId) throw new Error('Could not create a duel.');
+      matchedChallengeIdRef.current = newChallengeId;
+      leaveMatchmakingQueue(user.uid).catch(() => {});
+      setMatchmakingState('found');
+      matchmakingTimeoutRef.current = setTimeout(async () => {
+        if (session !== matchmakingSessionRef.current) return;
+        try {
+          const withdrawn = await withConnectionTimeout(withdrawChallenge(newChallengeId));
+          if (session !== matchmakingSessionRef.current) return;
+          if (!withdrawn) {
+            // False can mean a failed write or a declined invite, not just acceptance.
+            const snap = await withConnectionTimeout(getDoc(doc(db, 'challenges', newChallengeId)));
+            if (session !== matchmakingSessionRef.current) return;
+            if (snap.exists() && ['accepted', 'countdown', 'playing'].includes(snap.data().status)) {
+              stopMatchmakingTimers();
+              router.push(`/drills/${drill.slug}?challengeId=${newChallengeId}`);
+              return;
+            }
+          }
+        } catch (error) {
+          console.error('Matched duel confirmation failed:', error);
+        }
+        if (session === matchmakingSessionRef.current) cancelMatchmaking();
       }, MATCH_ACCEPT_TIMEOUT_MS);
-    } catch (e) {
-      console.error('Failed to create matched challenge:', e);
-      await cancelMatchmaking();
+    } catch (error) {
+      if (current()) {
+        console.error('Matchmaking failed:', error);
+        cancelMatchmaking();
+      }
+    } finally {
+      if (matchmakingScanRef.current === session) matchmakingScanRef.current = null;
     }
   };
 
   const startMatchmaking = async (drill) => {
+    if (!user || matchmakingStateRef.current !== 'idle') return;
+    const session = ++matchmakingSessionRef.current;
     setMatchmakingDrill(drill);
     setMatchmakingState('searching');
     setMatchmakingSeconds(0);
@@ -777,6 +780,8 @@ export default function ChallengeArenaClient() {
     try {
       await withConnectionTimeout(joinMatchmakingQueue(user, drill.slug, drill.name));
     } catch (e) {
+      if (session !== matchmakingSessionRef.current) return;
+      if (user) leaveMatchmakingQueue(user.uid).catch(() => {});
       if (e?.code === 'arena/locked-out') {
         alert(e.message);
       } else if (e?.code === 'arena/no-connection') {
@@ -792,7 +797,7 @@ export default function ChallengeArenaClient() {
       return;
     }
 
-    await attemptMatchmakingScan(drill);
+    if (session !== matchmakingSessionRef.current || matchmakingStateRef.current !== 'searching') return;
     matchmakingPollRef.current = setInterval(() => attemptMatchmakingScan(drill), MATCHMAKING_POLL_MS);
     matchmakingTickRef.current = setInterval(() => {
       matchmakingElapsedRef.current += 1;
@@ -804,9 +809,9 @@ export default function ChallengeArenaClient() {
       refreshMatchmakingQueue(user.uid);
     }, 20000);
     matchmakingTimeoutRef.current = setTimeout(() => { cancelMatchmaking(); }, 60000);
+    void attemptMatchmakingScan(drill);
   };
 
-  useEffect(() => { matchmakingStateRef.current = matchmakingState; }, [matchmakingState]);
 
   // Losing the connection mid-search can't produce a match, and none of the
   // polling can report the failure — scanForMatch just returns nothing while
@@ -822,7 +827,7 @@ export default function ChallengeArenaClient() {
   // call surfaces here as a normal incoming invite — auto-accept it rather
   // than making the user click through it, and navigate straight in.
   useEffect(() => {
-    if (matchmakingState !== 'searching') return;
+    if (matchmakingState !== 'searching' || matchmakingStateRef.current !== 'searching') return;
     // The invite must be for the drill we're actually searching for, and fresh
     // enough to belong to THIS search. Matching on `matchmaking === true`
     // alone meant a leftover matchmaking invite from an earlier session
@@ -839,11 +844,18 @@ export default function ChallengeArenaClient() {
     });
     if (!match) return;
 
+    const session = ++matchmakingSessionRef.current;
+    setMatchmakingState('found');
     stopMatchmakingTimers();
     (async () => {
       try {
-        await acceptChallenge(match.id, user);
-        await leaveMatchmakingQueue(user.uid);
+        const accepting = acceptChallenge(match.id, user);
+        accepting.then(() => {
+          if (session !== matchmakingSessionRef.current) leaveBeforeStart(match.id, user.uid).catch(() => {});
+        }, () => {});
+        await withConnectionTimeout(accepting);
+        if (session !== matchmakingSessionRef.current) return;
+        leaveMatchmakingQueue(user.uid).catch(() => {});
 
         // Turn down any OTHER matchmaking invite aimed at us in the same
         // wave. Several searchers can spot the same waiting player at once
@@ -863,8 +875,7 @@ export default function ChallengeArenaClient() {
           console.error('Failed to auto-accept matched challenge:', e);
         }
       }
-      setMatchmakingState('idle');
-      setMatchmakingDrill(null);
+      if (session === matchmakingSessionRef.current) cancelMatchmaking();
     })();
   }, [incomingChallenges, matchmakingState, matchmakingDrill]);
 
@@ -881,6 +892,8 @@ export default function ChallengeArenaClient() {
   const userUid = user?.uid;
   useEffect(() => {
     return () => {
+      matchmakingSessionRef.current += 1;
+      matchmakingStateRef.current = 'idle';
       stopMatchmakingTimers();
       if (userUid) leaveMatchmakingQueue(userUid).catch(() => {});
     };
@@ -977,6 +990,18 @@ export default function ChallengeArenaClient() {
   const handleAcceptInvite = async (invite) => {
     try {
       await acceptChallenge(invite.id, user);
+      // Accepting an invite ends any search that was running: stop the timers
+      // and drop the queue entry BEFORE navigating. The unmount cleanup below
+      // does this too, but only once the route actually tears this screen
+      // down — and in that gap another searcher can still find this player in
+      // the queue and send them an invite they can never answer, because the
+      // invite banner is unmounted on drill routes. That sender then waits out
+      // the full accept timeout for nothing.
+      matchmakingSessionRef.current += 1;
+      stopMatchmakingTimers();
+      setMatchmakingState('idle');
+      setMatchmakingDrill(null);
+      if (user?.uid) leaveMatchmakingQueue(user.uid).catch(() => {});
       router.push(`/drills/${invite.drillSlug}?challengeId=${invite.id}`);
     } catch (e) {
       // An open-lobby post is visible to everyone, so losing the race for one
@@ -1424,7 +1449,7 @@ export default function ChallengeArenaClient() {
         </div>
         <h1 className="font-display text-2xl text-white mb-2">Arena — Coming Soon</h1>
         <p className="text-sm text-neutral-400 max-w-xs leading-relaxed">
-          Real-time 1v1 duels are being tuned up for mobile before launch. Keep training solo — Arena will unlock here once it's ready.
+          Real-time 1v1 duels are being tuned up for mobile before launch. Keep training solo — Arena will unlock here once it&apos;s ready.
         </p>
       </div>
     );

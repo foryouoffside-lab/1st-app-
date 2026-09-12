@@ -3,6 +3,7 @@ import { Inter, Anton, IBM_Plex_Mono } from 'next/font/google';
 import AppShellClient from '../components/AppShellClient';
 import { AuthProvider } from '../contexts/AuthContext';
 import AuthGate from '../components/AuthGate';
+import { PlayerProgressProvider } from '../contexts/PlayerProgressContext';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -91,7 +92,9 @@ export default function RootLayout({ children }) {
         <main id="main-content">
           <AuthProvider>
             <AuthGate>
-              <AppShellClient>{children}</AppShellClient>
+              <PlayerProgressProvider>
+                <AppShellClient>{children}</AppShellClient>
+              </PlayerProgressProvider>
             </AuthGate>
           </AuthProvider>
         </main>

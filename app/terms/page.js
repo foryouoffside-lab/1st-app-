@@ -21,7 +21,7 @@ export default function TermsOfServicePage() {
         <p className="text-[12px] text-slate-500 mb-8">Last updated: {LAST_UPDATED}</p>
 
         <Section title="Acceptance of terms">
-          <p>By creating an account or using SkillDrills, you agree to these terms. If you don't agree, please don't use the app.</p>
+          <p>By creating an account or using SkillDrills, you agree to these terms. If you don&apos;t agree, please don&apos;t use the app.</p>
         </Section>
 
         <Section title="The service">
@@ -29,11 +29,11 @@ export default function TermsOfServicePage() {
         </Section>
 
         <Section title="Your account">
-          <p>You sign in with a Google account and choose a player name. You're responsible for the activity on your account and for keeping your Google account secure. One account per person, please.</p>
+          <p>You sign in with a Google account and choose a player name. You&apos;re responsible for the activity on your account and for keeping your Google account secure. One account per person, please.</p>
         </Section>
 
         <Section title="Acceptable use">
-          <p>Don't use SkillDrills to cheat, exploit bugs to manipulate scores or leaderboards, attempt to disrupt the service, or reverse-engineer the app beyond what's permitted by law.</p>
+          <p>Don&apos;t use SkillDrills to cheat, exploit bugs to manipulate scores or leaderboards, attempt to disrupt the service, or reverse-engineer the app beyond what&apos;s permitted by law.</p>
         </Section>
 
         <Section title="Your data">
@@ -41,7 +41,7 @@ export default function TermsOfServicePage() {
         </Section>
 
         <Section title="No warranty">
-          <p>SkillDrills is provided "as is," without guarantees that it will be uninterrupted, error-free, or permanently available. Training results are not a guarantee of any real-world skill improvement.</p>
+          <p>SkillDrills is provided &quot;as is,&quot; without guarantees that it will be uninterrupted, error-free, or permanently available. Training results are not a guarantee of any real-world skill improvement.</p>
         </Section>
 
         <Section title="Limitation of liability">
@@ -65,7 +65,7 @@ export default function TermsOfServicePage() {
         </Section>
 
         <Section title="Changes to these terms">
-          <p>If we update these terms, we'll update the date at the top of this page. Continuing to use SkillDrills after a change means you accept the updated terms.</p>
+          <p>If we update these terms, we&apos;ll update the date at the top of this page. Continuing to use SkillDrills after a change means you accept the updated terms.</p>
         </Section>
 
         <Section title="Contact us">

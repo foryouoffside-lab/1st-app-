@@ -16,7 +16,7 @@ import { useShareCard } from '../../../../../components/ShareScoreCard';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar } from '@capacitor/status-bar';
 import DrillWrapper from '../../../../../components/DrillWrapper';
-import { useDuelMatchStart } from '../../../../../lib/challengeEngine';
+import { useDuelMatchStart, DUEL_DURATION_SECONDS, duelSecondsRemaining } from '../../../../../lib/challengeEngine';
 import { APP_SHARE_URL } from '../../../../../lib/shareLinks';
 import ResultScreen from '../../../../../components/drill/ResultScreen';
 import DrillStartCard from '../../../../../components/drill/DrillStartCard';
@@ -325,8 +325,10 @@ export default function ShadeFinderClient() {
   const searchParams = useSearchParams();
   const challengeId = searchParams ? searchParams.get('challengeId') : null;
   const isChallenge = !!challengeId;
-  const totalTime = isChallenge ? 30 : TOTAL_TIME;
+  const totalTime = isChallenge ? DUEL_DURATION_SECONDS : TOTAL_TIME;
   const matchStartAt = useDuelMatchStart(challengeId);
+  const duelStartRef = useRef(null);
+  duelStartRef.current = matchStartAt;
   const duelAutoStartedRef = useRef(false);
 
   const [isClient, setIsClient] = useState(false);
@@ -472,7 +474,7 @@ export default function ShadeFinderClient() {
 
   const endGameRef = useRef(null);
 
-  const resolveWrong = useCallback((kind = 'wrong') => {
+  const resolveWrong = useCallback(() => {
     if (!gameActiveRef.current) return;
     comboRef.current = 0;
     mistakesRef.current += 1;
@@ -656,7 +658,9 @@ export default function ShadeFinderClient() {
     gameActiveRef.current = true;
     gameTimerRef.current = setInterval(() => {
       if (!gameActiveRef.current) { clearInterval(gameTimerRef.current); return; }
-      timeRemainingRef.current -= 0.2;
+      timeRemainingRef.current = duelStartRef.current
+        ? duelSecondsRemaining(duelStartRef.current)
+        : timeRemainingRef.current - 0.2;
       if (timeRemainingRef.current <= 0) {
         timeRemainingRef.current = 0;
         setTimeRemaining(0);

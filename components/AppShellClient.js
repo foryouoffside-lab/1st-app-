@@ -14,7 +14,6 @@ import { reportError, identifyUser } from '../lib/crashReporting';
 import { logScreenView, identifyAnalyticsUser } from '../lib/analytics';
 import { ensureDailyReminderScheduled } from '../lib/dailyReminder';
 import { reconcileDrillBests } from '../lib/bestScoreSync';
-import { startProgressCloudSync } from '../lib/progressCloud';
 import { startPresence, getKnownFriendCount, FRIEND_COUNT_EVENT } from '../lib/presence';
 import { LocalNotifications } from '@capacitor/local-notifications';
 
@@ -50,16 +49,6 @@ export default function AppShellClient({ children }) {
   useEffect(() => {
     reconcileDrillBests().catch(() => {});
   }, []);
-
-  // Carry the player's level, rank badge, streak and bests on their ACCOUNT,
-  // not just this phone. Restores them on sign-in (which is what makes a
-  // reinstall whole again — Android wipes the app's stored progress on
-  // uninstall) and mirrors them back up after each session. Signed-out play is
-  // unaffected: no uid, no sync. See lib/progressCloud.js.
-  useEffect(() => {
-    if (!user?.uid) return undefined;
-    return startProgressCloudSync(user.uid);
-  }, [user?.uid]);
 
   // Tag crash reports and analytics with the signed-in user's uid so either
   // can be traced back to a specific player if they reach out.
@@ -265,6 +254,8 @@ export default function AppShellClient({ children }) {
     if (typeof HTMLCanvasElement !== 'undefined' && !HTMLCanvasElement.prototype.__isMocked) {
       HTMLCanvasElement.prototype.__isMocked = true;
       HTMLCanvasElement.prototype.requestPointerLock = function() {
+        // Store the canvas receiver for the mobile pointer-lock shim.
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
         mockedPointerLockElement = this;
         setTimeout(() => {
           const event = new Event('pointerlockchange');
