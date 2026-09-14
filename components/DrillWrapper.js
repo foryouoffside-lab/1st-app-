@@ -9,7 +9,7 @@ import Link from 'next/link';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '../contexts/AuthContext';
 import { useChallenge } from '../contexts/ChallengeContext';
-import { sendChallenge, sendGlobalChallenge, acceptChallenge, withdrawChallenge, submitScore, resolveAbandonedMatch, forfeitMatch, leaveBeforeStart, getServerClockOffset, ensureMatchStart, markMatchPlaying, isInviteFresh, markInMatch, clearInMatch, BUSY_TTL_MS, DUEL_DRILLS, DUEL_DURATION_MS, tierForEiq, FORFEIT_GRACE_COUNT } from '../lib/challengeEngine';
+import { sendChallenge, sendGlobalChallenge, acceptChallenge, withdrawChallenge, submitScore, resolveAbandonedMatch, forfeitMatch, leaveBeforeStart, getServerClockOffset, getServerClockOffsetSoon, ensureMatchStart, markMatchPlaying, isInviteFresh, markInMatch, clearInMatch, BUSY_TTL_MS, DUEL_DRILLS, DUEL_DURATION_MS, tierForEiq, FORFEIT_GRACE_COUNT } from '../lib/challengeEngine';
 import { ARENA_ENABLED } from '../lib/featureFlags';
 import { recordArenaMatch } from '../lib/arenaChallenge';
 import { useShareCard } from './ShareScoreCard';
@@ -19,6 +19,7 @@ import { keepAwake, allowSleep } from '../lib/keepAwake';
 import { enterImmersive, exitImmersive } from '../lib/immersive';
 import { useOnlineStatus } from '../lib/useOnlineStatus';
 import DrillErrorBoundary from './DrillErrorBoundary';
+import { duelTrace, duelTraceOnce, duelTraceReset } from '../lib/duelTrace'; // [DUEL-TRACE]
 import { doc, onSnapshot, updateDoc, collection, query, where, limit, orderBy, getDoc } from 'firebase/firestore';
 import {
   ArrowLeft, Volume2, VolumeX, Swords, CheckCircle2, Home, Zap, X,
@@ -74,7 +75,31 @@ const LOBBY_WAIT_SECONDS = 30;
 // visible countdown. On a slow mobile connection 3s could be entirely eaten
 // by the round trip, which meant the second player's drill began a beat late
 // — and in a fixed-length scored match, late is lost points.
-const MATCH_COUNTDOWN_MS = 4000;
+// Two numbers, because they do two different jobs.
+//
+// MATCH_START_LEAD_MS is the total gap between "both players are ready" and the
+// match actually starting. It has to absorb everything variable: the start
+// stamp's transaction, that value round-tripping to the OTHER player, and a
+// device still finishing its landscape rotation. Measured on a real device on
+// 4G, that transaction alone ran 1.9-2.3s.
+//
+// COUNTDOWN_VISIBLE_MS is the part of that lead the player actually SEES as
+// 3-2-1. It is deliberately smaller, and the difference is the point:
+//
+// The old code had one number for both (4s), so every millisecond of network
+// latency came straight out of the countdown. The stamp arrived with ~2.1s of
+// a 4s lead left, and the player watched "3" sit frozen for the 1.4-3.5s it
+// took to arrive. A countdown that hangs on its first digit reads as a broken
+// app — worse than an honest wait, because the player is already braced to
+// react.
+//
+// Now the lobby absorbs the variance instead. Both clients stay on "Connecting
+// players" — a screen where waiting is exactly what you expect — until the
+// start instant is known AND close enough to run the full 3-2-1. Only then does
+// the countdown appear, and from that moment it is a fixed 3 seconds that ticks
+// cleanly on both devices, however slow the network was getting there.
+const MATCH_START_LEAD_MS = 5000;
+const COUNTDOWN_VISIBLE_MS = 3000;
 
 // The shared start instant and the 'playing' status are both stamped by the
 // host first, since somebody has to go first and doing it from both sides at
@@ -84,7 +109,18 @@ const MATCH_COUNTDOWN_MS = 4000;
 // happened. Both writes are transactional no-ops when the host got there
 // first (see ensureMatchStart / markMatchPlaying), so the fallback can never
 // double-stamp or move a value that's already set.
-const MATCH_START_FALLBACK_MS = 1500;
+// Measured: across every duel traced on a real device, the guest's fallback
+// is what actually stamped the start instant — the host never got there
+// first. So this delay was not a rare safety net, it was on the critical
+// path of every single match, adding its full length to the wait before
+// the countdown could begin.
+//
+// Shortened rather than removed: whoever is genuinely first still wins, and
+// the cost of both sides trying is only ever one extra transaction that
+// finds the value already set and changes nothing (ensureMatchStart refuses
+// to overwrite). Trading a rare duplicate read for ~900ms off every duel's
+// start is the right way round.
+const MATCH_START_FALLBACK_MS = 600;
 const MATCH_PLAYING_FALLBACK_MS = 1500;
 
 // How often to re-attempt the shared start stamp while the countdown is up
@@ -225,6 +261,15 @@ export default function DrillWrapper({
   useEffect(() => {
     if (!isChallengeMode || !user) return;
     let cancelled = false;
+    // Two-stage on purpose. The bounded read lets the visible 3-2-1 start
+    // ticking straight away instead of sitting frozen on "3" for the length of
+    // the full probe (six round trips — 6.4s measured on a real device on 4G).
+    // The full probe then upgrades the value the moment it lands; the countdown
+    // is clamped monotonic, so a late correction can only ever hold a digit
+    // still for an extra beat, never run the count backwards.
+    getServerClockOffsetSoon().then((offset) => {
+      if (!cancelled) setClockOffset(offset);
+    });
     getServerClockOffset().then((offset) => {
       if (!cancelled) setClockOffset(offset);
     });
@@ -296,6 +341,7 @@ export default function DrillWrapper({
     if (!challengeId || !db || !duelUserUid) return;
 
     setIsChallengeMode(true);
+    duelTraceReset(`drill mounted, subscribing to ${challengeId}`); // [DUEL-TRACE]
     const challengeRef = doc(db, 'challenges', challengeId);
 
     // Sync state. Nothing writes to this doc during live play any more (the
@@ -310,6 +356,14 @@ export default function DrillWrapper({
       const data = docSnap.data();
       if (lastChallengeStatusRef.current === 'playing' && data.status === 'playing') return;
       lastChallengeStatusRef.current = data.status;
+      // [DUEL-TRACE] every snapshot, so the round trips are visible individually
+      duelTrace('snapshot', {
+        status: data.status,
+        fromReady: !!data.fromReady,
+        toReady: !!data.toReady,
+        hasStart: !!data.matchStartAt,
+      });
+      if (data.matchStartAt) duelTraceOnce('>>> matchStartAt ARRIVED (3-2-1 can tick)'); // [DUEL-TRACE]
       setChallengeData(data);
 
       const host = data.fromUid === duelUserUid;
@@ -339,8 +393,15 @@ export default function DrillWrapper({
           // makes the two players' drills begin a beat or two apart. Instead
           // ONE shared target timestamp is stamped on the doc (effect 2c
           // below) and both clients count down against that same value.
-          setChallengeStatus('countdown');
+          // Both in — but do NOT show the 3-2-1 yet. The shared start instant
+          // may not even be written, let alone have arrived here, and starting
+          // the countdown before it lands is precisely what produced a frozen
+          // "3". Stay on "Connecting players" (effect 2d flips to the countdown
+          // at the right moment) so the wait happens on a screen built for it.
+          duelTraceOnce('>>> BOTH READY — holding on "Connecting players"'); // [DUEL-TRACE]
+          setChallengeStatus((prev) => (prev === 'countdown' ? prev : 'lobby'));
         } else {
+          duelTraceOnce('lobby: waiting for the other player to ready up'); // [DUEL-TRACE]
           setChallengeStatus('lobby');
         }
       } else if (data.status === 'playing') {
@@ -369,9 +430,11 @@ export default function DrillWrapper({
     // Mark current user as ready on loading the page
     const markAsReady = async () => {
       try {
+        duelTrace('ready: getDoc START'); // [DUEL-TRACE]
         const challengeSnap = await getDoc(challengeRef);
+        duelTrace('ready: getDoc DONE'); // [DUEL-TRACE]
         if (!challengeSnap.exists()) return;
-        
+
         const challengeData = challengeSnap.data();
         // Never re-ready into a match that's already over. matchStartAt lives
         // on the doc forever, so opening a finished duel's URL again lands
@@ -390,8 +453,35 @@ export default function DrillWrapper({
           readyUpdates.toReady = true;
         }
 
+        // If MY ready flag is the one that completes the pair, stamp the shared
+        // start instant in this SAME write.
+        //
+        // Otherwise the sequence costs a whole extra round trip that the player
+        // spends staring at a frozen "3": my ready write lands, the other client
+        // receives it, IT calls ensureMatchStart, that transaction commits, and
+        // only then does matchStartAt come back to me — measured at 1369ms of
+        // dead countdown on a real device. Folding the stamp into this write
+        // means both clients receive "both ready" and "here is when we start"
+        // in the same snapshot, so the 3-2-1 ticks the instant it appears.
+        //
+        // Only the LAST player to ready can take this path (it requires having
+        // already seen the other side's flag), so the two clients can't both
+        // stamp. If they genuinely readied at the same instant, neither sees
+        // the other and neither stamps — that falls through to ensureMatchStart
+        // exactly as before. ensureMatchStart is a transaction that refuses to
+        // overwrite an existing matchStartAt, so the paths can never disagree.
+        const otherAlreadyReady = isHost ? challengeData.toReady : challengeData.fromReady;
+        if (Object.keys(readyUpdates).length > 0 && otherAlreadyReady && !challengeData.matchStartAt) {
+          readyUpdates.matchStartAt = Date.now() + (await getServerClockOffsetSoon()) + MATCH_START_LEAD_MS;
+          duelTrace('ready: I am last — stamping matchStartAt in the same write'); // [DUEL-TRACE]
+        }
+
         if (Object.keys(readyUpdates).length > 0) {
+          duelTrace('ready: write START', readyUpdates); // [DUEL-TRACE]
           await updateDoc(challengeRef, readyUpdates);
+          duelTrace('ready: write DONE'); // [DUEL-TRACE]
+        } else {
+          duelTrace('ready: already set, no write'); // [DUEL-TRACE]
         }
       } catch (err) {
         console.error("Failed to mark player as ready:", err);
@@ -468,6 +558,57 @@ export default function DrillWrapper({
     };
   }, [isChallengeMode, user?.uid]);
 
+  // Both duelists have loaded the drill and said "I'm here". This is what the
+  // start-stamp effects key off now — see the note in effect 2c.
+  const bothPlayersReady = !!(
+    challengeData
+    && challengeData.status === 'accepted'
+    && challengeData.fromReady
+    && challengeData.toReady
+  );
+
+  // The shared start instant, expressed on THIS device's clock.
+  const matchStartLocal = challengeData?.matchStartAt != null
+    ? challengeData.matchStartAt - clockOffset
+    : null;
+
+  // 2d. Move off "Connecting players" and onto the 3-2-1 — but only once the
+  // start instant is KNOWN and is close enough to show the whole countdown.
+  //
+  // This is the fix for the frozen "3". Previously the countdown appeared the
+  // moment both players were ready and then sat on its first digit until
+  // matchStartAt round-tripped through Firestore — 1.4s to 3.5s, measured on a
+  // real device. The wait itself is unavoidable (somebody has to write the
+  // instant and both sides have to receive it); what's fixable is WHERE the
+  // player spends it. A lobby that says "Connecting players" for an extra
+  // second is ordinary. A countdown that hangs on "3" looks broken, and it
+  // arrives at the exact moment the player is braced to react.
+  //
+  // So the lobby absorbs all of the variance, and the countdown is handed a
+  // full, fixed COUNTDOWN_VISIBLE_MS every time — identical on both devices,
+  // however slow the network was getting here.
+  useEffect(() => {
+    if (!isChallengeMode || !bothPlayersReady || matchStartLocal == null) return;
+    if (challengeStatus !== 'lobby') return;
+
+    const showAt = matchStartLocal - COUNTDOWN_VISIBLE_MS;
+    const wait = showAt - Date.now();
+    if (wait <= 0) {
+      // The stamp took longer than the visible countdown itself. Show whatever
+      // lead is genuinely left rather than skipping the countdown entirely —
+      // a short honest count still beats a frozen one.
+      duelTrace('>>> countdown NOW (lead already partly spent)', { leftMs: Math.max(0, Math.round(matchStartLocal - Date.now())) }); // [DUEL-TRACE]
+      setChallengeStatus('countdown');
+      return;
+    }
+    duelTrace(`lobby: holding ${Math.round(wait)}ms more, then a full 3-2-1`); // [DUEL-TRACE]
+    const t = setTimeout(() => {
+      duelTrace('>>> COUNTDOWN STARTS (full 3s, unfrozen)'); // [DUEL-TRACE]
+      setChallengeStatus('countdown');
+    }, wait);
+    return () => clearTimeout(t);
+  }, [isChallengeMode, bothPlayersReady, matchStartLocal, challengeStatus]);
+
   // 2c. Stamp the shared match-start instant once both players have readied
   // up. Written in SERVER time (each client converts it back through its own
   // measured clock offset), so a phone whose clock is off by seconds no
@@ -479,7 +620,12 @@ export default function DrillWrapper({
   // existing value, so the two attempts can never disagree about when the
   // match starts.
   useEffect(() => {
-    if (!isChallengeMode || challengeStatus !== 'countdown') return;
+    // Gated on BOTH PLAYERS BEING READY, not on the countdown being on screen.
+    // The countdown now waits for matchStartAt rather than the other way
+    // round (effect 2d), so keying this to 'countdown' would deadlock the
+    // duel: nothing would stamp the start instant, so the countdown would
+    // never appear, so nothing would stamp the start instant.
+    if (!isChallengeMode || !bothPlayersReady) return;
     if (challengeData?.matchStartAt) return;
     if (!challengeId) return;
 
@@ -502,9 +648,14 @@ export default function DrillWrapper({
     // successful one is a read that changes nothing, and the interval is torn
     // down the moment the value lands (it's in the dependency list).
     let cancelled = false;
+    let attemptNo = 0; // [DUEL-TRACE]
     const attempt = () => {
       if (cancelled) return;
-      ensureMatchStart(challengeId, MATCH_COUNTDOWN_MS).catch(console.error);
+      const n = ++attemptNo; // [DUEL-TRACE]
+      duelTrace(`ensureMatchStart attempt #${n} START`, { isHost }); // [DUEL-TRACE]
+      ensureMatchStart(challengeId, MATCH_START_LEAD_MS)
+        .then((v) => duelTrace(`ensureMatchStart attempt #${n} DONE`, { stamped: !!v })) // [DUEL-TRACE]
+        .catch(console.error);
     };
 
     // The host still goes first so the common path is one write, not two.
@@ -515,7 +666,7 @@ export default function DrillWrapper({
       clearTimeout(first);
       clearInterval(retry);
     };
-  }, [isChallengeMode, challengeStatus, challengeData?.matchStartAt, isHost, challengeId]);
+  }, [isChallengeMode, bothPlayersReady, challengeData?.matchStartAt, isHost, challengeId]);
 
   // 2c-ii. Absolute bound on the countdown.
   //
@@ -529,11 +680,16 @@ export default function DrillWrapper({
   // goes inside this window, so reaching it at all means the match genuinely
   // is not going to start.
   useEffect(() => {
-    if (!isChallengeMode || challengeStatus !== 'countdown') return;
+    // Gated on BOTH PLAYERS BEING READY, not on the countdown being on screen.
+    // The countdown now waits for matchStartAt rather than the other way
+    // round (effect 2d), so keying this to 'countdown' would deadlock the
+    // duel: nothing would stamp the start instant, so the countdown would
+    // never appear, so nothing would stamp the start instant.
+    if (!isChallengeMode || !bothPlayersReady) return;
     if (challengeData?.matchStartAt) return;
     const t = setTimeout(() => setCountdownStalled(true), COUNTDOWN_STALL_MS);
     return () => clearTimeout(t);
-  }, [isChallengeMode, challengeStatus, challengeData?.matchStartAt]);
+  }, [isChallengeMode, bothPlayersReady, challengeData?.matchStartAt]);
 
   // 2b. Bound the lobby wait. Counts down while we're sitting in the lobby and
   // stops at 0, which flips the lobby overlay to its "didn't join" state with a
@@ -635,6 +791,16 @@ export default function DrillWrapper({
       : null;
     if (challengeStatus !== 'countdown' || !matchStartAt) return;
 
+    // The countdown is divided into three EQUAL beats of whatever lead
+    // actually survived, captured once here rather than assuming a fixed
+    // 1s step. On a slow connection the stamp can eat into the lead, and a
+    // fixed step then spends the remainder on a "3" that flashes past in
+    // 200ms before 2 and 1 take a full second each — the same unevenness as
+    // the old frozen "3", just in the other direction. Splitting what's left
+    // three ways keeps the rhythm even however much lead is there.
+    const spanMs = Math.max(900, matchStartAt - Date.now());
+    const stepMs = spanMs / 3;
+
     let fired = false;
     let fallbackTimer = null;
     const tick = () => {
@@ -642,6 +808,7 @@ export default function DrillWrapper({
       if (remainingMs <= 0) {
         if (fired) return;
         fired = true;
+        duelTrace('>>> GO (countdown hit 0)'); // [DUEL-TRACE]
         setCountdownNum(0);
         // Move the match to 'playing'. The host writes it immediately; the
         // guest re-attempts shortly after if it still hasn't landed. This
@@ -680,10 +847,12 @@ export default function DrillWrapper({
         // which reads on device as the countdown freezing on 3 before
         // suddenly rushing. MATCH_COUNTDOWN_MS stays 4s because the sync
         // round trip needs it; only the pacing of the digits changes.
-        const stepMs = MATCH_COUNTDOWN_MS / 3;
+
         setCountdownNum((prev) => {
           const next = Math.min(3, Math.ceil(remainingMs / stepMs));
-          return prev == null ? next : Math.min(prev, next);
+          const shown = prev == null ? next : Math.min(prev, next);
+          if (shown !== prev) duelTrace(`countdown digit -> ${shown}`, { remainingMs }); // [DUEL-TRACE]
+          return shown;
         });
       }
     };
@@ -695,11 +864,6 @@ export default function DrillWrapper({
       if (fallbackTimer) clearTimeout(fallbackTimer);
     };
   }, [challengeStatus, challengeData?.matchStartAt, clockOffset, isHost, db, challengeId]);
-
-  // The shared start instant, expressed on THIS device's clock.
-  const matchStartLocal = challengeData?.matchStartAt != null
-    ? challengeData.matchStartAt - clockOffset
-    : null;
 
   // Is the match actually under way? Normally that's just status 'playing',
   // written at the start instant — but the drill itself doesn't wait for that
@@ -939,12 +1103,12 @@ export default function DrillWrapper({
   };
 
   const handlePostGlobalChallenge = async () => {
-    setMatchmakingMessage(`Posting open challenge to the global lobby...`);
+    setMatchmakingMessage(`Posting your challenge...`);
     try {
       const newChallengeId = await sendGlobalChallenge(user, drillSlug, drillName);
       if (newChallengeId) {
         setSentChallengeId(newChallengeId);
-        setMatchmakingMessage("Challenge posted! Waiting for any online player to accept...");
+        setMatchmakingMessage("Waiting for a player to accept...");
       }
     } catch (err) {
       console.error(err);
@@ -962,15 +1126,33 @@ export default function DrillWrapper({
     ? (incomingChallenges || []).find((c) => c.fromUid === opponentUid && isInviteFresh(c)) || null
     : null;
 
+  // Returns true only if we actually got into the rematch.
+  //
+  // A 'challenge/taken' here is NOT a dead end, and treating it as one is what
+  // put "That duel invite is no longer open." on screen with no way forward.
+  // The invite can legitimately vanish between this screen rendering it and the
+  // tap landing — the opponent withdrew it, or both players pressed Rematch and
+  // the other side's copy got consumed first. On a connection where a snapshot
+  // takes a second or two to arrive (measured: 1-3s on 4G) that window is wide
+  // enough to hit in ordinary play.
+  //
+  // So a taken/expired invite reports failure quietly and lets the caller fall
+  // through to simply SENDING a rematch invite instead, which is what the
+  // player wanted either way. Only a genuine problem (a lockout) is worth
+  // interrupting them for.
   const acceptRematchInvite = async (invite) => {
     try {
       await acceptChallenge(invite.id, user);
       router.push(`/drills/${invite.drillSlug}?challengeId=${invite.id}`);
+      return true;
     } catch (err) {
-      console.error("Failed to accept rematch invite:", err);
-      if (err?.code === 'arena/locked-out' || err?.code === 'challenge/taken' || err?.code === 'challenge/expired') {
-        alert(err.message);
+      if (err?.code === 'challenge/taken' || err?.code === 'challenge/expired') {
+        duelTrace('rematch: their invite was already gone — sending our own instead'); // [DUEL-TRACE]
+        return false;
       }
+      console.error("Failed to accept rematch invite:", err);
+      if (err?.code === 'arena/locked-out') alert(err.message);
+      return false;
     }
   };
 
@@ -982,8 +1164,8 @@ export default function DrillWrapper({
     if (!challengeData) return;
     if (!opponentUid || opponentUid === 'global') return;
     if (rematchInvite) {
-      await acceptRematchInvite(rematchInvite);
-      return;
+      // Falls through to sending our own invite if theirs has already gone.
+      if (await acceptRematchInvite(rematchInvite)) return;
     }
     try {
       const newChallengeId = await sendChallenge(
@@ -1173,8 +1355,16 @@ export default function DrillWrapper({
                 it are both gone. Same card-with-VS-divider shape as the result
                 screen, and it now fits the 423px landscape viewport the duel
                 drills actually run in. */}
+            {/* Three states, not two. "Starting" is the brief hold added by
+                effect 2d, once BOTH players are ready and we're only waiting on
+                the shared start instant to land. Saying "Connecting Players"
+                there would be a lie — they're both plainly marked Ready right
+                below it — and this is the moment that used to be spent staring
+                at a frozen "3" instead. */}
             <h2 className="font-display text-[28px] text-white">
-              {lobbySecondsLeft > 0 ? 'Connecting Players' : 'Opponent Didn’t Join'}
+              {lobbySecondsLeft <= 0
+                ? 'Opponent Didn’t Join'
+                : bothPlayersReady ? 'Starting…' : 'Connecting Players'}
             </h2>
 
             {/* FACE-OFF, on ONE line in every orientation.
@@ -1259,7 +1449,7 @@ export default function DrillWrapper({
             {lobbySecondsLeft <= 0 && (
               <>
                 <p className="mt-3 max-w-xs text-xs leading-relaxed text-neutral-400">
-                  <span className="font-bold text-purple-400">{opponentName?.split(' ')[0]}</span> never loaded in — they may have closed the app or lost connection. No EIQ was staked.
+                  <span className="font-bold text-purple-400">{opponentName?.split(' ')[0]}</span> never loaded in.
                 </p>
                 <button
                   onClick={abandonLobby}
@@ -1295,15 +1485,12 @@ export default function DrillWrapper({
             <h2 className="font-display text-2xl text-white mb-2">
               {iLeft ? 'Duel Cancelled' : leftUid ? 'Opponent Left' : 'Duel Declined'}
             </h2>
-            <p className="text-xs text-neutral-400 max-w-xs leading-relaxed">
-              {iLeft ? (
-                <>You left before this duel started. No EIQ was staked.</>
-              ) : leftUid ? (
-                <><span className="text-red-300 font-bold">{oppFirst}</span> left before the duel started. No EIQ was staked.</>
-              ) : (
-                <><span className="text-red-300 font-bold">{oppFirst}</span> turned down this duel. No EIQ was staked.</>
-              )}
-            </p>
+            {!iLeft && (
+              <p className="text-xs text-neutral-400">
+                <span className="font-bold text-red-300">{oppFirst}</span>
+                {leftUid ? ' left the duel.' : ' declined the duel.'}
+              </p>
+            )}
             <button
               onClick={() => router.push('/challenge')}
               className="mt-6 px-5 py-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold rounded-2xl text-sm flex items-center justify-center gap-2 shadow-lg"
@@ -1348,7 +1535,7 @@ export default function DrillWrapper({
                     out. abandonLobby resolves the match for BOTH sides, so
                     the opponent isn't left waiting either. */}
                 <p className="max-w-xs text-xs leading-relaxed text-neutral-400">
-                  This duel couldn&apos;t start — the connection didn&apos;t hold. No EIQ was staked.
+                  Couldn&apos;t start this duel.
                 </p>
                 <button
                   onClick={abandonLobby}
@@ -1384,10 +1571,10 @@ export default function DrillWrapper({
                     {online ? 'Couldn’t send your score' : 'You’re offline'}
                   </h3>
                   <p className="text-xs text-neutral-400 mt-1 max-w-[250px] mx-auto leading-relaxed">
-                    Your final score of <span className="font-bold text-white tabular-nums">{score ?? 0}</span>{' '}
+                    Your score of <span className="font-bold text-white tabular-nums">{score ?? 0}</span>{' '}
                     {online
-                      ? 'didn’t reach the server. Try again.'
-                      : 'can’t be sent without a connection. Turn wifi or mobile data back on and it sends itself.'}
+                      ? 'didn’t send.'
+                      : 'sends itself once you’re back online.'}
                   </p>
                 </div>
                 <button
@@ -1604,7 +1791,7 @@ export default function DrillWrapper({
 
                     {rematchInvite && (
                       <button
-                        onClick={() => acceptRematchInvite(rematchInvite)}
+                        onClick={handleChallengeAgain}
                         className="mb-2 flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 py-2.5 text-[11px] font-bold uppercase tracking-wider text-white transition active:scale-[.98]"
                       >
                         <Swords className="h-3.5 w-3.5" />
@@ -1616,7 +1803,6 @@ export default function DrillWrapper({
                       pendingRematch.declined ? (
                         <div className="mb-2 rounded-xl border border-rose-500/30 bg-rose-950/30 px-3 py-2.5">
                           <p className="text-[11px] font-bold text-rose-300">{pendingRematch.name} declined the rematch</p>
-                          <p className="mt-1 text-[10px] text-neutral-400">No EIQ was staked. Head back to the Arena for another opponent.</p>
                         </div>
                       ) : (
                         <div className="mb-2 flex items-center gap-2.5 rounded-xl border border-[#232433] bg-[#1a1b26] px-3 py-2.5">

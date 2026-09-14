@@ -1,13 +1,16 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
+import { duelTrace } from '../lib/duelTrace'; // [DUEL-TRACE]
 import { Capacitor } from '@capacitor/core';
 import { FirebaseAuthentication } from '@capacitor-firebase/authentication';
 import { initFirebase } from '../lib/firebase';
+import { isOnline } from '../lib/useOnlineStatus';
 import {
   doc,
   setDoc,
   getDoc,
+  getDocFromServer,
   updateDoc,
   deleteDoc,
   deleteField,
@@ -59,9 +62,11 @@ const fallbackAvatar = (seed) =>
 // early as possible — the Arena, Progress, the drill shell and the sign-in
 // gate all render it, so the sooner this fetch starts, the less often those
 // screens are still on their placeholder by the time they render.
-// referrerPolicy matches Avatar.js: Capacitor serves the app from an
-// unusual origin (https://localhost), and Google's photo CDN can reject a
-// request that carries that origin's Referer header.
+// referrerPolicy matches every <img> that renders a Google photo: Capacitor
+// serves the app from an unusual origin (https://localhost), and Google's
+// photo CDN can reject a request that carries that origin's Referer header.
+// Miss it on one <img> and that one renders as a broken-image glyph while
+// every other avatar in the app looks fine — see AvatarTile in AuthGate.js.
 const preloadImage = (src) => {
   if (typeof window === 'undefined' || !src) return;
   const img = new window.Image();
@@ -76,8 +81,65 @@ const preloadImage = (src) => {
 // - Brand-new users are handed back as 'needs-username' so the UI can collect
 //   a unique display name before the profile doc is actually created.
 async function resolveProfile(db, fbUser) {
+  duelTrace('auth: resolveProfile START', { uid: fbUser?.uid, email: fbUser?.email }); // [DUEL-TRACE]
   const userRef = doc(db, 'users', fbUser.uid);
-  const existing = await getDoc(userRef);
+  let existing = await getDoc(userRef);
+
+  // "This document does not exist" is only believable when the SERVER said so.
+  //
+  // getDoc() falls back to the local cache when the network is slow or down,
+  // and a cache that has never seen users/{uid} answers "missing" rather than
+  // throwing. Taken at face value that turns an established player into a
+  // brand-new one: the app signs them out, shows "Choose your player name",
+  // and then the signup write is rejected by firestore.rules because the
+  // account it is trying to create already exists. That is the "it asked me to
+  // log in and pick a name again, then said the name was taken" report, and it
+  // is intermittent precisely because it depends on the network at launch.
+  //
+  // So: only a cache MISS is re-checked against the server, and if the server
+  // is unreachable getDocFromServer throws — which the caller treats as "could
+  // not resolve", leaving the cached session alone instead of downgrading the
+  // player to a stranger. A cache HIT still serves instantly; this costs a
+  // round-trip only on the genuinely-new-account path.
+  duelTrace('auth: first getDoc', { exists: existing.exists(), fromCache: existing.metadata.fromCache }); // [DUEL-TRACE]
+  if (!existing.exists() && existing.metadata.fromCache) {
+    existing = await getDocFromServer(userRef);
+    duelTrace('auth: server re-read', { exists: existing.exists() }); // [DUEL-TRACE]
+  }
+
+  // NEVER downgrade an established session to "brand new" on one empty read.
+  //
+  // Captured on a real device, same uid, seconds apart in one session:
+  //     auth: first getDoc {"exists":true,"fromCache":false}
+  //     auth: first getDoc {"exists":false,"fromCache":false}
+  // The second read claimed the profile document does not exist — for an
+  // account that plainly does, and that the read before it had just returned.
+  // On a flaky mobile link Firestore can answer this way (the same connection
+  // was throwing 400s on its write channel throughout), and the guard above
+  // does not catch it because that one only re-checks reads marked fromCache.
+  //
+  // The consequence was the worst failure this app has: a signed-in player is
+  // told to pick a player name, and because usernames are permanent, acting on
+  // that prompt does real damage. Weighed against that, the cost of being
+  // wrong in the other direction is nothing — a genuinely new account simply
+  // has no cached session under its uid, so it still reaches the name gate.
+  //
+  // So: if we already hold a cached session for THIS uid, an empty read is
+  // treated as "could not resolve" and thrown. The caller leaves the existing
+  // session in place and the live profile listener reconciles when the network
+  // recovers, instead of the app forgetting who the player is.
+  if (!existing.exists()) {
+    let cachedUid = null;
+    try {
+      cachedUid = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null')?.uid || null;
+    } catch {}
+    if (cachedUid && cachedUid === fbUser.uid) {
+      duelTrace('auth: empty read for a session we already have — keeping it'); // [DUEL-TRACE]
+      const err = new Error('Profile read came back empty for an existing session.');
+      err.code = 'profile/unresolved';
+      throw err;
+    }
+  }
 
   if (existing.exists()) {
     const data = existing.data();
@@ -194,6 +256,7 @@ async function resolveProfile(db, fbUser) {
   // button then refuses is a dead end on the very first screen.
   const suggested = sanitizeUsername(fbUser.displayName || fbUser.email?.split('@')[0] || 'Player');
 
+  duelTrace('auth: >>> TREATING AS BRAND NEW (name gate)'); // [DUEL-TRACE]
   return {
     status: 'needs-username',
     pending: {
@@ -270,6 +333,7 @@ export function AuthProvider({ children }) {
         }
       } catch (err) {
         console.error("Failed to resolve user profile:", err);
+        duelTrace('auth: resolveProfile THREW', { code: err?.code || null, msg: String(err?.message||err).slice(0,160) }); // [DUEL-TRACE]
       }
       setLoading(false);
     });
@@ -444,9 +508,39 @@ export function AuthProvider({ children }) {
 
     const nameKey = clean.toLowerCase();
 
+    // Signing up is a write that MUST reach the server to mean anything. Run
+    // it offline and every read below answers from an empty cache — the name
+    // looks free, the batch is queued, and the rejection only lands minutes
+    // later when the connection returns, by which point the UI has already
+    // told the player they were signed up. Refuse up front instead.
+    if (!isOnline()) {
+      return { ok: false, error: 'You appear to be offline — reconnect and try again.' };
+    }
+
     try {
+      // Does this account ALREADY exist? resolveProfile can route an existing
+      // player here after a cache-miss read (see the note there), and if it
+      // does, the batch at the bottom would try to overwrite a live profile
+      // with a zeroed one. firestore.rules rejects that as permission-denied,
+      // which this function used to report as "That name is already taken." —
+      // a confusing dead end on an account that was fine all along.
+      //
+      // Checked against the server, because a cache miss is exactly the
+      // condition that got us here.
+      const ownRef = doc(dbInstance, 'users', pendingSignup.uid);
+      const ownSnap = await getDocFromServer(ownRef);
+      if (ownSnap.exists()) {
+        const publicData = { ...ownSnap.data() };
+        delete publicData.email; // same scrub as resolveProfile — never trust the stored copy
+        const profile = { uid: pendingSignup.uid, ...publicData, email: pendingSignup.email || '' };
+        setUser(profile);
+        setPendingSignup(null);
+        try { localStorage.setItem(SESSION_KEY, JSON.stringify(profile)); } catch {}
+        return { ok: true };
+      }
+
       const nameRef = doc(dbInstance, 'usernames', nameKey);
-      const nameSnap = await getDoc(nameRef);
+      const nameSnap = await getDocFromServer(nameRef);
       // A reservation this SAME uid already owns is not someone else's name —
       // it is this account's own leftover. That happens when a deletion got
       // part-way through (profile doc gone, reservation still standing) and
@@ -509,8 +603,18 @@ export function AuthProvider({ children }) {
       return { ok: true };
     } catch (err) {
       console.error('Failed to complete signup:', err);
+      // permission-denied here means the batch lost a race: somebody reserved
+      // this name between the check above and the commit. It does NOT mean
+      // every permission-denied is a name collision — this branch used to say
+      // "already taken" for any rules rejection, including the overwrite of an
+      // existing profile that the guard above now prevents outright, which is
+      // how a player with a perfectly good account got told their own name was
+      // unavailable.
       if (err?.code === 'permission-denied') {
-        return { ok: false, error: 'That name is already taken.' };
+        return { ok: false, error: 'That name was just taken — try another.' };
+      }
+      if (err?.code === 'unavailable' || err?.code === 'deadline-exceeded') {
+        return { ok: false, error: 'Could not reach the server — check your connection.' };
       }
       return { ok: false, error: 'Something went wrong — try again.' };
     }

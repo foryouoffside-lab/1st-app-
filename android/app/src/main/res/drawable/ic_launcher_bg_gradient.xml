@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive-icon background layer. The same blue -> violet diagonal as
+  public/favicon.svg, drawn edge to edge so the launcher can mask it to
+  whatever shape the device uses (circle, squircle, rounded square).
+
+  The disc is deliberately NOT baked into the foreground for this reason: a
+  circle inside a circular mask reads as a shrunken sticker. Background carries
+  the colour, foreground carries the mark.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:startColor="#2563eb"
+        android:endColor="#7c3aed"
+        android:angle="315"
+        android:type="linear" />
+</shape>

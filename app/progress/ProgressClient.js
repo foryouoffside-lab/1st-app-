@@ -9,7 +9,7 @@ import Link from 'next/link';
 import AvatarEditor from 'react-avatar-editor';
 import {
   Volume2, VolumeOff, ChevronRight, LogOut, ShieldAlert, Camera,
-  FileText, TrendingUp, TrendingDown, Minus, Lock, Bell, BellOff
+  FileText, TrendingUp, TrendingDown, Minus, Lock, Bell, BellOff, Vibrate
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePlayerProgress } from '../../contexts/PlayerProgressContext';
@@ -19,6 +19,7 @@ import {
   clearAllProgress, getSettings, updateSettings
 } from '../../lib/progressStore';
 import { Storage } from '../../lib/storage';
+import { setHapticsEnabled } from '../../lib/haptics';
 import { DRILL_INDEX } from '../../lib/drillIndex';
 import { DRILL_GROUPS, getDrillGroup } from '../../lib/drillGroups';
 import { getDrillTrends, getHeadlineTrend } from '../../lib/progressInsights';
@@ -46,6 +47,7 @@ export default function ProgressClient() {
   const [sessions, setSessions] = useState(0);
   const [drillsP,  setDrillsP]  = useState(0);
   const [sound,    setSound]    = useState(true);
+  const [haptics,  setHaptics]  = useState(true);
   const [cleared,  setCleared]  = useState(false);
 
   const [guestName, setGuestName] = useState('Guest Player');
@@ -77,6 +79,7 @@ export default function ProgressClient() {
       setSessions(sess);
       setDrillsP(dp);
       setSound(settings.soundEnabled ?? true);
+      setHaptics(settings.hapticsEnabled ?? true);
       setTrends(drillTrends);
       setHeadline(headlineTrend);
       setReminder(rem);
@@ -170,6 +173,16 @@ export default function ProgressClient() {
     const next = !sound;
     setSound(next);
     await updateSettings({ soundEnabled: next });
+  }
+
+  // Keeps the in-memory flag lib/haptics.js reads on the hot path in step
+  // with what was just written to disk, so the change applies to the very next
+  // drill without an app restart.
+  async function toggleHaptics() {
+    const next = !haptics;
+    setHaptics(next);
+    setHapticsEnabled(next);
+    await updateSettings({ hapticsEnabled: next });
   }
 
   async function toggleReminder() {
@@ -695,6 +708,27 @@ export default function ProgressClient() {
                 <div
                   className="absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform duration-200"
                   style={{ transform: sound ? 'translateX(18px)' : 'translateX(2px)' }}
+                />
+              </button>
+            </div>
+
+            {/* Vibration — the felt half of a wrong answer. Separate from the
+                sound toggle on purpose: a player who mutes the game still
+                wants to know they got something wrong, and silent play is
+                exactly when the tap earns its keep. */}
+            <div className="acct-row justify-between">
+              <div className="flex items-center gap-3">
+                <Vibrate className={`w-4 h-4 ${haptics ? 'text-violet-400' : 'text-neutral-500'}`} />
+                <span>Vibration</span>
+              </div>
+              <button
+                onClick={toggleHaptics}
+                className="w-10 h-6 rounded-full transition-colors duration-200 relative cursor-pointer"
+                style={{ background: haptics ? '#6366f1' : 'rgba(255,255,255,0.1)' }}
+              >
+                <div
+                  className="absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform duration-200"
+                  style={{ transform: haptics ? 'translateX(18px)' : 'translateX(2px)' }}
                 />
               </button>
             </div>

@@ -788,7 +788,7 @@ export default function ChallengeArenaClient() {
         // Reached with the radios on but no working route out (dead Wi-Fi,
         // captive portal) — navigator.onLine can't see that, so the entry
         // guard lets it through and it lands here instead.
-        setOfflineNotice('Could not reach the duel server. Check your internet connection and try again.');
+        setOfflineNotice('Could not reach the duel server.');
       } else {
         console.error('Failed to join matchmaking queue:', e);
       }
@@ -959,7 +959,7 @@ export default function ChallengeArenaClient() {
           return;
         }
         setSentChallengeId(challengeId);
-        setChallengeStatusMessage("Your challenge lobby is now open. Waiting for a challenger to connect...");
+        setChallengeStatusMessage("Waiting for a challenger to connect...");
       } catch (e) {
         console.error(e);
         alert(e?.code === 'arena/locked-out' ? e.message : "Failed to send challenge invitation.");
@@ -1839,7 +1839,7 @@ export default function ChallengeArenaClient() {
                   <div>
                     <h4 className="text-xs font-black text-amber-300 uppercase tracking-wide">You&apos;re Offline</h4>
                     <p className="text-[11px] text-amber-200/70 mt-0.5 leading-relaxed">
-                      The Arena needs an internet connection to find opponents. Turn on Wi-Fi or mobile data to duel — solo drills still work offline.
+                      Turn on Wi-Fi or mobile data to duel.
                     </p>
                   </div>
                 </div>
@@ -1902,7 +1902,7 @@ export default function ChallengeArenaClient() {
                         somebody over. */}
                     {lockedOut && (
                       <p className="mt-3 rounded-2xl border border-amber-500/25 bg-amber-500/10 px-3.5 py-2.5 text-[11px] font-semibold leading-relaxed text-amber-300">
-                        You left {FORFEIT_GRACE_COUNT + 1} duels early in a row. Duelling reopens in {lockoutMinutes} minute{lockoutMinutes === 1 ? '' : 's'} — finishing a match resets this.
+                        You left {FORFEIT_GRACE_COUNT + 1} duels early. Duelling reopens in {lockoutMinutes} minute{lockoutMinutes === 1 ? '' : 's'}.
                       </p>
                     )}
 

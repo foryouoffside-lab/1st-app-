@@ -501,19 +501,44 @@ h1, h2, h3 {
   animation: mt-prev-fly 5s linear infinite;
   will-change: transform;
 }
+/* The target, rebuilt to match the sprite the drill actually paints.
+   createLayeredSpriteCache() in lib/canvasFx.js draws, outside in:
+     ghost ring   arc(r + 5)    stroke 1.0   alpha .20
+     tactical ring arc(r)       stroke 1.8   alpha .55
+     body          arc(r*0.82)  fill         alpha .88
+     highlight     arc(r*0.28) at (-.2r,-.2r) fill #fff alpha .30
+     core          arc(r*0.18)  fill #fff    alpha 1.0
+
+   The old preview was a glossy sphere instead: a big soft white blob at
+   37%/35% fading out to 24%, over a disc that ran to the element edge. That
+   off-centre bloom is what read as a 3D ball — the drill's highlight is a
+   small hard-edged circle at 30% white, not a specular gradient, and its body
+   stops at 0.82r so the ring reads as a separate ring.
+
+   Element radius == r, so `closest-side` makes every gradient stop a direct
+   percentage of r and the numbers below are the sprite's numbers. */
 .mt-prev-orb {
   position: absolute; left: 50%; top: 50%;
   width: 15%; aspect-ratio: 1 / 1; border-radius: 50%;
-  /* soft highlight blob (up-left) over white core + flat red disc */
   background:
-    radial-gradient(circle at 37% 35%, rgba(255,255,255,.4) 0 8%, transparent 24%),
-    radial-gradient(circle at 50% 50%, #ffffff 0 11%, rgba(239,68,68,.92) 26% 100%);
-  /* tactical ring (r) + ghost ring (r+5), as concentric box-shadows */
-  box-shadow:
-    0 0 0 1.6px rgba(239,68,68,.55),
-    0 0 0 4px rgba(239,68,68,.18);
+    /* core — r*0.18, opaque white */
+    radial-gradient(circle closest-side at 50% 50%, #fff 0 18%, transparent 18%),
+    /* highlight — r*0.28, centred at (-0.2r, -0.2r), hard edge like the arc fill.
+       Its own closest side is 40% of the box, so 35% of that is 0.28r. */
+    radial-gradient(circle closest-side at 40% 40%, rgba(255,255,255,.3) 0 35%, transparent 35%),
+    /* body — r*0.82 */
+    radial-gradient(circle closest-side at 50% 50%, rgba(239,68,68,.88) 0 82%, transparent 82%);
+  /* tactical ring, drawn AT r — i.e. on the element edge */
+  box-shadow: inset 0 0 0 1.8px rgba(239,68,68,.55);
   transform: translate(-50%, -50%);
   animation: mt-prev-hit 5s linear infinite;
+}
+/* ghost ring at r+5 — a detached outline, so it needs its own box rather than
+   a spread shadow (a spread would fill the gap instead of leaving it) */
+.mt-prev-orb::after {
+  content: ''; position: absolute; inset: -5%;
+  border-radius: 50%;
+  border: 1px solid rgba(239,68,68,.2);
 }
 @keyframes mt-prev-fly {
   0%   { transform: translate(-32%, -6%); }
@@ -524,17 +549,21 @@ h1, h2, h3 {
   100% { transform: translate(-32%, -6%); }
 }
 @keyframes mt-prev-hit {
+  /* rest — identical to the .mt-prev-orb base, or the flash would snap the
+     target back to the old sphere every lap */
   0%, 22%, 30%, 66%, 76%, 100% {
     background:
-      radial-gradient(circle at 37% 35%, rgba(255,255,255,.4) 0 8%, transparent 24%),
-      radial-gradient(circle at 50% 50%, #ffffff 0 11%, rgba(239,68,68,.92) 26% 100%);
-    box-shadow: 0 0 0 1.6px rgba(239,68,68,.55), 0 0 0 4px rgba(239,68,68,.18);
+      radial-gradient(circle closest-side at 50% 50%, #fff 0 18%, transparent 18%),
+      radial-gradient(circle closest-side at 40% 40%, rgba(255,255,255,.3) 0 35%, transparent 35%),
+      radial-gradient(circle closest-side at 50% 50%, rgba(239,68,68,.88) 0 82%, transparent 82%);
+    box-shadow: inset 0 0 0 1.8px rgba(239,68,68,.55);
     transform: translate(-50%, -50%) scale(1);
   }
+  /* hit — the whole disc blows out to white for two frames */
   25%, 28%, 69%, 72% {
     background:
-      radial-gradient(circle at 50% 50%, #ffffff 0 68%, #ffd9d9 100%);
-    box-shadow: 0 0 0 2px rgba(255,255,255,.85), 0 0 0 5px rgba(255,255,255,.28);
+      radial-gradient(circle closest-side at 50% 50%, #ffffff 0 82%, #ffd9d9 82%);
+    box-shadow: inset 0 0 0 1.8px rgba(255,255,255,.85);
     transform: translate(-50%, -50%) scale(1.16);
   }
 }
@@ -2149,4 +2178,44 @@ body.is-drill-page footer {
 .drill-preview-viewport[data-paused="true"] *::before,
 .drill-preview-viewport[data-paused="true"] *::after {
   animation-play-state: paused !important;
+}
+
+/* ── Rotation transition ──────────────────────────────────────────────────
+   MainActivity handles orientation config changes itself (AndroidManifest),
+   which keeps the WebView and any running drill alive across a turn — but it
+   also means Android plays no rotation animation. The resize lands in one
+   step and the reflow happens in front of the player, which looks like the
+   app blanking and rebuilding.
+
+   This covers that moment with the app's own background colour: a fixed
+   overlay that fades in fast (the reflow is already underway) and out gently
+   once lib/rotationTransition.js sees the viewport hold still. It is inert at
+   every other moment — opacity 0, no pointer events — so it costs nothing
+   during a drill.
+
+   An overlay rather than fading <body>: any opacity below 1 on body creates a
+   stacking context and re-anchors position:fixed children (bottom nav, drill
+   HUD) mid-fade, which moves them visibly. */
+.sd-rotate-cover {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  background: var(--ink);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 170ms ease-out;
+}
+
+html.sd-rotating .sd-rotate-cover {
+  opacity: 1;
+  /* In fast, out slow: the flash we are hiding starts immediately. */
+  transition-duration: 80ms;
+}
+
+/* Respect the OS setting — someone who has asked for less motion should not
+   get a full-screen fade on every rotation. The cover still appears, just
+   without the animated ramp. */
+@media (prefers-reduced-motion: reduce) {
+  .sd-rotate-cover { transition-duration: 0ms; }
+  html.sd-rotating .sd-rotate-cover { transition-duration: 0ms; }
 }

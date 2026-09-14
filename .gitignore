@@ -6,6 +6,10 @@ node_modules/
 .next/
 .next-diag/
 .next-build/
+# scripts/app-smoke.cjs runs against its own dev server with
+# NEXT_CAPTURE_DIST=.next-smoke, so a smoke run never shares .next with a
+# normal dev server (see the distDir note in next.config.js).
+.next-smoke/
 out/
 build/
 dist/
@@ -40,8 +44,15 @@ coverage/
 # npm
 .npm
 
+# Verification screenshots dropped next to the Playwright tests that took them.
+# scripts/ holds test sources, not images.
+scripts/*.png
+
 # ESLint
 .eslintcache
+# Full-repo lint dumps (`eslint -f json > lint-audit.json`). A megabyte of
+# generated findings that is stale the moment a file changes.
+lint-audit.json
 
 # Vercel
 .vercel/

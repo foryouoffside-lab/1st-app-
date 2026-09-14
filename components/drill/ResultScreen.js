@@ -217,9 +217,9 @@ const BAR_SNAP_MS = 60;     // one committed frame at zero before the refill
 
 /**
  * A rising four-note chime for a new best / level-up, built out of the drill's
- * OWN synth so it lands in the same timbre as its playResultsReveal(). Every
- * drill's inline AudioSynthesizer exposes chimeVoice(); tone() is the fallback.
- * Gated on the synth's own `enabled` flag, which is the sound preference.
+ * OWN synth so it lands in the same timbre as its playResultsReveal(). That is
+ * the shared one in lib/gameAudio.js, which exposes chimeVoice(); tone() is the
+ * fallback. Gated on the synth's `enabled` flag, which is the sound preference.
  */
 function playFanfare(synth) {
   if (!synth || !synth.enabled || !synth.ctx) return;

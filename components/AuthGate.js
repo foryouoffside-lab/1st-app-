@@ -65,6 +65,49 @@ function LogoMark({ className }) {
   );
 }
 
+/**
+ * The signed-in user's Google photo on the username card.
+ *
+ * TWO things are load-bearing here and both were missing, which is why this
+ * rendered as a broken-image glyph on device:
+ *
+ *   1. referrerPolicy="no-referrer". Capacitor serves the app from
+ *      https://localhost, and Google's photo CDN rejects requests carrying
+ *      that Referer. Every other <img> in the app that shows a Google photo
+ *      already sets this; this one did not.
+ *
+ *   2. An onError fallback. A profile photo is a remote fetch on a screen the
+ *      player reaches seconds after install, often before the network settles
+ *      — and some Google accounts have no photo at all. Without a fallback,
+ *      any of those shows the browser's broken-image icon as the first thing
+ *      in the app. Failing to a neutral avatar is honest and never ugly.
+ */
+function AvatarTile({ src }) {
+  const [failed, setFailed] = useState(false);
+  const showPhoto = !!src && !failed;
+
+  return (
+    <div className="relative mb-4">
+      {showPhoto ? (
+        <img
+          src={src}
+          alt=""
+          referrerPolicy="no-referrer"
+          onError={() => setFailed(true)}
+          className="w-16 h-16 rounded-2xl border border-white/10 object-cover"
+        />
+      ) : (
+        <div className="w-16 h-16 rounded-2xl border border-white/10 bg-white/[0.04] flex items-center justify-center">
+          <User className="w-7 h-7 text-slate-500" />
+        </div>
+      )}
+      <div className="absolute -bottom-1.5 -right-1.5 w-6 h-6 rounded-full bg-emerald-500 border-2 border-[#0b0b14] flex items-center justify-center">
+        <ShieldCheck className="w-3 h-3 text-white" />
+      </div>
+    </div>
+  );
+}
+
 function GoogleIcon(props) {
   return (
     <svg viewBox="0 0 24 24" width="18" height="18" {...props}>
@@ -127,16 +170,7 @@ function UsernameStep({ pendingSignup, completeSignup }) {
     <Frame>
       <div className="rounded-2xl border border-[var(--line)] bg-[var(--card)] p-7">
         <div className="flex flex-col items-center text-center mb-7">
-          <div className="relative mb-4">
-            <img
-              src={pendingSignup.photoURL}
-              alt=""
-              className="w-16 h-16 rounded-2xl border border-white/10 object-cover"
-            />
-            <div className="absolute -bottom-1.5 -right-1.5 w-6 h-6 rounded-full bg-emerald-500 border-2 border-[#0b0b14] flex items-center justify-center">
-              <ShieldCheck className="w-3 h-3 text-white" />
-            </div>
-          </div>
+          <AvatarTile src={pendingSignup.photoURL} />
           {/* 18px, not 19: `whitespace-nowrap` guarantees the one-line
               heading, so the size has to be one that still fits the ~224px
               of card interior left on a 320px-wide phone. At 19px it

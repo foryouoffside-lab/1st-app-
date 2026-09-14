@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { collection, limit, onSnapshot, query, where } from 'firebase/firestore';
@@ -13,7 +13,7 @@ import { acceptChallenge, tierForEiq } from '../lib/challengeEngine';
 import { ARENA_ENABLED } from '../lib/featureFlags';
 import { getSessionState, markSessionStarted } from '../lib/sessionFlow';
 import { usePlayerProgress } from '../contexts/PlayerProgressContext';
-import { drillTimeHint } from '../lib/drillMeta';
+import { drillPacing } from '../lib/drillMeta';
 import { logEvent } from '../lib/analytics';
 import { DRILL_INDEX, byEngagement } from '../lib/drillIndex';
 import { DRILL_GROUPS, getDrillGroup, getGroupIcon } from '../lib/drillGroups';
@@ -26,6 +26,7 @@ const HOMEPAGE_CATEGORIES = DRILL_GROUPS.map(g => ({
   emoji: g.emoji,
   accent: g.accent,
 }));
+
 
 // Category chips for the home-screen drill browser. "All" leads (it covers
 // the whole catalogue, so the old "All Drills" wayfinding link is gone), then
@@ -60,15 +61,26 @@ export default function HomePageClient() {
     bestDrill: DRILL_INDEX.find(d => d.id === snapshot.bestDrillId)?.name || null,
   } : null;
 
+  // Blanked only on a genuine first load, never on a refresh.
+  //
+  // This effect re-runs whenever the progress snapshot changes, and the
+  // snapshot lands seconds after first paint (a network read). Resetting
+  // dashboardReady on every run therefore EMPTIED a card that was already on
+  // screen and then refilled it — measured on device as the session card
+  // bouncing 193px -> 219px -> 193px -> 219px, twice, well after the page
+  // looked settled. A refresh should swap the contents in place; only a
+  // first load, or a different player, has nothing to show in the meantime.
+  const loadedForUidRef = useRef(null);
   useEffect(() => {
     let disposed = false;
-    setDashboardReady(false);
+    const firstLoadForThisPlayer = loadedForUidRef.current !== (user?.uid || null);
+    if (firstLoadForThisPlayer) setDashboardReady(false);
     getSessionState().then(sess => {
       if (!disposed) setSession(sess);
     }).catch(error => {
       console.error('Unable to load home dashboard', error);
     }).finally(() => {
-      if (!disposed) setDashboardReady(true);
+      if (!disposed) { loadedForUidRef.current = user?.uid || null; setDashboardReady(true); }
     });
     return () => { disposed = true; };
   }, [snapshot, user?.uid]);
@@ -126,7 +138,7 @@ export default function HomePageClient() {
       router.push(`/drills/${challenge.drillSlug}?challengeId=${challenge.id}`);
     } catch (error) {
       console.error('Unable to join arena challenge', error);
-      alert(error?.code === 'arena/locked-out' ? error.message : 'This challenge is no longer available. Please choose another one.');
+      alert(error?.code === 'arena/locked-out' ? error.message : 'This challenge is no longer available.');
     }
   }
 
@@ -135,6 +147,7 @@ export default function HomePageClient() {
   // Which category the home-screen drill rail is showing. Chip taps set this;
   // nothing here navigates away.
   const [activeCategory, setActiveCategory] = useState('all');
+
 
   const railDrills = useMemo(() => {
     const list = activeCategory === 'all'
@@ -156,7 +169,12 @@ export default function HomePageClient() {
         .home-scroll { -ms-overflow-style: none; scrollbar-width: none; }
       ` }} />
 
-      <main className="relative mx-auto max-w-lg px-4 sm:px-6" style={{ paddingTop: 'calc(16px + env(safe-area-inset-top))' }}>
+      <main
+        className="relative mx-auto max-w-lg px-4 sm:px-6"
+        style={{
+          paddingTop: 'calc(16px + env(safe-area-inset-top))',
+        }}
+      >
         <header className="mb-5 flex items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-300">SkillDrills</p>
@@ -193,18 +211,29 @@ export default function HomePageClient() {
                 <span className="text-[11px] font-bold tabular-nums text-slate-400">{dailyCompleted}/{dailyTotal}</span>
               </div>
             </div>
-            {dashboardReady && session && (
-              <p className="mt-1.5 text-[11.5px] leading-snug text-slate-400">
-                {dailyDone
-                  ? "Done for today — a fresh set unlocks at midnight."
-                  : session.purpose}
-              </p>
-            )}
+            {/* Always rendered, never conditionally mounted. This line appears
+                only once the session state resolves, and mounting it then grew
+                the card 119px -> 167px, twice, bouncing everything under it.
+                Holding its space keeps the swap invisible. */}
+            <p className="mt-1.5 min-h-[16px] text-[11.5px] leading-snug text-slate-400">
+              {dashboardReady && session
+                ? (dailyDone
+                    ? "Done for today — a fresh set unlocks at midnight."
+                    : session.purpose)
+                : ''}
+            </p>
           </div>
 
           <div className="p-4">
             {!dashboardReady ? (
-              <div className="h-11 animate-pulse rounded-xl bg-white/[0.04]" />
+              <>
+                <div className="h-11 animate-pulse rounded-xl bg-white/[0.04]" />
+                {/* Reserves the "Next: <drill>" line that appears with the
+                    session. Measured on device: 16px of text plus its 10px
+                    margin, and without it everything below this card moved
+                    26px the moment the session resolved. */}
+                <div className="mt-2.5 h-4" aria-hidden="true" />
+              </>
             ) : dailyDone ? (
               <>
                 {session?.weekly && (
@@ -313,7 +342,13 @@ export default function HomePageClient() {
                       decoding="async"
                     />
                   )}
-                  <span className="dur">{drillTimeHint(drill.id) || '1 min+'}</span>
+                  {/* Whatever actually bounds the run: "45s" for a real
+                      countdown, "5 lives" when a miss limit is the fail state,
+                      "Endurance" for the earn-time clock. The old fallback here
+                      printed "1 min+" for every endurance drill — a number
+                      nothing in the game produces, and precisely the invented
+                      duration lib/drillMeta.js exists to prevent. */}
+                  <span className="dur">{drillPacing(drill.id).short}</span>
                   <span className="play"><Play className="h-3 w-3 fill-current" /></span>
                 </span>
                 <span className="body">
@@ -331,11 +366,22 @@ export default function HomePageClient() {
              whole card links to /progress. Level/streak/best are local reads;
              EIQ/tier come from the signed-in profile, so it only renders when
              signed in (the home page is behind AuthGate anyway). */}
+        {/* The placeholder mirrors the loaded card's SHELL and HEIGHT, not just
+            its message. Measured on the production build, this section went
+            from 54px to 249px when the progress snapshot landed — at 3.1
+            SECONDS, because it waits on a network read — and everything below
+            it jumped 195px at that moment. Reserving the space means the card
+            fills in where it already sat instead of shoving the page down.
+            Same mt-8 and same SectionHeading as the real one, so the swap
+            changes only the card's contents. */}
         {user && !progress && (
-          <section className="mb-6 rounded-2xl border border-[#232433] bg-[#12131c] p-4" aria-live="polite">
-            <p className="text-sm text-slate-400">{progressStatus === 'unavailable'
-              ? 'Waiting for a connection to restore your progress?'
-              : 'Restoring your progress?'}</p>
+          <section className="mt-8" aria-live="polite">
+            <SectionHeading icon={TrendingUp} title="Your progress" action="View" href="/progress" />
+            <div className="flex min-h-[213px] items-start rounded-2xl border border-[#232433] bg-[#12131c] p-4">
+              <p className="text-sm text-slate-400">{progressStatus === 'unavailable'
+                ? 'Waiting for a connection to restore your progress?'
+                : 'Restoring your progress?'}</p>
+            </div>
           </section>
         )}
         {user && progress && (() => {

@@ -4,6 +4,9 @@ import { usePathname, useRouter } from 'next/navigation';
 import { Capacitor } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
 import { lockPortrait } from '../lib/orientation';
+import { installRotationTransition } from '../lib/rotationTransition';
+import { setHapticsEnabled } from '../lib/haptics';
+import { getSettings } from '../lib/progressStore';
 import BottomNav from './BottomNav';
 import ChallengeNotificationBanner from './ChallengeNotificationBanner';
 import ChallengeStatusToast from './ChallengeStatusToast';
@@ -48,6 +51,16 @@ export default function AppShellClient({ children }) {
   // Fire-and-forget: a no-op in the normal case, and never worth blocking boot.
   useEffect(() => {
     reconcileDrillBests().catch(() => {});
+  }, []);
+
+  // Seed the wrong-answer haptic from stored settings. lib/haptics.js has to
+  // answer synchronously inside a running drill, so it keeps the flag in
+  // memory; this is the one place that loads it from disk. Defaults to on if
+  // the read fails — the setting is a preference, not a gate.
+  useEffect(() => {
+    getSettings()
+      .then((s) => setHapticsEnabled(s?.hapticsEnabled ?? true))
+      .catch(() => {});
   }, []);
 
   // Tag crash reports and analytics with the signed-in user's uid so either
@@ -407,8 +420,17 @@ export default function AppShellClient({ children }) {
     };
   }, [isDrill]);
 
+  // Cover the reflow that follows every rotation. Mounted once, app-wide, and
+  // deliberately NOT gated on isDrill: entering a drill is itself a rotation
+  // (portrait -> landscape lock) and is the most jarring one to leave bare.
+  // See lib/rotationTransition.js for why this is an overlay, not a body fade.
+  useEffect(() => installRotationTransition(), []);
+
   return (
     <ChallengeProvider>
+      {/* Painted by .sd-rotate-cover in globals.css; inert until the html
+          element gets .sd-rotating. */}
+      <div className="sd-rotate-cover" aria-hidden="true" />
       {/* Suppressed on drill routes — a duel invite banner (with sound), a
           "declined" toast, or a level-up celebration popping up over a
           fullscreen drill mid-play looks broken, and ChallengeStatusToast's

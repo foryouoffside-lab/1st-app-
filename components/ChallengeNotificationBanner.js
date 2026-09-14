@@ -62,7 +62,7 @@ export default function ChallengeNotificationBanner() {
         return;
       }
       console.error(e);
-      alert("Failed to accept challenge. The challenge may have expired or been cancelled.");
+      alert("Couldn't accept that challenge.");
     }
   };
 
