@@ -2208,8 +2208,14 @@ body.is-drill-page footer {
 
 html.sd-rotating .sd-rotate-cover {
   opacity: 1;
-  /* In fast, out slow: the flash we are hiding starts immediately. */
-  transition-duration: 80ms;
+  /* Instant in, slow out. NOT a style choice — the cover is raised by
+     beginRotationHold() in the same tick that asks the OS to rotate, so it has
+     to be fully opaque on the very next painted frame or the reflow shows
+     through underneath a half-transparent overlay. That is precisely what the
+     old 80ms ramp did, and on a real phone the flash was still visible through
+     it. Fading OUT is the half the player actually perceives, and that keeps
+     the 170ms ease-out from the base rule above. */
+  transition-duration: 0ms;
 }
 
 /* Respect the OS setting — someone who has asked for less motion should not
