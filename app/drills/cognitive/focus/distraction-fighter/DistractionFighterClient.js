@@ -624,8 +624,8 @@ export default function DistractionFighterClient() {
     playerName: getPlayerName(),
   } : null, {
     url: APP_SHARE_URL,
-    title: 'Distraction Fighter — SkillDrills',
-    text: endSummary ? `Scored ${endSummary.score} on Distraction Fighter (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — SkillDrills` : '',
+    title: 'Distraction Fighter — Flint',
+    text: endSummary ? `Scored ${endSummary.score} on Distraction Fighter (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — Flint` : '',
   });
 
   if (loading || !isClient) {

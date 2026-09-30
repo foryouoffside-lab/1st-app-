@@ -18,9 +18,11 @@
     "postbuild": "node scripts/preload-fonts.js"
   },
   "dependencies": {
+    "@capacitor-community/admob": "^8.1.0",
     "@capacitor-firebase/analytics": "^8.3.0",
     "@capacitor-firebase/authentication": "^8.3.0",
     "@capacitor-firebase/crashlytics": "^8.3.0",
+    "@capacitor-firebase/remote-config": "^8.5.2",
     "@capacitor/android": "^8.4.1",
     "@capacitor/app": "^8.1.0",
     "@capacitor/core": "^8.4.1",
@@ -63,6 +65,7 @@
     "postcss": "^8.5.10",
     "postcss-selector-parser": "^6.1.4",
     "nanoid": "^3.3.18",
-    "sharp": "^0.35.4"
+    "sharp": "^0.35.4",
+    "@grpc/grpc-js": "^1.14.5"
   }
 }

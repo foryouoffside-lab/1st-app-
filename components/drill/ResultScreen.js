@@ -27,6 +27,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { maybeShowAd } from '../../lib/ads';
 import { usePathname, useRouter } from 'next/navigation';
 import { Share2, ArrowLeft, ArrowRight, CheckCircle2 } from 'lucide-react';
 import { getGrade } from '../../lib/scoringEngine';
@@ -86,6 +87,19 @@ function ResultActions({ session, lockColor, onPlayAgain, onShare, backHref, com
   const router = useRouter();
   const { active, ctx } = session;
 
+  // Leaving the result screen is the only moment a solo ad may appear
+  // (lib/ads.js decides whether one is actually due). The ad runs first, then
+  // the player lands where they tapped — a drill never starts underneath it.
+  // Mid daily-session taps (Next drill, Play again, back) skip ads entirely so
+  // the guided 3-drill session isn't interrupted; its final Done does not.
+  const afterAd = (go) => () => { maybeShowAd('solo').then(go); };
+  const playAgain = active ? onPlayAgain : afterAd(onPlayAgain);
+  const leaveTo = (href) => (e) => {
+    if (active) return;
+    e.preventDefault();
+    afterAd(() => router.push(href))();
+  };
+
   // Session run, still loading — hold the primary slot so the buttons don't
   // visibly reshuffle a frame later.
   if (active && !ctx) {
@@ -101,7 +115,7 @@ function ResultActions({ session, lockColor, onPlayAgain, onShare, backHref, com
   const SecondaryRow = ({ showLeave }) => (
     <div className="mt-2.5 flex gap-2">
       <button
-        onClick={onPlayAgain}
+        onClick={playAgain}
         className="flex-1 min-h-[42px] rounded-[13px] border border-white/12 bg-white/[0.04] text-[12px] font-bold text-slate-200 hover:bg-white/[0.07] active:scale-[0.98] transition-transform"
       >
         Play again
@@ -115,6 +129,7 @@ function ResultActions({ session, lockColor, onPlayAgain, onShare, backHref, com
       {showLeave && (
         <Link
           href={backHref}
+          onClick={leaveTo(backHref)}
           className="w-11 min-h-[42px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white active:scale-[0.97] transition-transform"
         >
           <ArrowLeft className="w-4 h-4" />
@@ -158,7 +173,7 @@ function ResultActions({ session, lockColor, onPlayAgain, onShare, backHref, com
           )}
         </div>
         <button
-          onClick={() => router.push('/daily')}
+          onClick={afterAd(() => router.push('/daily'))}
           className="lock-btn w-full mt-3"
           style={{ '--lb': lockColor }}
         >
@@ -171,11 +186,11 @@ function ResultActions({ session, lockColor, onPlayAgain, onShare, backHref, com
 
   // Free practice / Arena / not in today's set — unchanged.
   if (compact) {
-    return <button onClick={onPlayAgain} className="lock-btn w-full mt-4" style={{ '--lb': lockColor }}>Play Again</button>;
+    return <button onClick={playAgain} className="lock-btn w-full mt-4" style={{ '--lb': lockColor }}>Play Again</button>;
   }
   return (
     <div className="flex gap-2">
-      <button onClick={onPlayAgain} className="lock-btn flex-1" style={{ '--lb': lockColor }}>Play Again</button>
+      <button onClick={playAgain} className="lock-btn flex-1" style={{ '--lb': lockColor }}>Play Again</button>
       <button
         onClick={onShare}
         className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer active:scale-[0.97] transition-transform"
@@ -184,6 +199,7 @@ function ResultActions({ session, lockColor, onPlayAgain, onShare, backHref, com
       </button>
       <Link
         href={backHref}
+        onClick={leaveTo(backHref)}
         className="w-12 min-h-[46px] flex-shrink-0 rounded-[13px] bg-white/[0.04] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white active:scale-[0.97] transition-transform"
       >
         <ArrowLeft className="w-4 h-4 text-slate-400" />

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 
-const LAST_UPDATED = 'August 22, 2026';
+const LAST_UPDATED = 'September 30, 2026';
 
 function Section({ title, children }) {
   return (
@@ -15,13 +15,13 @@ export default function PrivacyPolicyPage() {
   return (
     <div className="min-h-[100dvh] bg-[#050508] text-slate-100 px-5 pb-16" style={{ paddingTop: 'calc(24px + env(safe-area-inset-top))' }}>
       <div className="max-w-[640px] mx-auto">
-        <Link href="/" className="text-[12px] text-violet-400 font-semibold">&larr; Back to SkillDrills</Link>
+        <Link href="/" className="text-[12px] text-violet-400 font-semibold">&larr; Back to Flint</Link>
 
         <h1 className="text-[26px] font-black text-white mt-5 mb-1">Privacy Policy</h1>
         <p className="text-[12px] text-slate-500 mb-8">Last updated: {LAST_UPDATED}</p>
 
         <Section title="Overview">
-          <p>SkillDrills (&quot;we&quot;, &quot;us&quot;) is a cognitive and reaction-training app. This policy explains what information we collect when you use it, why we collect it, and how you can control or delete it.</p>
+          <p>Flint (&quot;we&quot;, &quot;us&quot;) is a cognitive and reaction-training app. This policy explains what information we collect when you use it, why we collect it, and how you can control or delete it.</p>
         </Section>
 
         <Section title="Information we collect">
@@ -33,11 +33,16 @@ export default function PrivacyPolicyPage() {
         </Section>
 
         <Section title="How we use this information">
-          <p>To save and display your progress, personalize daily challenges, keep the app working correctly, and diagnose bugs and performance issues. We do not run ads and we do not sell your personal information to anyone.</p>
+          <p>To save and display your progress, personalize daily challenges, keep the app working correctly, and diagnose bugs and performance issues. We do not sell your personal information to anyone.</p>
+        </Section>
+
+        <Section title="Advertising">
+          <p>Flint is free and is supported by full-screen ads shown between drills — never while you are playing. Ads are served by Google AdMob. To show and measure ads, AdMob may collect your device&apos;s advertising ID, approximate location (from your IP address), and information about how you interact with ads. Google&apos;s use of this data is described at <span className="text-slate-300">policies.google.com/technologies/partner-sites</span>.</p>
+          <p>If you are in the EEA, UK or Switzerland, the app asks for your consent before personalised ads are shown, and you can change your choice later. Anywhere, you can reset or delete your advertising ID, or opt out of personalised ads, in your phone&apos;s <span className="text-slate-300">Settings → Google → Ads</span> (or Settings → Privacy → Ads).</p>
         </Section>
 
         <Section title="Who we share data with">
-          <p>Your data is stored using Firebase (Google Cloud) as our backend infrastructure provider, and diagnostic/usage data is processed by Firebase Crashlytics and Firebase Analytics as described above. These providers process data on our behalf under their own security and data-processing terms — we do not sell or share your data with anyone else, including advertisers.</p>
+          <p>Your data is stored using Firebase (Google Cloud) as our backend infrastructure provider, and diagnostic/usage data is processed by Firebase Crashlytics and Firebase Analytics as described above. Ads are served by Google AdMob as described under Advertising. These providers process data on our behalf under their own security and data-processing terms — we do not sell your data, and we do not give your name, email or gameplay data to advertisers.</p>
         </Section>
 
         <Section title="Data retention & deletion">
@@ -45,11 +50,11 @@ export default function PrivacyPolicyPage() {
         </Section>
 
         <Section title="Children's privacy">
-          <p>SkillDrills is not directed at children under 13, and creating an account requires a Google account. If we become aware that we&apos;ve collected information from a child under 13 without appropriate consent, we will delete it — contact us below to request this.</p>
+          <p>Flint is not directed at children under 13, and creating an account requires a Google account. If we become aware that we&apos;ve collected information from a child under 13 without appropriate consent, we will delete it — contact us below to request this.</p>
         </Section>
 
         <Section title="Who is responsible for your data">
-          <p>SkillDrills is operated by Sangmesh, based in India, acting as the data controller for the information described in this policy. You can reach us at <span className="text-slate-300">skilldrills.contact@gmail.com</span> for anything relating to your data.</p>
+          <p>Flint is operated by Sangmesh, based in India, acting as the data controller for the information described in this policy. You can reach us at <span className="text-slate-300">skilldrills.contact@gmail.com</span> for anything relating to your data.</p>
         </Section>
 
         <Section title="Why we are allowed to process your data (EEA & UK)">
@@ -72,7 +77,7 @@ export default function PrivacyPolicyPage() {
         </Section>
 
         <Section title="Where your data is stored">
-          <p>SkillDrills runs on Firebase (Google Cloud). Your data may be stored and processed on servers outside your own country, including in the United States. Where data leaves the EEA or UK, Google Cloud&apos;s standard data protection terms and Standard Contractual Clauses cover that transfer.</p>
+          <p>Flint runs on Firebase (Google Cloud). Your data may be stored and processed on servers outside your own country, including in the United States. Where data leaves the EEA or UK, Google Cloud&apos;s standard data protection terms and Standard Contractual Clauses cover that transfer.</p>
         </Section>
 
         <Section title="Security">
@@ -80,7 +85,7 @@ export default function PrivacyPolicyPage() {
         </Section>
 
         <Section title="Changes to this policy">
-          <p>If this policy changes, we&apos;ll update the date at the top of this page. Continued use of SkillDrills after a change means you accept the updated policy.</p>
+          <p>If this policy changes, we&apos;ll update the date at the top of this page. Continued use of Flint after a change means you accept the updated policy.</p>
         </Section>
 
         <Section title="Contact us">

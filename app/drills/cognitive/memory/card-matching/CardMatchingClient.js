@@ -568,8 +568,8 @@ export default function CardMatchingClient() {
     playerName: getPlayerName(),
   } : null, {
     url: APP_SHARE_URL,
-    title: 'Card Matching — SkillDrills',
-    text: endSummary ? `Scored ${endSummary.score} on Card Matching (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — SkillDrills` : '',
+    title: 'Card Matching — Flint',
+    text: endSummary ? `Scored ${endSummary.score} on Card Matching (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — Flint` : '',
   });
 
   // === ON MOUNT ===

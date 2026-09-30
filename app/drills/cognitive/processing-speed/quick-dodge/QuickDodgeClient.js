@@ -1808,8 +1808,8 @@ setDangerLevel(0); setEndSummary(null);
     playerName: getPlayerName(),
   } : null, {
     url: APP_SHARE_URL,
-    title: 'Quick Dodge — SkillDrills',
-    text: endSummary ? `Scored ${endSummary.score} on Quick Dodge (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — SkillDrills` : '',
+    title: 'Quick Dodge — Flint',
+    text: endSummary ? `Scored ${endSummary.score} on Quick Dodge (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — Flint` : '',
   });
 
   if (loading || !isClient) {

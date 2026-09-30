@@ -1,28 +1,21 @@
-<!-- Status-bar notification icon: the SkillDrills target mark, as a flat white
-     silhouette. Android tints status-bar icons itself, so every shape here is
-     pure white on transparent — no colour, no gradient. -->
+<!-- Status-bar notification icon: the Flint mark (corner brackets + spark) as
+     a flat white silhouette. Android tints status-bar icons itself, so every
+     shape here is pure white on transparent — no colour, no gradient. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
 
-    <!-- Outer ring -->
+    <!-- The Lock: four corner brackets -->
     <path
-        android:fillColor="#00000000"
         android:strokeColor="#FFFFFF"
         android:strokeWidth="2"
-        android:pathData="M3.5,12 a8.5,8.5 0 1,1 17,0 a8.5,8.5 0 1,1 -17,0" />
+        android:strokeLineCap="square"
+        android:pathData="M3,8 V3 H8 M16,3 H21 V8 M21,16 V21 H16 M8,21 H3 V16" />
 
-    <!-- Centre dot -->
+    <!-- The spark -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M12,9.5 a2.5,2.5 0 1,1 0,5 a2.5,2.5 0 1,1 0,-5" />
-
-    <!-- Crosshair ticks -->
-    <path
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="2"
-        android:strokeLineCap="round"
-        android:pathData="M12,1 L12,4.5 M12,19.5 L12,23 M1,12 L4.5,12 M19.5,12 L23,12" />
+        android:pathData="M12,5 L13.1,10.9 L19,12 L13.1,13.1 L12,19 L10.9,13.1 L5,12 L10.9,10.9 Z" />
 </vector>

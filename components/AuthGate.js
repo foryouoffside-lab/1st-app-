@@ -33,34 +33,33 @@ function isPublicPath(pathname) {
   return PUBLIC_PATHS.includes(p);
 }
 
-// Real vector art (same design as public/favicon.svg), not a raster <img> —
-// crisp at any size/DPI instead of a PNG that looks soft when scaled.
+// Real vector art (same design as public/favicon.svg — the Flint mark: the
+// Lock's corner brackets around a struck spark), not a raster <img>, so it
+// stays crisp at any size/DPI.
 function LogoMark({ className }) {
   return (
-    <svg viewBox="0 0 100 100" className={className} role="img" aria-label="SkillDrills">
+    <svg viewBox="0 0 512 512" className={className} role="img" aria-label="Flint">
       <defs>
-        <linearGradient id="sdLogoBg" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#2563eb" />
-          <stop offset="100%" stopColor="#7c3aed" />
-        </linearGradient>
-        <linearGradient id="sdLogoBgStroke" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#1e40af" />
-          <stop offset="100%" stopColor="#5b21b6" />
-        </linearGradient>
+        <radialGradient id="flintLogoBg" cx="50%" cy="50%" r="70%">
+          <stop offset="0" stopColor="#1d1438" />
+          <stop offset="1" stopColor="#07070c" />
+        </radialGradient>
+        <radialGradient id="flintLogoGlow" cx="50%" cy="50%" r="50%">
+          <stop offset="0" stopColor="#fbbf24" stopOpacity=".75" />
+          <stop offset=".45" stopColor="#f97316" stopOpacity=".28" />
+          <stop offset="1" stopColor="#f97316" stopOpacity="0" />
+        </radialGradient>
       </defs>
-      <circle cx="50" cy="50" r="48" fill="url(#sdLogoBg)" stroke="url(#sdLogoBgStroke)" strokeWidth="2" />
-      <circle cx="50" cy="50" r="22" fill="none" stroke="#fff" strokeWidth="3" opacity="0.9" />
-      <circle cx="50" cy="50" r="14" fill="none" stroke="#fff" strokeWidth="2" opacity="0.8" />
-      <circle cx="50" cy="50" r="6" fill="#fff" opacity="0.9" />
-      <line x1="50" y1="18" x2="50" y2="32" stroke="#fff" strokeWidth="2.5" opacity="0.9" />
-      <line x1="50" y1="68" x2="50" y2="82" stroke="#fff" strokeWidth="2.5" opacity="0.9" />
-      <line x1="18" y1="50" x2="32" y2="50" stroke="#fff" strokeWidth="2.5" opacity="0.9" />
-      <line x1="68" y1="50" x2="82" y2="50" stroke="#fff" strokeWidth="2.5" opacity="0.9" />
-      <line x1="30" y1="30" x2="38" y2="38" stroke="#fff" strokeWidth="2" opacity="0.6" />
-      <line x1="70" y1="30" x2="62" y2="38" stroke="#fff" strokeWidth="2" opacity="0.6" />
-      <line x1="30" y1="70" x2="38" y2="62" stroke="#fff" strokeWidth="2" opacity="0.6" />
-      <line x1="70" y1="70" x2="62" y2="62" stroke="#fff" strokeWidth="2" opacity="0.6" />
-      <circle cx="50" cy="50" r="2.5" fill="#fff" />
+      <rect width="512" height="512" rx="112" fill="url(#flintLogoBg)" />
+      <g fill="none" stroke="#8b5cf6" strokeWidth="26" strokeLinecap="square">
+        <path d="M118 196 V118 H196" />
+        <path d="M316 118 H394 V196" />
+        <path d="M394 316 V394 H316" />
+        <path d="M196 394 H118 V316" />
+      </g>
+      <circle cx="256" cy="256" r="118" fill="url(#flintLogoGlow)" />
+      <path d="M256 150 L270 242 L362 256 L270 270 L256 362 L242 270 L150 256 L242 242 Z" fill="#fff7e0" />
+      <circle cx="256" cy="256" r="34" fill="#fff" />
     </svg>
   );
 }
@@ -144,7 +143,7 @@ function Brand() {
     <div className="flex items-center justify-center gap-2.5">
       <LogoMark className="w-9 h-9 shrink-0 drop-shadow-[0_0_18px_rgba(139,92,246,.45)]" />
       <h1 className="font-display text-[30px] text-white">
-        SkillDrills
+        Flint
       </h1>
     </div>
   );
@@ -325,7 +324,7 @@ export default function AuthGate({ children }) {
               <div className="absolute w-16 h-16 rounded-full border-[3px] border-t-violet-500 border-r-transparent border-b-transparent border-l-transparent animate-spin" />
               <LogoMark className="w-11 h-11 drop-shadow-[0_0_20px_rgba(139,92,246,.5)]" />
             </div>
-            <h2 className="text-[15px] font-bold tracking-[-0.01em] text-white">Loading SkillDrills</h2>
+            <h2 className="text-[15px] font-bold tracking-[-0.01em] text-white">Loading Flint</h2>
             <p className="text-slate-500 text-[11px] mt-1.5">Connecting to secure servers...</p>
           </div>
         ) : null}

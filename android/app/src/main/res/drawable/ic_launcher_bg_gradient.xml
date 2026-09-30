@@ -1,18 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Adaptive-icon background layer. The same blue -> violet diagonal as
-  public/favicon.svg, drawn edge to edge so the launcher can mask it to
-  whatever shape the device uses (circle, squircle, rounded square).
-
-  The disc is deliberately NOT baked into the foreground for this reason: a
-  circle inside a circular mask reads as a shrunken sticker. Background carries
-  the colour, foreground carries the mark.
+  Adaptive-icon background layer for the Flint mark: deep violet at the
+  centre falling off to ink, drawn edge to edge so the launcher can mask it
+  to whatever shape the device uses. Same colours as
+  store-assets/flint/flint-icon.svg. The mark itself (Lock brackets + spark)
+  is the foreground layer, ic_launcher_foreground.png.
 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
     <gradient
-        android:startColor="#2563eb"
-        android:endColor="#7c3aed"
-        android:angle="315"
-        android:type="linear" />
+        android:type="radial"
+        android:gradientRadius="70%p"
+        android:centerX="0.5"
+        android:centerY="0.5"
+        android:startColor="#1d1438"
+        android:endColor="#07070c" />
 </shape>

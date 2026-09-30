@@ -22,7 +22,7 @@ export default function Loading() {
         <p className="text-slate-500 font-bold tracking-widest uppercase text-[10px]">
           Loading
         </p>
-        <span className="sr-only">Loading SkillDrills. Please wait.</span>
+        <span className="sr-only">Loading Flint. Please wait.</span>
       </div>
     </div>
   );

@@ -26,6 +26,7 @@ import { getDrillTrends, getHeadlineTrend } from '../../lib/progressInsights';
 import { resolveAchievements } from '../../lib/achievements';
 import { getWeeklyGoal } from '../../lib/weeklyGoal';
 import { getReminderSettings, setReminderPref } from '../../lib/dailyReminder';
+import { isAdPrivacyOptionsRequired, openAdPrivacyOptions, AD_PRIVACY_EVENT } from '../../lib/ads';
 import LevelBadge from '../../components/LevelBadge';
 
 const RADAR_CATEGORIES = DRILL_GROUPS.map(g => ({ slug: g.id, name: g.name }));
@@ -60,6 +61,15 @@ export default function ProgressClient() {
   const [headline, setHeadline] = useState(null);
   const [achievements, setAchievements] = useState(null);
   const [reminder, setReminder] = useState(null);
+  // Only players where ad consent was asked (EEA/UK/Switzerland) get the
+  // "Ad privacy choices" row — see lib/ads.js.
+  const [adPrivacy, setAdPrivacy] = useState(false);
+  useEffect(() => {
+    setAdPrivacy(isAdPrivacyOptionsRequired());
+    const on = () => setAdPrivacy(true);
+    window.addEventListener(AD_PRIVACY_EVENT, on);
+    return () => window.removeEventListener(AD_PRIVACY_EVENT, on);
+  }, []);
 
   const displayName = user?.displayName || guestName;
 
@@ -535,18 +545,22 @@ export default function ProgressClient() {
         </div>
 
         {/* ── Level Progress ── */}
-        {playerProgress && <div className="p-xp">
+        {/* Always mounted — before the snapshot lands it holds the same
+            height with dashes, so the page below never jumps down when the
+            numbers arrive (measured: a 0.62 layout-shift score when this
+            block mounted late). */}
+        <div className="p-xp" aria-busy={!playerProgress}>
           <div className="p-xp-top">
             <span>XP PROGRESS</span>
-            <b>{xpIn.toLocaleString()} / {(xpIn + xpTo).toLocaleString()} XP</b>
+            <b>{playerProgress ? `${xpIn.toLocaleString()} / ${(xpIn + xpTo).toLocaleString()} XP` : '— / — XP'}</b>
           </div>
           <div className="rs-track">
-            <div className="rs-fill" style={{ width: `${xpProgress}%` }} />
+            <div className="rs-fill" style={{ width: `${playerProgress ? xpProgress : 0}%` }} />
           </div>
           <div className="text-[10px] text-neutral-500 mt-2 text-center">
-            Total lifetime: <span className="text-violet-400 font-bold">{totalXP.toLocaleString()} XP</span>
+            Total lifetime: <span className="text-violet-400 font-bold">{playerProgress ? `${totalXP.toLocaleString()} XP` : '—'}</span>
           </div>
-        </div>}
+        </div>
 
         {/* ── Activity (how much you've trained — NOT how well) ── */}
         <div>
@@ -790,6 +804,13 @@ export default function ProgressClient() {
               <span>Terms of Service</span>
               <ChevronRight className="chev" />
             </Link>
+            {adPrivacy && (
+              <button onClick={openAdPrivacyOptions} className="w-full text-left acct-row cursor-pointer hover:bg-white/[0.02]">
+                <FileText className="w-4 h-4 text-neutral-500" />
+                <span>Ad privacy choices</span>
+                <ChevronRight className="chev" />
+              </button>
+            )}
           </div>
 
           {/* Delete Account (separated danger action) */}
@@ -821,7 +842,7 @@ export default function ProgressClient() {
             progress is stored on-device (see lib/progressStore.js), and the
             account data that does leave the device is listed plainly. */}
         <div className="text-center py-4 text-[10px] text-neutral-600 space-y-1">
-          <p>SkillDrills · Your drill progress stays on this device</p>
+          <p>Flint · Your drill progress stays on this device</p>
           <p>Only your name, photo and Arena record are stored online</p>
         </div>
 

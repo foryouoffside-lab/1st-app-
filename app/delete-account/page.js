@@ -19,9 +19,9 @@ function Section({ title, children }) {
 }
 
 export const metadata = {
-  title: 'Delete Your Account — SkillDrills',
+  title: 'Delete Your Account — Flint',
   description:
-    'How to permanently delete your SkillDrills account and all associated data, from inside the app or by email request.',
+    'How to permanently delete your Flint account and all associated data, from inside the app or by email request.',
 };
 
 export default function DeleteAccountPage() {
@@ -32,7 +32,7 @@ export default function DeleteAccountPage() {
     >
       <div className="max-w-[640px] mx-auto">
         <Link href="/" className="text-[12px] text-violet-400 font-semibold">
-          &larr; Back to SkillDrills
+          &larr; Back to Flint
         </Link>
 
         <h1 className="text-[26px] font-black text-white mt-5 mb-1">Delete your account</h1>
@@ -42,7 +42,7 @@ export default function DeleteAccountPage() {
           <p>
             Deleting your account permanently removes your player profile (display name and profile
             photo), your wins, losses, streak and EIQ ranking, your reserved username, and your duel
-            history. Your Google sign-in link to SkillDrills is also removed.
+            history. Your Google sign-in link to Flint is also removed.
           </p>
           <p>
             Solo drill scores and settings that live only on your device are erased along with the
@@ -57,7 +57,7 @@ export default function DeleteAccountPage() {
         <Section title="Option 1 — delete it yourself in the app">
           <p>This is the fastest route and needs no waiting on us:</p>
           <p>
-            Open SkillDrills &rarr; <span className="text-slate-300">Progress</span> &rarr;{' '}
+            Open Flint &rarr; <span className="text-slate-300">Progress</span> &rarr;{' '}
             <span className="text-slate-300">Delete Account &amp; Wipe Data</span> &rarr; confirm.
           </p>
           <p>
@@ -69,7 +69,7 @@ export default function DeleteAccountPage() {
           <p>
             If you have already uninstalled the app, or you cannot sign in, email{' '}
             <span className="text-slate-300">{CONTACT_EMAIL}</span> from the email address attached
-            to your SkillDrills account, with the subject{' '}
+            to your Flint account, with the subject{' '}
             <span className="text-slate-300">&quot;Delete my account&quot;</span>.
           </p>
           <p>

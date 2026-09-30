@@ -2203,8 +2203,16 @@ body.is-drill-page footer {
   background: var(--ink);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 170ms ease-out;
+  /* The reveal is the half the player perceives: a touch longer than a
+     blink, on a decelerating curve so the new screen settles in rather than
+     snapping. */
+  transition: opacity 240ms cubic-bezier(.22, .61, .36, 1);
 }
+
+/* Route-change fade (AppShellClient). A box-less wrapper, so it adds no
+   layout; the page root inside it is what fades. Opacity only — a transform
+   would re-anchor the page's position:fixed children mid-animation. */
+.route-view { display: contents; }
 
 html.sd-rotating .sd-rotate-cover {
   opacity: 1;

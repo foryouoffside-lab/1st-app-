@@ -1082,8 +1082,8 @@ export default function MultiTaskingClient() {
     playerName: getPlayerName(),
   } : null, {
     url: APP_SHARE_URL,
-    title: 'Multi-Tasking — SkillDrills',
-    text: endSummary ? `🧠 Scored ${endSummary.score} pts on Multi-Tasking — ${endSummary.accuracy}% accuracy, Grade ${endSummary.grade.grade}. Get SkillDrills:` : '',
+    title: 'Multi-Tasking — Flint',
+    text: endSummary ? `🧠 Scored ${endSummary.score} pts on Multi-Tasking — ${endSummary.accuracy}% accuracy, Grade ${endSummary.grade.grade}. Get Flint:` : '',
   });
 
   if (loading || !isClient) {

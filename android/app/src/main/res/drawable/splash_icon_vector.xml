@@ -1,80 +1,51 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Real vector art for the Android 12+ SplashScreen API icon slot (see
-  windowSplashScreenAnimatedIcon in styles.xml) — hand-converted from the
-  same source as public/favicon.svg, not a raster PNG. Renders pixel-perfect
-  at any density instead of being upscaled/downscaled from a fixed-size
-  bitmap, and the inner <group> scale below (0.20) is what keeps the mark
-  small with generous padding within its 240dp slot. This OS-mandated splash
-  (API 31+) can't be skipped/removed by the app at all, so the only lever
-  here is size — kept a notch smaller than the platform default look.
+  Android 12+ SplashScreen API icon (windowSplashScreenAnimatedIcon in
+  styles.xml): the Flint mark — the Lock's four corner brackets around a
+  struck spark — as real vector art, so it is crisp at every density. Same
+  geometry as store-assets/flint/flint-icon.svg (512 viewport). The group
+  scale keeps the mark small with generous padding inside the OS's 240dp
+  slot, well within the 160dp circle the platform actually shows.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="240dp"
     android:height="240dp"
-    android:viewportWidth="100"
-    android:viewportHeight="100">
+    android:viewportWidth="512"
+    android:viewportHeight="512">
 
     <group
-        android:pivotX="50"
-        android:pivotY="50"
-        android:scaleX="0.20"
-        android:scaleY="0.20">
+        android:pivotX="256"
+        android:pivotY="256"
+        android:scaleX="0.36"
+        android:scaleY="0.36">
 
-        <path android:pathData="M2,50 A48,48 0 1,0 98,50 A48,48 0 1,0 2,50 Z" android:strokeWidth="2">
+        <path
+            android:strokeColor="#8b5cf6"
+            android:strokeWidth="26"
+            android:strokeLineCap="square"
+            android:pathData="M118,196 V118 H196 M316,118 H394 V196 M394,316 V394 H316 M196,394 H118 V316" />
+
+        <path android:pathData="M138,256 A118,118 0 1,0 374,256 A118,118 0 1,0 138,256 Z">
             <aapt:attr name="android:fillColor">
                 <gradient
-                    android:type="linear"
-                    android:startX="0" android:startY="0"
-                    android:endX="100" android:endY="100"
-                    android:startColor="#2563eb"
-                    android:endColor="#7c3aed" />
-            </aapt:attr>
-            <aapt:attr name="android:strokeColor">
-                <gradient
-                    android:type="linear"
-                    android:startX="0" android:startY="0"
-                    android:endX="100" android:endY="100"
-                    android:startColor="#1e40af"
-                    android:endColor="#5b21b6" />
+                    android:type="radial"
+                    android:centerX="256"
+                    android:centerY="256"
+                    android:gradientRadius="118">
+                    <item android:offset="0" android:color="#BFFBBF24" />
+                    <item android:offset="0.45" android:color="#47F97316" />
+                    <item android:offset="1" android:color="#00F97316" />
+                </gradient>
             </aapt:attr>
         </path>
 
         <path
-            android:pathData="M28,50 A22,22 0 1,0 72,50 A22,22 0 1,0 28,50 Z"
-            android:strokeColor="#FFFFFF"
-            android:strokeWidth="3"
-            android:strokeAlpha="0.9"
-            android:fillColor="#00000000" />
+            android:fillColor="#FFF7E0"
+            android:pathData="M256,150 L270,242 L362,256 L270,270 L256,362 L242,270 L150,256 L242,242 Z" />
 
         <path
-            android:pathData="M36,50 A14,14 0 1,0 64,50 A14,14 0 1,0 36,50 Z"
-            android:strokeColor="#FFFFFF"
-            android:strokeWidth="2"
-            android:strokeAlpha="0.8"
-            android:fillColor="#00000000" />
-
-        <path
-            android:pathData="M44,50 A6,6 0 1,0 56,50 A6,6 0 1,0 44,50 Z"
             android:fillColor="#FFFFFF"
-            android:fillAlpha="0.9" />
-
-        <path
-            android:pathData="M50,18 L50,32 M50,68 L50,82 M18,50 L32,50 M68,50 L82,50"
-            android:strokeColor="#FFFFFF"
-            android:strokeWidth="2.5"
-            android:strokeAlpha="0.9" />
-
-        <path
-            android:pathData="M30,30 L38,38 M70,30 L62,38 M30,70 L38,62 M70,70 L62,62"
-            android:strokeColor="#FFFFFF"
-            android:strokeWidth="2"
-            android:strokeAlpha="0.6" />
-
-        <path
-            android:pathData="M47.5,50 A2.5,2.5 0 1,0 52.5,50 A2.5,2.5 0 1,0 47.5,50 Z"
-            android:fillColor="#FFFFFF" />
-
+            android:pathData="M222,256 A34,34 0 1,0 290,256 A34,34 0 1,0 222,256 Z" />
     </group>
 </vector>

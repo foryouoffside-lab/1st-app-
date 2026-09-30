@@ -682,8 +682,8 @@ export default function TowerOfHanoiClient() {
     playerName: getPlayerName(),
   } : null, {
     url: APP_SHARE_URL,
-    title: 'Tower of Hanoi — SkillDrills',
-    text: endSummary ? `Scored ${endSummary.score} pts on Tower of Hanoi (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — SkillDrills` : '',
+    title: 'Tower of Hanoi — Flint',
+    text: endSummary ? `Scored ${endSummary.score} pts on Tower of Hanoi (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — Flint` : '',
   });
 
   const getDiskWidth = useCallback((ds, md) => {

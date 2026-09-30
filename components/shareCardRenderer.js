@@ -174,7 +174,7 @@ export function drawShareCard(ctx, data) {
 
   // The handle is the reason the card feels like someone's result. No "@" —
   // Google display names are often "First Last" and "@First Last" reads wrong.
-  const handle = (playerName || 'A SKILLDRILLS PLAYER').toUpperCase();
+  const handle = (playerName || 'A FLINT PLAYER').toUpperCase();
   let hSize = 12;
   ctx.font = `500 ${hSize}px ${MONO}`;
   const hRoom = 210;

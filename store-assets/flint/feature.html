@@ -1,0 +1,27 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=IBM+Plex+Mono:wght@500;600&family=Inter:wght@500;600;700&display=block" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0}
+body{width:1024px;height:500px;overflow:hidden;background:#06060b;font-family:Inter,sans-serif;color:#fff;position:relative}
+.field{position:absolute;inset:0;background-image:radial-gradient(rgba(255,255,255,.07) 1.2px,transparent 1.3px);background-size:22px 22px;
+ -webkit-mask-image:radial-gradient(ellipse 75% 90% at 40% 50%,#000 30%,transparent 80%)}
+.glow1{position:absolute;left:-120px;top:-60px;width:620px;height:620px;background:radial-gradient(circle,rgba(124,58,237,.38),transparent 62%)}
+.glow2{position:absolute;left:120px;top:150px;width:200px;height:200px;background:radial-gradient(circle,rgba(251,191,36,.25),transparent 65%)}
+.mark{position:absolute;left:76px;top:100px;width:300px;height:300px;filter:drop-shadow(0 0 40px rgba(139,92,246,.45))}
+.copy{position:absolute;left:440px;top:112px;right:40px}
+.word{font-family:Anton,sans-serif;font-size:150px;line-height:.9;letter-spacing:.02em;position:relative;display:inline-block;padding:6px 22px 0}
+.word:before,.word:after{content:"";position:absolute;width:30px;height:30px;border:7px solid #8b5cf6}
+.word:before{left:0;top:0;border-right:0;border-bottom:0}.word:after{right:0;bottom:-8px;border-left:0;border-top:0}
+.tag{margin-top:26px;font-size:30px;white-space:nowrap;font-weight:700;letter-spacing:-.01em;color:#e9e6ff}
+.tag b{color:#fbbf24;font-weight:700}
+.chips{margin-top:26px;display:flex;gap:12px}
+.chip{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:15px;letter-spacing:.12em;text-transform:uppercase;color:#c4b5fd;border:1.5px solid rgba(139,92,246,.45);background:rgba(139,92,246,.08);padding:10px 14px;border-radius:12px}
+</style></head><body>
+<div class="glow1"></div><div class="field"></div><div class="glow2"></div>
+<img class="mark" src="flint-tile.svg">
+<div class="copy">
+ <div class="word">FLINT</div>
+ <div class="tag">Focus &amp; reaction drills. <b>Sharpen up.</b></div>
+ <div class="chips"><span class="chip">10 drills</span><span class="chip">Daily session</span><span class="chip">Live 1v1 duels</span></div>
+</div>
+</body></html>

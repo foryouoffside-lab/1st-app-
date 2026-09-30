@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, Suspense } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, Suspense } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Capacitor } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
@@ -16,6 +16,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { reportError, identifyUser } from '../lib/crashReporting';
 import { logScreenView, identifyAnalyticsUser } from '../lib/analytics';
 import { ensureDailyReminderScheduled } from '../lib/dailyReminder';
+import { initAds } from '../lib/ads';
 import { reconcileDrillBests } from '../lib/bestScoreSync';
 import { startPresence, getKnownFriendCount, FRIEND_COUNT_EVENT } from '../lib/presence';
 import { LocalNotifications } from '@capacitor/local-notifications';
@@ -78,6 +79,13 @@ export default function AppShellClient({ children }) {
   useEffect(() => {
     if (pathname) logScreenView(pathname);
   }, [pathname]);
+
+  // Ads: reads the Remote Config switch once signed in (so Google's consent
+  // form, where one is legally required, never lands on the login screen).
+  // Ships OFF — see lib/ads.js. No-op on web.
+  useEffect(() => {
+    if (user?.uid) initAds();
+  }, [user?.uid]);
 
   // Arm the daily-session reminder once signed in, and RE-ARM it every time
   // the app comes back to the foreground — that's what moves it off "today"
@@ -157,8 +165,15 @@ export default function AppShellClient({ children }) {
     };
   }, []);
 
-  // Determine if we are on a gameplay/drill page
-  useEffect(() => {
+  // Determine if we are on a gameplay/drill page.
+  //
+  // useLayoutEffect, not useEffect: this runs after the new route is in the
+  // DOM but BEFORE the browser paints it. Leaving a landscape drill, the
+  // portrait lock below raises the rotation cover synchronously
+  // (lib/orientation.js), so the first painted frame is already covered. As a
+  // passive effect it ran after that paint, and the player saw Home squashed
+  // into landscape for a frame, then black, then Home again.
+  useLayoutEffect(() => {
     const segments = pathname.split('/').filter(Boolean);
     const isDrillRoute = segments[0] === 'drills' && segments.length >= 3;
     setIsDrill(isDrillRoute);
@@ -426,6 +441,28 @@ export default function AppShellClient({ children }) {
   // See lib/rotationTransition.js for why this is an overlay, not a body fade.
   useEffect(() => installRotationTransition(), []);
 
+  // Route-change fade. The incoming screen fades in over ~200ms instead of
+  // hard-cutting in (result card -> Home, Home -> Progress, ...). Skipped on
+  // the very first paint (the splash hands straight off) and whenever the
+  // rotation cover is up, because that cover already performs the reveal.
+  // Runs before paint so the first frame is the faded one — no flash of the
+  // full-opacity page first. The Web Animations API leaves no inline style
+  // behind, and opacity-only keeps fixed-position children where they are.
+  const routeViewRef = useRef(null);
+  const firstRouteRef = useRef(true);
+  useLayoutEffect(() => {
+    if (firstRouteRef.current) { firstRouteRef.current = false; return; }
+    if (document.documentElement.classList.contains('sd-rotating')) return;
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    const root = routeViewRef.current;
+    if (!root) return;
+    for (const el of root.children) {
+      el.animate?.([{ opacity: 0 }, { opacity: 1 }], {
+        duration: 200, easing: 'cubic-bezier(.22, .61, .36, 1)',
+      });
+    }
+  }, [pathname]);
+
   return (
     <ChallengeProvider>
       {/* Painted by .sd-rotate-cover in globals.css; inert until the html
@@ -447,7 +484,7 @@ export default function AppShellClient({ children }) {
           <CelebrationToast />
         </>
       )}
-      {children}
+      <div ref={routeViewRef} className="route-view">{children}</div>
       {!isDrill && (
         <Suspense fallback={<div className="h-[72px] md:hidden" />}>
           <BottomNav />

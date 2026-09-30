@@ -29,10 +29,10 @@ const ibmPlexMono = IBM_Plex_Mono({
 });
 
 export const metadata = {
-  title: 'SkillDrills',
+  title: 'Flint',
   appleWebApp: {
     capable: true,
-    title: 'SkillDrills',
+    title: 'Flint',
     statusBarStyle: 'black-translucent',
   },
   manifest: '/manifest.json',
@@ -79,7 +79,7 @@ export default function RootLayout({ children }) {
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-        <meta name="apple-mobile-web-app-title" content="SkillDrills" />
+        <meta name="apple-mobile-web-app-title" content="Flint" />
 
         {/* No image preload here on purpose. icon-512x512.png is referenced
             only by manifest.json (the PWA install icon) and is never rendered,

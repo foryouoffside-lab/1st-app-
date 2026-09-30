@@ -6,6 +6,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
+import { maybeShowAd } from '../lib/ads';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '../contexts/AuthContext';
 import { useChallenge } from '../contexts/ChallengeContext';
@@ -1160,6 +1161,13 @@ export default function DrillWrapper({
   // screen. If the opponent ALREADY sent us a rematch invite, both players
   // have now pressed Rematch — accept theirs instead of creating a second,
   // competing invite (which would leave two challenges waiting forever).
+  // Leaving the duel result card (Home / Arena / New duel) is the only point
+  // an Arena ad may appear — never before or during a duel, and never on
+  // Rematch, where a live opponent is waiting. See lib/ads.js.
+  const leaveDuelResult = () => {
+    maybeShowAd('duel').then(() => router.push('/challenge'));
+  };
+
   const handleChallengeAgain = async () => {
     if (!challengeData) return;
     if (!opponentUid || opponentUid === 'global') return;
@@ -1223,8 +1231,8 @@ export default function DrillWrapper({
     },
   } : null, {
     url: APP_SHARE_URL,
-    title: 'SkillDrills Duel',
-    text: `${duelResult === 'win' ? 'Won' : duelResult === 'draw' ? 'Drew' : 'Lost'} ${duelMyScore}–${duelOppScore} in ${challengeData?.drillName || 'a SkillDrills duel'}`,
+    title: 'Flint Duel',
+    text: `${duelResult === 'win' ? 'Won' : duelResult === 'draw' ? 'Drew' : 'Lost'} ${duelMyScore}–${duelOppScore} in ${challengeData?.drillName || 'a Flint duel'}`,
   });
 
   const CATEGORY_GRADIENTS = {
@@ -1673,7 +1681,7 @@ export default function DrillWrapper({
                     {/* Head: home · ghost-echo outcome · share */}
                     <div className="flex items-start justify-between gap-2">
                       <button
-                        onClick={() => router.push('/challenge')}
+                        onClick={leaveDuelResult}
                         aria-label="Back to Arena"
                         className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[11px] border border-[#232433] bg-[#1a1b26] text-neutral-400 transition active:scale-95"
                       >
@@ -1816,7 +1824,7 @@ export default function DrillWrapper({
                     {/* Actions — Arena (quiet) · Rematch/New duel (accent outline) */}
                     <div className="grid grid-cols-2 gap-2">
                       <button
-                        onClick={() => router.push('/challenge')}
+                        onClick={leaveDuelResult}
                         className="rounded-xl border border-[#232433] bg-[#1a1b26] py-2.5 text-[10px] font-bold uppercase tracking-[0.1em] text-white transition active:scale-[.98]"
                       >
                         Arena
@@ -1830,7 +1838,7 @@ export default function DrillWrapper({
                         </button>
                       ) : (
                         <button
-                          onClick={() => router.push('/challenge')}
+                          onClick={leaveDuelResult}
                           className="rounded-xl border border-violet-500 bg-transparent py-2.5 text-[10px] font-bold uppercase tracking-[0.1em] text-violet-300 transition active:scale-[.98]"
                         >
                           New duel

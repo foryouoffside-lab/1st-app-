@@ -555,8 +555,8 @@ export default function ShadeFinderClient() {
     playerName: getPlayerName(),
   } : null, {
     url: APP_SHARE_URL,
-    title: 'Shade Finder — SkillDrills',
-    text: endSummary ? `Scored ${endSummary.score} on Shade Finder (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — SkillDrills` : '',
+    title: 'Shade Finder — Flint',
+    text: endSummary ? `Scored ${endSummary.score} on Shade Finder (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — Flint` : '',
   });
 
   if (loading || !isClient) {

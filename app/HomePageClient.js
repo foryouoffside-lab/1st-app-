@@ -177,7 +177,7 @@ export default function HomePageClient() {
       >
         <header className="mb-5 flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-300">SkillDrills</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-300">Flint</p>
             {/* Reduced from the old two-line 24px block that pushed the session
                 below the fold, but kept as a real headline — one line, still
                 bold and white so it reads as a greeting, not a footnote. */}
@@ -215,7 +215,11 @@ export default function HomePageClient() {
                 only once the session state resolves, and mounting it then grew
                 the card 119px -> 167px, twice, bouncing everything under it.
                 Holding its space keeps the swap invisible. */}
-            <p className="mt-1.5 min-h-[16px] text-[11.5px] leading-snug text-slate-400">
+            {/* Two lines reserved, and clamped to two: the purpose line
+                ("Three drills across Processing Speed, Problem Solving and
+                Focus.") wraps to 2 lines on a phone, so a 1-line reservation
+                still pushed the whole page down ~16px when it arrived. */}
+            <p className="mt-1.5 line-clamp-2 min-h-[32px] text-[11.5px] leading-snug text-slate-400">
               {dashboardReady && session
                 ? (dailyDone
                     ? "Done for today — a fresh set unlocks at midnight."

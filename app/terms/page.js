@@ -15,17 +15,17 @@ export default function TermsOfServicePage() {
   return (
     <div className="min-h-[100dvh] bg-[#050508] text-slate-100 px-5 pb-16" style={{ paddingTop: 'calc(24px + env(safe-area-inset-top))' }}>
       <div className="max-w-[640px] mx-auto">
-        <Link href="/" className="text-[12px] text-violet-400 font-semibold">&larr; Back to SkillDrills</Link>
+        <Link href="/" className="text-[12px] text-violet-400 font-semibold">&larr; Back to Flint</Link>
 
         <h1 className="text-[26px] font-black text-white mt-5 mb-1">Terms of Service</h1>
         <p className="text-[12px] text-slate-500 mb-8">Last updated: {LAST_UPDATED}</p>
 
         <Section title="Acceptance of terms">
-          <p>By creating an account or using SkillDrills, you agree to these terms. If you don&apos;t agree, please don&apos;t use the app.</p>
+          <p>By creating an account or using Flint, you agree to these terms. If you don&apos;t agree, please don&apos;t use the app.</p>
         </Section>
 
         <Section title="The service">
-          <p>SkillDrills provides cognitive and reaction training drills, progress tracking, and related features. Features may be added, changed, temporarily disabled, or removed at any time — for example, some features are still being tuned for performance and may be turned off while that work is in progress.</p>
+          <p>Flint provides cognitive and reaction training drills, progress tracking, and related features. Features may be added, changed, temporarily disabled, or removed at any time — for example, some features are still being tuned for performance and may be turned off while that work is in progress.</p>
         </Section>
 
         <Section title="Your account">
@@ -33,7 +33,7 @@ export default function TermsOfServicePage() {
         </Section>
 
         <Section title="Acceptable use">
-          <p>Don&apos;t use SkillDrills to cheat, exploit bugs to manipulate scores or leaderboards, attempt to disrupt the service, or reverse-engineer the app beyond what&apos;s permitted by law.</p>
+          <p>Don&apos;t use Flint to cheat, exploit bugs to manipulate scores or leaderboards, attempt to disrupt the service, or reverse-engineer the app beyond what&apos;s permitted by law.</p>
         </Section>
 
         <Section title="Your data">
@@ -41,7 +41,7 @@ export default function TermsOfServicePage() {
         </Section>
 
         <Section title="No warranty">
-          <p>SkillDrills is provided &quot;as is,&quot; without guarantees that it will be uninterrupted, error-free, or permanently available. Training results are not a guarantee of any real-world skill improvement.</p>
+          <p>Flint is provided &quot;as is,&quot; without guarantees that it will be uninterrupted, error-free, or permanently available. Training results are not a guarantee of any real-world skill improvement.</p>
         </Section>
 
         <Section title="Limitation of liability">
@@ -49,15 +49,15 @@ export default function TermsOfServicePage() {
         </Section>
 
         <Section title="Termination">
-          <p>You may stop using SkillDrills and delete your account at any time from Progress → Delete Account &amp; Wipe Data. We may suspend or terminate accounts that violate these terms.</p>
+          <p>You may stop using Flint and delete your account at any time from Progress → Delete Account &amp; Wipe Data. We may suspend or terminate accounts that violate these terms.</p>
         </Section>
 
-        <Section title="Who may use SkillDrills">
-          <p>You must be at least 13 years old to use SkillDrills, and at least 16 if you are in a country where 16 is the minimum age for consenting to online services. If you are under the age of majority where you live, you may only use the app with the involvement of a parent or guardian. SkillDrills is not directed at children.</p>
+        <Section title="Who may use Flint">
+          <p>You must be at least 13 years old to use Flint, and at least 16 if you are in a country where 16 is the minimum age for consenting to online services. If you are under the age of majority where you live, you may only use the app with the involvement of a parent or guardian. Flint is not directed at children.</p>
         </Section>
 
         <Section title="Nature of the app">
-          <p>SkillDrills is a set of training games built for practice and entertainment. It is not a medical device, a diagnostic tool, or a treatment for any condition, and it is not a substitute for professional advice. Scores, levels, and the EIQ ranking measure how you perform inside this app only — the EIQ number is a competitive game ranking, not an IQ score or any assessment of your intelligence or cognitive health. We make no promise that using the app will improve your performance at school, at work, or in any other part of your life.</p>
+          <p>Flint is a set of training games built for practice and entertainment. It is not a medical device, a diagnostic tool, or a treatment for any condition, and it is not a substitute for professional advice. Scores, levels, and the EIQ ranking measure how you perform inside this app only — the EIQ number is a competitive game ranking, not an IQ score or any assessment of your intelligence or cognitive health. We make no promise that using the app will improve your performance at school, at work, or in any other part of your life.</p>
         </Section>
 
         <Section title="Governing law">
@@ -65,7 +65,7 @@ export default function TermsOfServicePage() {
         </Section>
 
         <Section title="Changes to these terms">
-          <p>If we update these terms, we&apos;ll update the date at the top of this page. Continuing to use SkillDrills after a change means you accept the updated terms.</p>
+          <p>If we update these terms, we&apos;ll update the date at the top of this page. Continuing to use Flint after a change means you accept the updated terms.</p>
         </Section>
 
         <Section title="Contact us">

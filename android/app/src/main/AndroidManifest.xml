@@ -52,6 +52,14 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
+        <!--
+          AdMob App ID for Flint (AdMob → Apps → Flint → App settings). Cannot
+          be changed remotely — a new build is needed if it ever changes.
+          Without this entry the ad SDK crashes the app on launch.
+        -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-4598618663370785~1038653374" />
     </application>
 
     <!-- Permissions -->
@@ -60,22 +68,9 @@
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <!--
-      Firebase Analytics (play-services-measurement) merges in the advertising
-      ID permissions by default. This app has no ads, no ad SDK and no ad
-      attribution, so it has no use for them — and leaving them in would mean
-      answering "yes" to Play Console's advertising-ID question and carrying
-      the matching Data Safety declaration for data the app never touches.
-      Removing them here lets that answer be a straight "no".
-
-      Analytics itself is unaffected: it keeps working off the Firebase
-      app-instance ID. Only ad attribution, which this app does not do, needs
-      these. Delete this block if an ad SDK is ever added — and update the
-      Play declarations in the same change.
+      The advertising-ID permissions (AD_ID etc.) used to be stripped here —
+      they now stay, because AdMob (lib/ads.js) needs them. Play Console must
+      declare: Contains ads = Yes, Advertising ID = Yes (advertising), and the
+      matching Data safety entries.
     -->
-    <uses-permission android:name="com.google.android.gms.permission.AD_ID"
-        tools:node="remove" />
-    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_AD_ID"
-        tools:node="remove" />
-    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_ATTRIBUTION"
-        tools:node="remove" />
 </manifest>

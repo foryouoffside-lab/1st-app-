@@ -597,8 +597,8 @@ export default function GridMemorizationClient() {
     playerName: getPlayerName(),
   } : null, {
     url: APP_SHARE_URL,
-    title: 'Grid Memorization — SkillDrills',
-    text: endSummary ? `Scored ${endSummary.score} on Grid Memorization (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — SkillDrills` : '',
+    title: 'Grid Memorization — Flint',
+    text: endSummary ? `Scored ${endSummary.score} on Grid Memorization (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — Flint` : '',
   });
 
   useEffect(() => {

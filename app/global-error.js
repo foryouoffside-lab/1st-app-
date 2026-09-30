@@ -70,7 +70,7 @@ export default function GlobalError({ error, reset }) {
               !
             </div>
             <h1 style={{ fontSize: '19px', fontWeight: 700, margin: '0 0 8px' }}>
-              SkillDrills needs a restart
+              Flint needs a restart
             </h1>
             <p style={{ fontSize: '13px', lineHeight: 1.6, color: 'rgba(255,255,255,0.6)', margin: '0 0 22px' }}>
               Something failed while starting up. Your progress and scores are safe &mdash; they

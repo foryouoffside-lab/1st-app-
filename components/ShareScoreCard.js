@@ -376,7 +376,7 @@ async function deliverCard(challengeUrl, asset) {
     mark('opening native share sheet');
     try {
       await Share.share({
-        title: 'SkillDrills Score',
+        title: 'Flint Score',
         text: 'Can you beat my score? 🎮',
         url: challengeUrl,
         files: [written.uri],
@@ -401,7 +401,7 @@ async function deliverCard(challengeUrl, asset) {
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
       await navigator.share({
-        title: 'SkillDrills Score',
+        title: 'Flint Score',
         text: 'Can you beat my score? 🎮',
         url: challengeUrl,
         files: [file],

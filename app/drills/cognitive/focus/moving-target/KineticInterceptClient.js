@@ -802,8 +802,8 @@ export default function KineticInterceptClient() {
     playerName: getPlayerName(),
   } : null, {
     url: APP_SHARE_URL,
-    title: 'Kinetic Intercept — SkillDrills',
-    text: endSummary ? `Scored ${endSummary.score} on Kinetic Intercept (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — SkillDrills` : '',
+    title: 'Kinetic Intercept — Flint',
+    text: endSummary ? `Scored ${endSummary.score} on Kinetic Intercept (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — Flint` : '',
   });
 
   if (loading || !isClient) {

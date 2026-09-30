@@ -1016,7 +1016,7 @@ export default function FingerSequencingClient() {
   } : null, {
     url: APP_SHARE_URL,
     title: 'My Mobile Aim Sequence Score',
-    text: endSummary ? `🎯 I scored ${score} PTS (Level ${level}) in the Sequence Aim Trainer! Accuracy: ${endSummary.accuracy}%, Max Combo: ${endSummary.bestCombo}x, Streak: ${endSummary.bestReadStreak}. Get SkillDrills:` : '',
+    text: endSummary ? `🎯 I scored ${score} PTS (Level ${level}) in the Sequence Aim Trainer! Accuracy: ${endSummary.accuracy}%, Max Combo: ${endSummary.bestCombo}x, Streak: ${endSummary.bestReadStreak}. Get Flint:` : '',
   });
 
   // RAF rendering loop.

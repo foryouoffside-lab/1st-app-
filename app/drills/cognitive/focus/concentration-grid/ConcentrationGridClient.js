@@ -235,9 +235,11 @@ export default function ConcentrationGridClient() {
     gridSizeRef.current = size;
     currentNumberRef.current = 1;
     foundNumbersSetRef.current.clear();
-    correctClicksRef.current = 0;
-    totalClicksRef.current = 0;
-    penaltyCountRef.current = 0;
+    // The hit/miss counters are NOT reset here. This runs on every board
+    // clear, and zeroing them made the end-of-run accuracy count only the
+    // last, unfinished board — clear a board, let the clock run out, and a
+    // perfect run read "0% · Needs practice". runCountdown resets them once
+    // per run, which is the right scope.
     lastTapTimeRef.current = performance.now();
 
     syncGridDataToState();
@@ -621,8 +623,8 @@ export default function ConcentrationGridClient() {
     playerName: getPlayerName(),
   } : null, {
     url: APP_SHARE_URL,
-    title: 'Concentration Grid — SkillDrills',
-    text: endSummary ? `Scored ${endSummary.score} on Concentration Grid (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — SkillDrills` : '',
+    title: 'Concentration Grid — Flint',
+    text: endSummary ? `Scored ${endSummary.score} on Concentration Grid (${endSummary.accuracy}% accuracy, ${endSummary.bestCombo}x combo) — Flint` : '',
   });
 
   if (loading || !isClient) {
